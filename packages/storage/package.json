@@ -1,0 +1,24 @@
+{
+  "name": "@vo/storage",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Repository interfaces and database adapters, migrations, config snapshots.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  }
+}
