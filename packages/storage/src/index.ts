@@ -9,3 +9,6 @@ export const PACKAGE_NAME = "@vo/storage" as const;
 export * from "./relational/types.js";
 export * from "./relational/cursor.js";
 export * from "./relational/in-memory.js";
+export * from "./stores/types.js";
+export * from "./stores/registry.js";
+export * from "./stores/in-memory.js";
