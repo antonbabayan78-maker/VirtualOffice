@@ -218,7 +218,11 @@ importers:
 
   packages/connectors: {}
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
 
   packages/llm: {}
 

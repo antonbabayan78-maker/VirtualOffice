@@ -14,3 +14,5 @@ export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";
 export * from "./connection/connection.js";
 export * from "./task/task.js";
+export * from "./skill/semver.js";
+export * from "./skill/skill.js";
