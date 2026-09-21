@@ -12,3 +12,4 @@ export * from "./department/review-policy.js";
 export * from "./department/department.js";
 export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";
+export * from "./connection/connection.js";
