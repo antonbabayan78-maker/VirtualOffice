@@ -6,6 +6,7 @@
  *
  * Budget arrives with the telemetry budgets task.
  */
+import type { ToolGrant } from "../connector/connector.js";
 import { normalizeHexColor, type DepartmentId } from "../department/department.js";
 import type { OfficeId } from "../office/office.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
@@ -16,12 +17,6 @@ declare const employeeIdBrand: unique symbol;
 export type EmployeeId = string & { readonly [employeeIdBrand]: true };
 
 export type EmployeeStatus = "active" | "paused" | "terminated";
-
-export interface ToolGrant {
-  readonly connectorId: string;
-  /** Tool name within the connector, or "*" for every tool it exposes. */
-  readonly tool: string;
-}
 
 export interface Employee {
   readonly id: EmployeeId;
