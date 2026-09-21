@@ -13,3 +13,4 @@ export * from "./department/department.js";
 export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";
 export * from "./connection/connection.js";
+export * from "./task/task.js";
