@@ -19,10 +19,13 @@
     "typecheck": "turbo run typecheck",
     "build": "turbo run build",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "mutation": "stryker run"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^24.10.0",
     "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.39.0",

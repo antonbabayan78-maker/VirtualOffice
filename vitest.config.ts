@@ -11,7 +11,17 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       include: ["packages/*/src/**", "apps/*/src/**"],
-      exclude: ["**/*.test.ts", "**/index.ts"],
+      exclude: ["**/*.test.ts"],
+      // Coverage gate: packages/core carries the highest correctness bar (see plan §11).
+      // Each key is checked independently against the files it matches.
+      thresholds: {
+        "packages/core/src/**": {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
+      },
     },
   },
 });
