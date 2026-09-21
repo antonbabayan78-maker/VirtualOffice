@@ -1,3 +1,4 @@
 pnpm lint-staged
+pnpm tdd-guard
 pnpm typecheck
 pnpm test

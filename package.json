@@ -5,7 +5,7 @@
   "description": "Virtual Office: drag-and-drop workspace where every employee is an LLM agent.",
   "packageManager": "pnpm@12.5.1",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "type": "module",
   "scripts": {
@@ -20,7 +20,8 @@
     "build": "turbo run build",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "prepare": "husky",
-    "mutation": "stryker run"
+    "mutation": "stryker run",
+    "tdd-guard": "node tooling/scripts/tdd-guard.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
