@@ -10,7 +10,7 @@ https://app.notion.com/p/3e2be6acb4cf8162a89ade8a0d48085c (database "Virtual Off
 3. **Plan mode first** for anything touching more than one package.
 4. **No SQL outside `packages/storage/adapters`.** Domain and orchestrator code only talk to repository interfaces.
 5. **No LLM call in tests.** Use the fake provider and recorded fixtures.
-6. **Pre-commit runs lint-staged, typecheck and the full test suite.** Do not bypass it with `--no-verify`.
+6. **Pre-commit runs lint-staged, `tdd-guard`, typecheck and the full test suite.** Do not bypass it with `--no-verify`. `tdd-guard` fails any commit that changes production code under a package `src/` without a `*.test.ts` change in the same package.
 
 ## Layout
 
@@ -33,6 +33,7 @@ pnpm test          # all vitest projects
 pnpm typecheck     # tsc per package via turbo
 pnpm lint          # eslint, type-aware
 pnpm check         # typecheck + lint + test
+pnpm tdd-guard     # TDD rule on staged files (CI runs it against the PR base)
 ```
 
 ## Conventions

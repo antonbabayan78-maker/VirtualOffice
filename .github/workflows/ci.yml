@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so tdd-guard can diff against the PR base branch.
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -29,6 +32,10 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: TDD guard (changed source requires changed tests)
+        if: github.event_name == 'pull_request'
+        run: pnpm tdd-guard --base origin/${{ github.base_ref }}
 
       - name: Typecheck
         run: pnpm typecheck
