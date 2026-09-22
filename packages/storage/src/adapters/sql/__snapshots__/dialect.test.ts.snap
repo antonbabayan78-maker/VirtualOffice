@@ -1,0 +1,117 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dialects > renders the sample migration for mssql (snapshot) 1`] = `
+[
+  "CREATE TABLE [widgets] (
+  [id] NVARCHAR(450) PRIMARY KEY,
+  [office_id] NVARCHAR(450) NOT NULL,
+  [count] BIGINT NOT NULL DEFAULT 0,
+  [ratio] FLOAT NULL,
+  [enabled] BIT NOT NULL DEFAULT 1,
+  [created_at] DATETIME2 NOT NULL,
+  [label] NVARCHAR(450) NOT NULL DEFAULT 'it''s',
+  [data] NVARCHAR(MAX) NOT NULL
+);",
+  "CREATE INDEX [widgets_office_id] ON [widgets] ([office_id]);",
+  "CREATE UNIQUE INDEX [widgets_label_unique] ON [widgets] ([office_id], [label]);",
+  "ALTER TABLE [widgets] ADD [notes] NVARCHAR(MAX) NULL;",
+  "CREATE INDEX [widgets_count] ON [widgets] ([count]);",
+  "EXEC sp_rename 'widgets', 'gadgets';",
+]
+`;
+
+exports[`dialects > renders the sample migration for mssql (snapshot) 2`] = `
+[
+  "EXEC sp_rename 'gadgets', 'widgets';",
+  "DROP INDEX [widgets_count] ON [widgets];",
+  "ALTER TABLE [widgets] DROP COLUMN [notes];",
+  "DROP TABLE [widgets];",
+]
+`;
+
+exports[`dialects > renders the sample migration for mysql (snapshot) 1`] = `
+[
+  "CREATE TABLE \`widgets\` (
+  \`id\` VARCHAR(191) PRIMARY KEY,
+  \`office_id\` VARCHAR(191) NOT NULL,
+  \`count\` BIGINT NOT NULL DEFAULT 0,
+  \`ratio\` DOUBLE NULL,
+  \`enabled\` TINYINT(1) NOT NULL DEFAULT 1,
+  \`created_at\` DATETIME(3) NOT NULL,
+  \`label\` VARCHAR(191) NOT NULL DEFAULT 'it''s',
+  \`data\` JSON NOT NULL
+);",
+  "CREATE INDEX \`widgets_office_id\` ON \`widgets\` (\`office_id\`);",
+  "CREATE UNIQUE INDEX \`widgets_label_unique\` ON \`widgets\` (\`office_id\`, \`label\`);",
+  "ALTER TABLE \`widgets\` ADD COLUMN \`notes\` TEXT NULL;",
+  "CREATE INDEX \`widgets_count\` ON \`widgets\` (\`count\`);",
+  "RENAME TABLE \`widgets\` TO \`gadgets\`;",
+]
+`;
+
+exports[`dialects > renders the sample migration for mysql (snapshot) 2`] = `
+[
+  "RENAME TABLE \`gadgets\` TO \`widgets\`;",
+  "DROP INDEX \`widgets_count\` ON \`widgets\`;",
+  "ALTER TABLE \`widgets\` DROP COLUMN \`notes\`;",
+  "DROP TABLE \`widgets\`;",
+]
+`;
+
+exports[`dialects > renders the sample migration for postgres (snapshot) 1`] = `
+[
+  "CREATE TABLE "widgets" (
+  "id" TEXT PRIMARY KEY,
+  "office_id" TEXT NOT NULL,
+  "count" BIGINT NOT NULL DEFAULT 0,
+  "ratio" DOUBLE PRECISION NULL,
+  "enabled" BOOLEAN NOT NULL DEFAULT TRUE,
+  "created_at" TIMESTAMPTZ NOT NULL,
+  "label" TEXT NOT NULL DEFAULT 'it''s',
+  "data" JSONB NOT NULL
+);",
+  "CREATE INDEX "widgets_office_id" ON "widgets" ("office_id");",
+  "CREATE UNIQUE INDEX "widgets_label_unique" ON "widgets" ("office_id", "label");",
+  "ALTER TABLE "widgets" ADD COLUMN "notes" TEXT NULL;",
+  "CREATE INDEX "widgets_count" ON "widgets" ("count");",
+  "ALTER TABLE "widgets" RENAME TO "gadgets";",
+]
+`;
+
+exports[`dialects > renders the sample migration for postgres (snapshot) 2`] = `
+[
+  "ALTER TABLE "gadgets" RENAME TO "widgets";",
+  "DROP INDEX "widgets_count";",
+  "ALTER TABLE "widgets" DROP COLUMN "notes";",
+  "DROP TABLE "widgets";",
+]
+`;
+
+exports[`dialects > renders the sample migration for sqlite (snapshot) 1`] = `
+[
+  "CREATE TABLE "widgets" (
+  "id" TEXT PRIMARY KEY,
+  "office_id" TEXT NOT NULL,
+  "count" INTEGER NOT NULL DEFAULT 0,
+  "ratio" REAL NULL,
+  "enabled" INTEGER NOT NULL DEFAULT 1,
+  "created_at" TEXT NOT NULL,
+  "label" TEXT NOT NULL DEFAULT 'it''s',
+  "data" TEXT NOT NULL
+);",
+  "CREATE INDEX "widgets_office_id" ON "widgets" ("office_id");",
+  "CREATE UNIQUE INDEX "widgets_label_unique" ON "widgets" ("office_id", "label");",
+  "ALTER TABLE "widgets" ADD COLUMN "notes" TEXT NULL;",
+  "CREATE INDEX "widgets_count" ON "widgets" ("count");",
+  "ALTER TABLE "widgets" RENAME TO "gadgets";",
+]
+`;
+
+exports[`dialects > renders the sample migration for sqlite (snapshot) 2`] = `
+[
+  "ALTER TABLE "gadgets" RENAME TO "widgets";",
+  "DROP INDEX "widgets_count";",
+  "ALTER TABLE "widgets" DROP COLUMN "notes";",
+  "DROP TABLE "widgets";",
+]
+`;

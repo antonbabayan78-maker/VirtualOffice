@@ -12,3 +12,7 @@ export * from "./relational/in-memory.js";
 export * from "./stores/types.js";
 export * from "./stores/registry.js";
 export * from "./stores/in-memory.js";
+export * from "./schema/types.js";
+export * from "./schema/canonical.js";
+export * from "./adapters/sql/dialect.js";
+export * from "./adapters/sql/runner.js";
