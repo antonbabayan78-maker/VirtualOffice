@@ -131,5 +131,6 @@ export async function openStorage(
 
 async function defaultRegistry(): Promise<StorageRegistry> {
   const { memoryAdapterFactory } = await import("./in-memory.js");
-  return new StorageRegistry().register(memoryAdapterFactory);
+  const { sqliteAdapterFactory } = await import("../adapters/sqlite/sqlite-store.js");
+  return new StorageRegistry().register(memoryAdapterFactory).register(sqliteAdapterFactory);
 }
