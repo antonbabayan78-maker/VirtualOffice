@@ -19,3 +19,4 @@ export * from "./skill/skill.js";
 export * from "./memory/memory.js";
 export * from "./connector/connector.js";
 export * from "./snapshot/snapshot.js";
+export * from "./office-file/office-file.js";
