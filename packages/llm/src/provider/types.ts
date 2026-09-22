@@ -46,7 +46,13 @@ export interface CompletionRequest {
 }
 
 export type StopReason =
-  "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" | "refusal" | "pause_turn";
+  | "end_turn"
+  | "max_tokens"
+  | "tool_use"
+  | "stop_sequence"
+  | "refusal"
+  | "pause_turn"
+  | "model_context_window_exceeded";
 
 export interface Usage {
   readonly inputTokens: number;
