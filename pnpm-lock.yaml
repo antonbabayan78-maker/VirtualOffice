@@ -240,6 +240,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.127.0
         version: 0.127.0(zod@4.6.5)
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/memory: {}
 
