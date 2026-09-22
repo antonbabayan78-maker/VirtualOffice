@@ -124,7 +124,7 @@ describe("SqliteRelationalStore", () => {
 
   it("is registered as the sqlite: scheme for the relational store", async () => {
     expect(sqliteAdapterFactory.scheme).toBe("sqlite");
-    expect(sqliteAdapterFactory.supports).toEqual(["relational"]);
+    expect(sqliteAdapterFactory.supports).toEqual(["relational", "events", "vector"]);
     const registry = new StorageRegistry()
       .register(memoryAdapterFactory)
       .register(sqliteAdapterFactory);

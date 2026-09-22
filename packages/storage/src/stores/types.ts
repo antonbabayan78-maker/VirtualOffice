@@ -4,6 +4,7 @@
  */
 import type { MemoryScope } from "@vo/core";
 import type { Page } from "../relational/types.js";
+import type { StoreCapabilities } from "./capabilities.js";
 
 // ---------------------------------------------------------------------------
 // Vector store: embeddings for memory retrieval.
@@ -36,6 +37,7 @@ export interface VectorHit {
 }
 
 export interface VectorStore {
+  readonly capabilities: StoreCapabilities;
   /** Fixed by the first upsert; null while empty. */
   readonly dimensions: number | null;
   upsert(records: readonly VectorRecord[]): Promise<void>;
@@ -72,6 +74,7 @@ export interface EventQuery extends EventFilter {
 }
 
 export interface EventStore {
+  readonly capabilities: StoreCapabilities;
   /** Rejects the whole batch if any id already exists. */
   append(events: readonly StoredEvent[]): Promise<void>;
   /** Ordered by `at` ascending, then id. */
@@ -85,6 +88,7 @@ export interface EventStore {
 // ---------------------------------------------------------------------------
 
 export interface CoordinationStore {
+  readonly capabilities: StoreCapabilities;
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlMs?: number): Promise<void>;
   delete(key: string): Promise<boolean>;
@@ -107,6 +111,7 @@ export interface Blob {
 }
 
 export interface BlobStore {
+  readonly capabilities: StoreCapabilities;
   put(key: string, data: Uint8Array, contentType?: string): Promise<void>;
   get(key: string): Promise<Blob | null>;
   delete(key: string): Promise<boolean>;

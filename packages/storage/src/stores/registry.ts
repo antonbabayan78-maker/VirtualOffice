@@ -5,6 +5,7 @@
  */
 import { err, ok, type Result, type ValidationError } from "@vo/core";
 import type { RelationalStore } from "../relational/types.js";
+import type { StoreCapabilities } from "./capabilities.js";
 import type { BlobStore, CoordinationStore, EventStore, VectorStore } from "./types.js";
 
 export const STORE_KINDS = ["relational", "vector", "events", "coordination", "blobs"] as const;
@@ -29,6 +30,7 @@ export interface AdapterFactory {
 }
 
 export interface Storage extends StoreByKind {
+  readonly capabilities: Readonly<Record<StoreKind, StoreCapabilities>>;
   close(): Promise<void>;
 }
 
@@ -105,8 +107,12 @@ export class StorageRegistry {
       throw e;
     }
     const stores = opened as StoreByKind;
+    const capabilities = Object.fromEntries(
+      STORE_KINDS.map((k) => [k, stores[k].capabilities]),
+    ) as Record<StoreKind, StoreCapabilities>;
     return {
       ...stores,
+      capabilities,
       close: async () => {
         await Promise.all(STORE_KINDS.map((k) => stores[k].close()));
       },

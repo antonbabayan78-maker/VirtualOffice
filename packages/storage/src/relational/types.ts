@@ -3,6 +3,7 @@
  * adapters (in-memory, SQLite, Postgres, MySQL, ...) implement them and must pass
  * the contract suite in `@vo/storage/testing`.
  */
+import type { StoreCapabilities } from "../stores/capabilities.js";
 import type {
   Connection,
   Connector,
@@ -72,6 +73,7 @@ export const COLLECTION_NAMES = [
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
 
 export interface RelationalStore extends RelationalCollections {
+  readonly capabilities: StoreCapabilities;
   readonly maxPageSize: number;
   /** Runs `fn` atomically: all writes commit together or none do. */
   transaction<R>(fn: (tx: RelationalCollections) => Promise<R>): Promise<R>;
