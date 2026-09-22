@@ -216,7 +216,14 @@ importers:
 
   apps/server: {}
 
-  packages/connectors: {}
+  packages/connectors:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../core
+      '@vo/storage':
+        specifier: workspace:*
+        version: link:../storage
 
   packages/core:
     dependencies:
