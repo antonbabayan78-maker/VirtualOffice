@@ -1,0 +1,3 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildPrompt > produces a byte-stable prefix across runs regardless of tool order, key order or dynamic content 1`] = `"{"tools":[{"name":"get_diff","description":"Fetch a PR diff","inputSchema":{"properties":{"pr":{"type":"number"}},"required":["pr"],"type":"object"}},{"name":"slack_post","description":"Post to Slack","inputSchema":{"properties":{"channel":{"type":"string"},"text":{"type":"string"}},"required":["channel","text"],"type":"object"}}],"system":"You are Ada, a backend engineer at Acme.\\n\\nRules:\\n- TDD only\\n- No secrets in output"}"`;

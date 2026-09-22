@@ -3,9 +3,11 @@
  * deterministic usage estimates, configurable errors, chunked streaming, and a
  * record of every call. No network, ever.
  */
+import { estimateTokens } from "../provider/tokens.js";
 import {
   LlmProviderError,
   streamFromResponse,
+  systemText,
   type CompletionRequest,
   type CompletionResponse,
   type ContentBlock,
@@ -13,10 +15,7 @@ import {
   type StreamEvent,
 } from "../provider/types.js";
 
-/** Roughly four characters per token, deterministic. */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+export { estimateTokens } from "../provider/tokens.js";
 
 export type ScriptedReply = Partial<CompletionResponse> & {
   readonly content: readonly ContentBlock[];
@@ -50,8 +49,8 @@ export interface FakeLlmProviderOptions {
   readonly id?: string;
 }
 
-function requestText(request: CompletionRequest): string {
-  const parts: string[] = [request.system ?? ""];
+function requestTokens(request: CompletionRequest): number {
+  const parts: string[] = [systemText(request.system)];
   for (const m of request.messages) {
     for (const block of m.content) {
       if (block.type === "text") parts.push(block.text);
@@ -59,7 +58,7 @@ function requestText(request: CompletionRequest): string {
       else parts.push(JSON.stringify(block.input));
     }
   }
-  return parts.join("\n");
+  return parts.reduce((n, p) => n + estimateTokens(p), 0);
 }
 
 function responseText(content: readonly ContentBlock[]): string {
@@ -102,7 +101,7 @@ export class FakeLlmProvider implements LlmProvider {
 
   private build(request: CompletionRequest, step: ScriptedReply): CompletionResponse {
     const usage = step.usage ?? {
-      inputTokens: estimateTokens(requestText(request)),
+      inputTokens: requestTokens(request),
       outputTokens: estimateTokens(responseText(step.content)),
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
