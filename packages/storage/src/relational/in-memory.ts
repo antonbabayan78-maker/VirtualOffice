@@ -10,6 +10,7 @@ import type {
   Employee,
   MemoryItem,
   Office,
+  OfficeSnapshot,
   Skill,
   Task,
 } from "@vo/core";
@@ -87,6 +88,7 @@ function collections(tables: () => Tables, maxPageSize: number): RelationalColle
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
     memories: repo<MemoryItem>("memories"),
+    snapshots: repo<OfficeSnapshot>("snapshots"),
   };
 }
 
@@ -111,6 +113,7 @@ export class InMemoryRelationalStore implements RelationalStore {
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
+  readonly snapshots: EntityRepository<OfficeSnapshot>;
 
   private tables: Tables = emptyTables();
   private lock: Promise<void> = Promise.resolve();
@@ -126,6 +129,7 @@ export class InMemoryRelationalStore implements RelationalStore {
     this.connectors = c.connectors;
     this.skills = c.skills;
     this.memories = c.memories;
+    this.snapshots = c.snapshots;
   }
 
   transaction<R>(fn: (tx: RelationalCollections) => Promise<R>): Promise<R> {

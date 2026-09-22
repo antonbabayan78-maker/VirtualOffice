@@ -14,6 +14,7 @@ import type {
   Employee,
   MemoryItem,
   Office,
+  OfficeSnapshot,
   Skill,
   Task,
 } from "@vo/core";
@@ -369,6 +370,7 @@ function collections(
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
     memories: repo<MemoryItem>("memories"),
+    snapshots: repo<OfficeSnapshot>("snapshots"),
   };
 }
 
@@ -385,6 +387,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
+  readonly snapshots: EntityRepository<OfficeSnapshot>;
 
   private readonly runner: MigrationRunner;
   private readonly all: RelationalCollections;
@@ -423,6 +426,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.connectors = this.all.connectors;
     this.skills = this.all.skills;
     this.memories = this.all.memories;
+    this.snapshots = this.all.snapshots;
     this.runner = new MigrationRunner({
       dialect: "sqlite",
       executor: new SqliteExecutor(db),

@@ -11,6 +11,7 @@ import type {
   Employee,
   MemoryItem,
   Office,
+  OfficeSnapshot,
   Skill,
   Task,
 } from "@vo/core";
@@ -58,6 +59,7 @@ export interface RelationalCollections {
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
+  readonly snapshots: EntityRepository<OfficeSnapshot>;
 }
 
 export const COLLECTION_NAMES = [
@@ -69,6 +71,7 @@ export const COLLECTION_NAMES = [
   "connectors",
   "skills",
   "memories",
+  "snapshots",
 ] as const satisfies readonly (keyof RelationalCollections)[];
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
 

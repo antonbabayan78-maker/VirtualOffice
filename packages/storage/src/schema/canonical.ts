@@ -24,7 +24,7 @@ export const MIGRATIONS_TABLE: TableDef = {
   columns: [id, { name: "applied_at", type: "timestamp" }],
 };
 
-export const CANONICAL_TABLES: readonly TableDef[] = [
+const INITIAL_TABLES: readonly TableDef[] = [
   table("offices", [id, { name: "name", type: "text" }, createdAt, data]),
   table(
     "departments",
@@ -112,10 +112,23 @@ export const CANONICAL_TABLES: readonly TableDef[] = [
   ),
 ];
 
+export const SNAPSHOTS_TABLE: TableDef = table(
+  "snapshots",
+  [id, officeId, { name: "version", type: "integer" }, createdAt, data],
+  [["office_id", "version"]],
+);
+
+export const CANONICAL_TABLES: readonly TableDef[] = [...INITIAL_TABLES, SNAPSHOTS_TABLE];
+
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
   {
     id: "0001_initial",
-    up: CANONICAL_TABLES.map((t) => ({ op: "createTable", table: t })),
-    down: [...CANONICAL_TABLES].reverse().map((t) => ({ op: "dropTable", name: t.name })),
+    up: INITIAL_TABLES.map((t) => ({ op: "createTable", table: t })),
+    down: [...INITIAL_TABLES].reverse().map((t) => ({ op: "dropTable", name: t.name })),
+  },
+  {
+    id: "0002_snapshots",
+    up: [{ op: "createTable", table: SNAPSHOTS_TABLE }],
+    down: [{ op: "dropTable", name: SNAPSHOTS_TABLE.name }],
   },
 ];
