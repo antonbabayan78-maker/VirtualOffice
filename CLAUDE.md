@@ -8,7 +8,7 @@ https://app.notion.com/p/3e2be6acb4cf8162a89ade8a0d48085c (database "Virtual Off
 1. **TDD only.** No production code without a failing test first. Order: write the test, run it and see it fail (red), implement the minimum to pass (green), refactor. Commit the test before or together with the implementation, never after.
 2. **One task per session**, taken from the Notion database. Set it to "In progress" when starting and "Done" when the DoD tests pass.
 3. **Plan mode first** for anything touching more than one package.
-4. **No SQL outside `packages/storage/adapters`.** Domain and orchestrator code only talk to repository interfaces.
+4. **No SQL outside `packages/storage/src/adapters`.** Domain and orchestrator code only talk to repository interfaces. `pnpm lint` runs `portability-lint`, which also forbids adapter-specific column types in the canonical schema under `packages/storage/src/schema`.
 5. **No LLM call in tests.** Use the fake provider and recorded fixtures.
 6. **Pre-commit runs lint-staged, `tdd-guard`, typecheck and the full test suite.** Do not bypass it with `--no-verify`. `tdd-guard` fails any commit that changes production code under a package `src/` without a `*.test.ts` change in the same package.
 

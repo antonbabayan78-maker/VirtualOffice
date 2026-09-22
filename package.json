@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint .",
+    "lint": "eslint . && pnpm lint:portability",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -21,7 +21,8 @@
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "prepare": "husky",
     "mutation": "stryker run",
-    "tdd-guard": "node tooling/scripts/tdd-guard.ts"
+    "tdd-guard": "node tooling/scripts/tdd-guard.ts",
+    "lint:portability": "node tooling/scripts/portability-lint.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

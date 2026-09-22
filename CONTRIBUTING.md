@@ -14,6 +14,7 @@ Repeat until the task's Definition-of-Done tests all pass, then set the task to 
 
 - **Pre-commit hook** (`.husky/pre-commit`): lint-staged, typecheck, the full test suite, and `tdd-guard` on staged files. Do not bypass it with `--no-verify`.
 - **`tdd-guard`** (`tooling/scripts/tdd-guard.ts`): any changed file under `packages/*/src` or `apps/*/src` that is not a test must be accompanied by a `*.test.ts` change in the same package. Declaration files and config files are exempt. Run it yourself with `pnpm tdd-guard` (staged files) or `pnpm tdd-guard --base origin/main` (branch diff).
+- **`portability-lint`** (`tooling/scripts/portability-lint.ts`, part of `pnpm lint`): SQL statements in string or template literals are only allowed under `packages/storage/src/adapters`, and the canonical schema in `packages/storage/src/schema` may only use portable column types (TEXT, INTEGER, REAL, BOOLEAN, TIMESTAMP, JSON). Adapter-specific types such as JSONB or SERIAL belong in the adapter that renders the schema.
 - **CI** (`.github/workflows/ci.yml`): typecheck, lint, format check, tests with a 90% coverage gate on `packages/core`, and `tdd-guard` against the PR base branch. Nightly Stryker mutation testing on `core` and `orchestrator` publishes a report artifact.
 
 ## Conventions
