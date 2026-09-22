@@ -71,12 +71,20 @@ export function toAnthropicParams(
       content: m.content.map(toAnthropicBlock),
     })),
   };
-  if (request.system !== undefined) params.system = request.system;
+  if (typeof request.system === "string") params.system = request.system;
+  else if (request.system !== undefined) {
+    params.system = request.system.map((b) => ({
+      type: "text" as const,
+      text: b.text,
+      ...(b.cache ? { cache_control: { type: "ephemeral" as const } } : {}),
+    }));
+  }
   if (request.tools && request.tools.length > 0) {
     params.tools = request.tools.map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+      ...(t.cache ? { cache_control: { type: "ephemeral" as const } } : {}),
     }));
   }
   return params;

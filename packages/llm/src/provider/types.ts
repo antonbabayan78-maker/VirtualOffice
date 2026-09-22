@@ -32,11 +32,25 @@ export interface ToolDefinition {
   readonly description: string;
   /** JSON Schema for the tool input. */
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  /** Marks a prompt-cache breakpoint after this tool (adapters map it to their cache control). */
+  readonly cache?: boolean;
+}
+
+/** A system prompt segment; `cache: true` marks a prompt-cache breakpoint after it. */
+export interface SystemBlock {
+  readonly text: string;
+  readonly cache: boolean;
+}
+
+/** Flattens a system prompt (string or blocks) to text, blocks joined by blank lines. */
+export function systemText(system: string | readonly SystemBlock[] | undefined): string {
+  if (system === undefined) return "";
+  return typeof system === "string" ? system : system.map((b) => b.text).join("\n\n");
 }
 
 export interface CompletionRequest {
   readonly model: string;
-  readonly system?: string;
+  readonly system?: string | readonly SystemBlock[];
   readonly messages: readonly Message[];
   readonly tools?: readonly ToolDefinition[];
   readonly maxOutputTokens?: number;
