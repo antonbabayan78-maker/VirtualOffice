@@ -9,3 +9,5 @@ export * from "./provider/types.js";
 export * from "./fake/fake-provider.js";
 export * from "./fixtures/recorder.js";
 export * from "./anthropic/anthropic-provider.js";
+export * from "./registry/model-registry.js";
+export * from "./registry/anthropic-models.js";
