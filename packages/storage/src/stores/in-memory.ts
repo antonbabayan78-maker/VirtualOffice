@@ -6,6 +6,7 @@ import { InMemoryRelationalStore } from "../relational/in-memory.js";
 import { compareValues, decodeCursor, encodeCursor } from "../relational/cursor.js";
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE, type Page } from "../relational/types.js";
 import type { AdapterFactory, StoreByKind, StoreKind } from "./registry.js";
+import { NO_CAPABILITIES, type StoreCapabilities } from "./capabilities.js";
 import {
   validateBlobKey,
   type Blob,
@@ -39,6 +40,11 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]): nu
 }
 
 export class InMemoryVectorStore implements VectorStore {
+  readonly capabilities: StoreCapabilities = {
+    ...NO_CAPABILITIES,
+    transactions: true,
+    upsert: true,
+  };
   private readonly records = new Map<string, VectorRecord>();
   dimensions: number | null = null;
 
@@ -122,6 +128,11 @@ function eventOrder(a: StoredEvent, b: StoredEvent): number {
 }
 
 export class InMemoryEventStore implements EventStore {
+  readonly capabilities: StoreCapabilities = {
+    ...NO_CAPABILITIES,
+    transactions: true,
+    jsonQuery: true,
+  };
   private readonly events = new Map<string, StoredEvent>();
   constructor(private readonly maxPageSize: number = DEFAULT_MAX_PAGE_SIZE) {}
 
@@ -179,6 +190,11 @@ interface Entry {
 }
 
 export class InMemoryCoordinationStore implements CoordinationStore {
+  readonly capabilities: StoreCapabilities = {
+    ...NO_CAPABILITIES,
+    transactions: true,
+    upsert: true,
+  };
   private readonly entries = new Map<string, Entry>();
   private readonly clock: () => number;
 
@@ -247,6 +263,7 @@ export class InMemoryCoordinationStore implements CoordinationStore {
 // ---------------------------------------------------------------------------
 
 export class InMemoryBlobStore implements BlobStore {
+  readonly capabilities: StoreCapabilities = NO_CAPABILITIES;
   private readonly blobs = new Map<string, Blob>();
 
   put(key: string, data: Uint8Array, contentType?: string): Promise<void> {

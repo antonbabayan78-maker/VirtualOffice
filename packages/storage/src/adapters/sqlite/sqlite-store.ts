@@ -24,6 +24,8 @@ import {
 } from "../../schema/canonical.js";
 import type { Migration } from "../../schema/types.js";
 import { decodeCursor, encodeCursor } from "../../relational/cursor.js";
+import { applyListQuery, matchesWhere } from "../../relational/query-memory.js";
+import type { StoreCapabilities } from "../../stores/capabilities.js";
 import {
   COLLECTION_NAMES,
   DEFAULT_MAX_PAGE_SIZE,
@@ -106,6 +108,19 @@ function tableMeta(name: string): TableMeta {
 
 const q = (name: string): string => `"${name}"`;
 
+export interface SqliteCapabilityOptions {
+  /** false: filter/sort on non-promoted fields in memory instead of json_extract. */
+  readonly jsonQuery?: boolean;
+  /** false: put uses UPDATE-then-INSERT instead of ON CONFLICT. */
+  readonly upsert?: boolean;
+}
+
+interface RepoRuntime {
+  readonly jsonQuery: boolean;
+  readonly upsert: boolean;
+  readonly onFallback: () => void;
+}
+
 class SqliteRepository<T extends Entity> implements EntityRepository<T> {
   private readonly columns: string[];
 
@@ -113,14 +128,45 @@ class SqliteRepository<T extends Entity> implements EntityRepository<T> {
     private readonly db: DatabaseSync,
     private readonly meta: TableMeta,
     private readonly maxPageSize: number,
+    private readonly runtime: RepoRuntime,
   ) {
     this.columns = ["id", ...this.meta.promoted.keys(), "data"];
+  }
+
+  private isPromoted(field: string): boolean {
+    return this.meta.promoted.has(snakeCase(field));
   }
 
   private expr(field: string): string {
     const column = snakeCase(field);
     if (this.meta.promoted.has(column)) return q(column);
     return `json_extract(${q("data")}, '$.${field}')`;
+  }
+
+  /** Fields the SQL layer cannot evaluate when jsonQuery is off. */
+  private needsMemory(query: ListQuery<T>): boolean {
+    if (this.runtime.jsonQuery) return false;
+    const whereFields = Object.keys(query.where ?? {});
+    const sortField = query.orderBy?.field;
+    return (
+      whereFields.some((f) => !this.isPromoted(f)) ||
+      (sortField !== undefined && !this.isPromoted(sortField))
+    );
+  }
+
+  private promotedOnly(where: Where<T> | undefined): Where<T> | undefined {
+    if (!where) return undefined;
+    return Object.fromEntries(
+      Object.entries(where).filter(([f]) => this.isPromoted(f)),
+    ) as Where<T>;
+  }
+
+  private loadAll(where: Where<T> | undefined): T[] {
+    const w = this.whereClause(where);
+    const rows = this.db
+      .prepare(`SELECT ${q("data")} AS data FROM ${q(this.meta.name)}${w.sql}`)
+      .all(...w.params);
+    return rows.map((r) => decodeDocument(r["data"] as string) as T);
   }
 
   private whereClause(where: Where<T> | undefined): { sql: string; params: SQLInputValue[] } {
@@ -153,15 +199,35 @@ class SqliteRepository<T extends Entity> implements EntityRepository<T> {
     values.push(encodeDocument(entity));
     const cols = this.columns.map(q).join(", ");
     const placeholders = this.columns.map(() => "?").join(", ");
-    const updates = this.columns
-      .filter((c) => c !== "id")
-      .map((c) => `${q(c)} = excluded.${q(c)}`)
-      .join(", ");
-    this.db
-      .prepare(
-        `INSERT INTO ${q(this.meta.name)} (${cols}) VALUES (${placeholders}) ON CONFLICT(${q("id")}) DO UPDATE SET ${updates}`,
-      )
-      .run(...values);
+    const nonId = this.columns.filter((c) => c !== "id");
+    if (this.runtime.upsert) {
+      const updates = nonId.map((c) => `${q(c)} = excluded.${q(c)}`).join(", ");
+      this.db
+        .prepare(
+          `INSERT INTO ${q(this.meta.name)} (${cols}) VALUES (${placeholders}) ON CONFLICT(${q("id")}) DO UPDATE SET ${updates}`,
+        )
+        .run(...values);
+      return Promise.resolve();
+    }
+    // Fallback: read-then-write inside a savepoint (no native upsert).
+    this.runtime.onFallback();
+    this.db.exec("SAVEPOINT vo_put");
+    try {
+      const sets = nonId.map((c) => `${q(c)} = ?`).join(", ");
+      const updated = this.db
+        .prepare(`UPDATE ${q(this.meta.name)} SET ${sets} WHERE ${q("id")} = ?`)
+        .run(...values.slice(1), entity.id);
+      if (Number(updated.changes) === 0) {
+        this.db
+          .prepare(`INSERT INTO ${q(this.meta.name)} (${cols}) VALUES (${placeholders})`)
+          .run(...values);
+      }
+      this.db.exec("RELEASE vo_put");
+    } catch (e) {
+      this.db.exec("ROLLBACK TO vo_put");
+      this.db.exec("RELEASE vo_put");
+      return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+    }
     return Promise.resolve();
   }
 
@@ -171,6 +237,11 @@ class SqliteRepository<T extends Entity> implements EntityRepository<T> {
   }
 
   count(where?: Where<T>): Promise<number> {
+    if (this.needsMemory(where ? { where } : {})) {
+      this.runtime.onFallback();
+      const all = this.loadAll(this.promotedOnly(where));
+      return Promise.resolve(all.filter((e) => matchesWhere(e, where)).length);
+    }
     const w = this.whereClause(where);
     const row = this.db
       .prepare(`SELECT COUNT(*) AS n FROM ${q(this.meta.name)}${w.sql}`)
@@ -179,6 +250,16 @@ class SqliteRepository<T extends Entity> implements EntityRepository<T> {
   }
 
   list(query: ListQuery<T> = {}): Promise<Page<T>> {
+    if (this.needsMemory(query)) {
+      this.runtime.onFallback();
+      try {
+        return Promise.resolve(
+          applyListQuery(this.loadAll(this.promotedOnly(query.where)), query, this.maxPageSize),
+        );
+      } catch (e) {
+        return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    }
     const field = query.orderBy?.field ?? "id";
     const desc = query.orderBy?.direction === "desc";
     const dir = desc ? "DESC" : "ASC";
@@ -233,6 +314,8 @@ export interface SqliteStoreOptions {
   readonly path: string;
   readonly migrations?: readonly Migration[];
   readonly maxPageSize?: number;
+  /** Switch optional capabilities off to exercise (or force) the portable fallbacks. */
+  readonly capabilities?: SqliteCapabilityOptions;
 }
 
 export function sqlitePathFromUrl(url: URL): string {
@@ -270,9 +353,13 @@ class SqliteExecutor implements SqlExecutor {
   }
 }
 
-function collections(db: DatabaseSync, maxPageSize: number): RelationalCollections {
+function collections(
+  db: DatabaseSync,
+  maxPageSize: number,
+  runtime: RepoRuntime,
+): RelationalCollections {
   const repo = <T extends Entity>(name: CollectionName): EntityRepository<T> =>
-    new SqliteRepository<T>(db, tableMeta(name), maxPageSize);
+    new SqliteRepository<T>(db, tableMeta(name), maxPageSize, runtime);
   return {
     offices: repo<Office>("offices"),
     departments: repo<Department>("departments"),
@@ -286,7 +373,10 @@ function collections(db: DatabaseSync, maxPageSize: number): RelationalCollectio
 }
 
 export class SqliteRelationalStore implements RelationalStore {
+  readonly capabilities: StoreCapabilities;
   readonly maxPageSize: number;
+  /** Number of operations served by an in-memory or read-then-write fallback. */
+  fallbackQueries = 0;
   readonly offices: EntityRepository<Office>;
   readonly departments: EntityRepository<Department>;
   readonly employees: EntityRepository<Employee>;
@@ -304,9 +394,27 @@ export class SqliteRelationalStore implements RelationalStore {
     private readonly db: DatabaseSync,
     migrations: readonly Migration[],
     maxPageSize: number,
+    capabilityOptions: SqliteCapabilityOptions = {},
   ) {
     this.maxPageSize = maxPageSize;
-    this.all = collections(db, maxPageSize);
+    const jsonQuery = capabilityOptions.jsonQuery ?? true;
+    const upsert = capabilityOptions.upsert ?? true;
+    this.capabilities = {
+      transactions: true,
+      jsonQuery,
+      fullText: false,
+      vector: false,
+      partitioning: false,
+      listenNotify: false,
+      upsert,
+    };
+    this.all = collections(db, maxPageSize, {
+      jsonQuery,
+      upsert,
+      onFallback: () => {
+        this.fallbackQueries += 1;
+      },
+    });
     this.offices = this.all.offices;
     this.departments = this.all.departments;
     this.employees = this.all.employees;
@@ -402,6 +510,7 @@ export async function openSqliteStore(options: SqliteStoreOptions): Promise<Sqli
     db,
     options.migrations ?? CANONICAL_MIGRATIONS,
     options.maxPageSize ?? DEFAULT_MAX_PAGE_SIZE,
+    options.capabilities ?? {},
   );
   await store.initialize();
   return store;
@@ -410,10 +519,22 @@ export async function openSqliteStore(options: SqliteStoreOptions): Promise<Sqli
 /** `sqlite::memory:`, `sqlite:///abs/path.db` or `sqlite:./relative.db`. */
 export const sqliteAdapterFactory: AdapterFactory = {
   scheme: "sqlite",
-  supports: ["relational"],
-  create<K extends StoreKind>(kind: K, url: URL): Promise<StoreByKind[K]> {
-    if (kind !== "relational")
-      return Promise.reject(new Error(`sqlite adapter does not support ${kind}`));
-    return openSqliteStore({ path: sqlitePathFromUrl(url) }) as unknown as Promise<StoreByKind[K]>;
+  supports: ["relational", "events", "vector"],
+  async create<K extends StoreKind>(kind: K, url: URL): Promise<StoreByKind[K]> {
+    const path = sqlitePathFromUrl(url);
+    switch (kind) {
+      case "relational":
+        return (await openSqliteStore({ path })) as unknown as StoreByKind[K];
+      case "events": {
+        const { openSqliteEventStore } = await import("./sqlite-events.js");
+        return (await openSqliteEventStore({ path })) as unknown as StoreByKind[K];
+      }
+      case "vector": {
+        const { openSqliteVectorStore } = await import("./sqlite-vectors.js");
+        return (await openSqliteVectorStore({ path })) as unknown as StoreByKind[K];
+      }
+      default:
+        throw new Error(`sqlite adapter does not support ${kind}`);
+    }
   },
 };

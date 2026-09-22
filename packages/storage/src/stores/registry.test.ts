@@ -115,6 +115,14 @@ describe("StorageRegistry", () => {
     );
   });
 
+  it("exposes the capabilities of every opened store", async () => {
+    const storage = await openStorage(allMemory);
+    expect(Object.keys(storage.capabilities).sort()).toEqual([...STORE_KINDS].sort());
+    expect(storage.capabilities.relational.transactions).toBe(true);
+    expect(storage.capabilities.vector.vector).toBe(false);
+    await storage.close();
+  });
+
   it("rejects registering the same scheme twice", () => {
     const registry = new StorageRegistry().register(memoryAdapterFactory);
     expect(() => registry.register(memoryAdapterFactory)).toThrow(/memory/);
