@@ -248,7 +248,14 @@ importers:
 
   packages/notifications: {}
 
-  packages/orchestrator: {}
+  packages/orchestrator:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../core
+      '@vo/llm':
+        specifier: workspace:*
+        version: link:../llm
 
   packages/skills: {}
 

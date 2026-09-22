@@ -21,5 +21,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@vo/core": "workspace:*",
+    "@vo/llm": "workspace:*"
   }
 }
