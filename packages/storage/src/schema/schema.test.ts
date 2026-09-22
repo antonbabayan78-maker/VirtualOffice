@@ -43,14 +43,15 @@ describe("canonical schema", () => {
     }
   });
 
-  it("ships an initial migration that creates every canonical table and can drop them all", () => {
-    expect(CANONICAL_MIGRATIONS[0]?.id).toBe("0001_initial");
-    const created =
-      CANONICAL_MIGRATIONS[0]?.up.filter((s) => s.op === "createTable").map((s) => s.table.name) ??
-      [];
+  it("creates every canonical table across its migrations and can drop them all", () => {
+    expect(CANONICAL_MIGRATIONS.map((m) => m.id)).toEqual(["0001_initial", "0002_snapshots"]);
+    const created = CANONICAL_MIGRATIONS.flatMap((m) =>
+      m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),
+    );
     expect(created.sort()).toEqual(CANONICAL_TABLES.map((t) => t.name).sort());
-    const dropped =
-      CANONICAL_MIGRATIONS[0]?.down.filter((s) => s.op === "dropTable").map((s) => s.name) ?? [];
+    const dropped = CANONICAL_MIGRATIONS.flatMap((m) =>
+      m.down.filter((s) => s.op === "dropTable").map((s) => s.name),
+    );
     expect(dropped.sort()).toEqual(created.sort());
     expect(MIGRATIONS_TABLE.name).toBe("_vo_migrations");
     expect(validateMigrations(CANONICAL_MIGRATIONS)).toEqual([]);

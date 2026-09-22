@@ -27,6 +27,8 @@ import {
   type Skill,
   type Task,
   type TaskId,
+  type OfficeSnapshot,
+  type SnapshotId,
 } from "@vo/core";
 
 export const T0 = new Date("2026-09-22T00:00:00Z");
@@ -175,4 +177,21 @@ export function memory(
       { id: () => id as MemoryItemId, now: () => T0 },
     ),
   );
+}
+
+export function snapshot(id: string, officeId: string): OfficeSnapshot {
+  return {
+    id: id as SnapshotId,
+    officeId: officeId as OfficeId,
+    version: 1,
+    reason: "fixture",
+    createdAt: T0,
+    config: {
+      office: office(officeId),
+      departments: [department("d1", officeId)],
+      employees: [employee("e1", officeId, "d1")],
+      connections: [],
+      connectors: [connector("k1", officeId)],
+    },
+  };
 }

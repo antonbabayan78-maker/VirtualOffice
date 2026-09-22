@@ -39,7 +39,10 @@ describe("SqliteRelationalStore", () => {
     expect(await store.tables()).toEqual(
       expect.arrayContaining([...CANONICAL_TABLES.map((t) => t.name), "_vo_migrations"]),
     );
-    expect(await store.migrationStatus()).toEqual({ applied: ["0001_initial"], pending: [] });
+    expect(await store.migrationStatus()).toEqual({
+      applied: ["0001_initial", "0002_snapshots"],
+      pending: [],
+    });
     await store.close();
   });
 
@@ -47,7 +50,10 @@ describe("SqliteRelationalStore", () => {
     const store = await openSqliteStore({ path: ":memory:" });
     await store.migrateDown();
     expect(await store.tables()).toEqual(["_vo_migrations"]);
-    expect(await store.migrationStatus()).toEqual({ applied: [], pending: ["0001_initial"] });
+    expect(await store.migrationStatus()).toEqual({
+      applied: [],
+      pending: ["0001_initial", "0002_snapshots"],
+    });
     await store.migrateUp();
     expect(await store.tables()).toContain("tasks");
     await store.tasks.put(fx.task("t1", "o1", "d1"));
@@ -64,7 +70,10 @@ describe("SqliteRelationalStore", () => {
     const second = await openSqliteStore({ path });
     expect((await second.offices.get("o1"))?.name).toBe("Persisted");
     expect(await second.employees.get("e1")).toEqual(fx.employee("e1", "o1", "d1"));
-    expect(await second.migrationStatus()).toEqual({ applied: ["0001_initial"], pending: [] });
+    expect(await second.migrationStatus()).toEqual({
+      applied: ["0001_initial", "0002_snapshots"],
+      pending: [],
+    });
     await second.close();
   });
 
