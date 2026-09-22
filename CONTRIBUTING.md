@@ -20,7 +20,7 @@ Repeat until the task's Definition-of-Done tests all pass, then set the task to 
 ## Conventions
 
 - Tests live next to the code as `*.test.ts` inside `src/`.
-- Use the fake LLM provider and recorded fixtures. A test that talks to a real model is a bug.
+- Use the fake LLM provider (`FakeLlmProvider` in `@vo/llm`) and recorded fixtures (`RecordingProvider`). In CI the fixture mode is `replay`, so a missing fixture fails the build instead of calling a model; record new fixtures locally with `VO_LLM_FIXTURES=record` and commit them. A test that talks to a real model is a bug.
 - Repository interfaces only. SQL lives in `packages/storage/adapters` and nowhere else.
 - Package names are `@vo/<name>`. ESM only, `.js` suffix on relative imports.
 - Commit messages: imperative summary line, body explains the why. Reference the Notion task where useful.
