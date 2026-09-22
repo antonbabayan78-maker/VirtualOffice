@@ -114,6 +114,10 @@ export interface BlobStore {
   readonly capabilities: StoreCapabilities;
   put(key: string, data: Uint8Array, contentType?: string): Promise<void>;
   get(key: string): Promise<Blob | null>;
+  /** Writes from a chunk stream without buffering the whole payload. */
+  putStream(key: string, source: AsyncIterable<Uint8Array>, contentType?: string): Promise<void>;
+  /** Reads as a chunk stream; null when the key does not exist. */
+  getStream(key: string): Promise<AsyncIterable<Uint8Array> | null>;
   delete(key: string): Promise<boolean>;
   exists(key: string): Promise<boolean>;
   /** Keys starting with `prefix`, sorted. */

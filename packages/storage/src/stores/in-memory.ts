@@ -7,6 +7,7 @@ import { compareValues, decodeCursor, encodeCursor } from "../relational/cursor.
 import { DEFAULT_MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE, type Page } from "../relational/types.js";
 import type { AdapterFactory, StoreByKind, StoreKind } from "./registry.js";
 import { NO_CAPABILITIES, type StoreCapabilities } from "./capabilities.js";
+import { toAsyncIterable } from "./streams.js";
 import {
   validateBlobKey,
   type Blob,
@@ -262,6 +263,8 @@ export class InMemoryCoordinationStore implements CoordinationStore {
 
 // ---------------------------------------------------------------------------
 
+const STREAM_CHUNK = 64 * 1024;
+
 export class InMemoryBlobStore implements BlobStore {
   readonly capabilities: StoreCapabilities = NO_CAPABILITIES;
   private readonly blobs = new Map<string, Blob>();
@@ -279,6 +282,39 @@ export class InMemoryBlobStore implements BlobStore {
   get(key: string): Promise<Blob | null> {
     const b = this.blobs.get(key);
     return Promise.resolve(b ? { data: new Uint8Array(b.data), contentType: b.contentType } : null);
+  }
+
+  async putStream(
+    key: string,
+    source: AsyncIterable<Uint8Array>,
+    contentType?: string,
+  ): Promise<void> {
+    validateBlobKey(key);
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of source) {
+      parts.push(chunk);
+      total += chunk.byteLength;
+    }
+    const data = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      data.set(part, offset);
+      offset += part.byteLength;
+    }
+    this.blobs.set(key, { data, contentType: contentType ?? null });
+  }
+
+  getStream(key: string): Promise<AsyncIterable<Uint8Array> | null> {
+    const b = this.blobs.get(key);
+    if (!b) return Promise.resolve(null);
+    const data = new Uint8Array(b.data);
+    function* chunks(): Generator<Uint8Array> {
+      for (let i = 0; i < data.byteLength; i += STREAM_CHUNK) {
+        yield data.subarray(i, Math.min(i + STREAM_CHUNK, data.byteLength));
+      }
+    }
+    return Promise.resolve(toAsyncIterable(chunks()));
   }
 
   delete(key: string): Promise<boolean> {
