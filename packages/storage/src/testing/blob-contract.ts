@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { toAsyncIterable } from "../stores/streams.js";
 import type { BlobStore } from "../stores/types.js";
 
 export interface BlobStoreFactory {
@@ -52,6 +53,38 @@ export function blobStoreContract(name: string, factory: BlobStoreFactory): void
       for (const key of ["", "../x", "a/../b", "/abs"]) {
         await expect(store.put(key, bytes("x")), key).rejects.toThrow(/key/);
       }
+    });
+
+    it("streams large payloads in and out without buffering the whole file", async () => {
+      const chunk = new Uint8Array(64 * 1024).map((_, i) => i % 199);
+      const chunks = 80; // 5 MiB
+      await store.putStream(
+        "o1/big.bin",
+        toAsyncIterable(Array.from({ length: chunks }, () => chunk)),
+        "application/octet-stream",
+      );
+      const stream = await store.getStream("o1/big.bin");
+      if (!stream) throw new Error("expected a stream");
+      let total = 0;
+      let reads = 0;
+      let lastByte = -1;
+      for await (const part of stream) {
+        total += part.byteLength;
+        reads += 1;
+        lastByte = part[part.byteLength - 1] ?? lastByte;
+      }
+      expect(total).toBe(chunk.byteLength * chunks);
+      expect(reads).toBeGreaterThan(1);
+      expect(lastByte).toBe((chunk.byteLength - 1) % 199);
+      const meta = await store.get("o1/big.bin");
+      expect(meta?.contentType).toBe("application/octet-stream");
+      expect(await store.getStream("o1/missing.bin")).toBeNull();
+    });
+
+    it("streaming put validates keys too", async () => {
+      await expect(
+        store.putStream("../escape", toAsyncIterable([new Uint8Array([1])])),
+      ).rejects.toThrow(/key/);
     });
 
     it("handles large binary payloads byte-for-byte", async () => {
