@@ -11,3 +11,5 @@ export * from "./fixtures/recorder.js";
 export * from "./anthropic/anthropic-provider.js";
 export * from "./registry/model-registry.js";
 export * from "./registry/anthropic-models.js";
+export * from "./routing/circuit-breaker.js";
+export * from "./routing/router.js";
