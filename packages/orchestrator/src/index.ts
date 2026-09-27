@@ -10,3 +10,4 @@ export * from "./tools/lazy-toolset.js";
 export * from "./run/token-budget.js";
 export * from "./run/compaction.js";
 export * from "./run/agent-run-loop.js";
+export * from "./workflow/workflow-engine.js";
