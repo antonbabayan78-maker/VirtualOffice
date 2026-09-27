@@ -21,6 +21,14 @@ import {
   type Usage,
 } from "@vo/llm";
 import type { LazyToolset } from "../tools/lazy-toolset.js";
+import {
+  SPEND_APPROVAL_KEY,
+  decisionFor,
+  pendingApprovalFor,
+  type ApprovalDecision,
+  type PendingApproval,
+  type RunApprovalGate,
+} from "./approval-gate.js";
 import type { ContextCompactor } from "./compaction.js";
 import { RunBudget, type BudgetSpend } from "./token-budget.js";
 
@@ -35,7 +43,16 @@ export interface ToolOutcome {
 export type ToolExecutor = (call: ToolUse) => Promise<ToolOutcome>;
 
 export type RunStopReason =
-  "completed" | "step_limit" | "budget_exhausted" | "loop_detected" | "provider_error" | "aborted";
+  | "completed"
+  | "step_limit"
+  | "budget_exhausted"
+  | "loop_detected"
+  | "provider_error"
+  | "aborted"
+  /** Suspended before a gated call ran; resume with the decisions. */
+  | "awaiting_approval"
+  /** A person declined further spending, so the run cannot go on. */
+  | "spend_declined";
 
 export interface RunStep {
   readonly index: number;
@@ -57,6 +74,8 @@ export interface AgentRunResult {
   readonly compactions: number;
   /** The repeated call signature, when the run stopped on a loop. */
   readonly loopSignature?: string;
+  /** What needs a person, when the run stopped waiting for approval. */
+  readonly pendingApproval?: PendingApproval;
   readonly error?: Error;
 }
 
@@ -79,6 +98,10 @@ export interface AgentRunOptions {
   /** How many identical tool calls count as a loop (default 3). */
   readonly loopThreshold?: number;
   readonly maxOutputTokens?: number;
+  /** Hold consequential calls, and the run's spend, for a human decision. */
+  readonly approvalGate?: RunApprovalGate;
+  /** Decisions for a run resumed after it stopped on "awaiting_approval". */
+  readonly approvals?: readonly ApprovalDecision[];
   readonly signal?: AbortSignal;
 }
 
@@ -101,12 +124,28 @@ export function callSignature(call: ToolUse): string {
   return `${call.name}:${createHash("sha1").update(canonical(call.input)).digest("hex").slice(0, 12)}`;
 }
 
+/**
+ * Tool calls at the end of the conversation with no results yet: where a run
+ * suspended for approval picks up. Resuming means answering these, not asking
+ * the model again — an unanswered tool_use may not be followed by another turn.
+ */
+export function trailingToolCalls(messages: readonly Message[]): readonly ToolUse[] {
+  const last = messages.at(-1);
+  if (last?.role !== "assistant") return [];
+  return last.content.filter((b): b is ToolUse => b.type === "tool_use");
+}
+
 function assistantText(content: readonly ContentBlock[]): string {
   return content
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("");
 }
+
+/** One planning turn: ask the model and record it, or end the run. */
+type AskOutcome =
+  | { readonly done: true; readonly result: AgentRunResult }
+  | { readonly done: false; readonly toolCalls: readonly ToolUse[] };
 
 export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult> {
   const first = options.messages[0];
@@ -131,6 +170,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
       structuredResult?: Readonly<Record<string, unknown>>;
       loopSignature?: string;
       error?: Error;
+      pendingApproval?: PendingApproval;
     } = {},
   ): AgentRunResult => ({
     stopReason,
@@ -142,10 +182,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
     ...extra,
   });
 
-  for (let index = 0; index < maxSteps; index++) {
-    if (options.signal?.aborted === true) return finish("aborted");
-    if (budget.state === "exhausted") return finish("budget_exhausted");
-
+  const askModel = async (index: number): Promise<AskOutcome> => {
     let compactedBefore = false;
     if (options.compactor?.needsCompaction(messages) === true) {
       const compacted = await options.compactor.compact(messages);
@@ -182,7 +219,12 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
     try {
       response = await options.provider.complete(request);
     } catch (e) {
-      return finish("provider_error", { error: e instanceof Error ? e : new Error(String(e)) });
+      return {
+        done: true,
+        result: finish("provider_error", {
+          error: e instanceof Error ? e : new Error(String(e)),
+        }),
+      };
     }
 
     budget.record(response.usage);
@@ -201,9 +243,31 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 
     const terminal =
       options.resultTool && toolCalls.find((c) => c.name === options.resultTool?.name);
-    if (terminal) return finish("completed", { structuredResult: terminal.input });
+    if (terminal) {
+      return { done: true, result: finish("completed", { structuredResult: terminal.input }) };
+    }
+    if (toolCalls.length === 0) return { done: true, result: finish("completed") };
+    return { done: false, toolCalls };
+  };
 
-    if (toolCalls.length === 0) return finish("completed");
+  const decisions = options.approvals ?? [];
+  let spendApproved = false;
+  // A conversation ending on unanswered calls is a run resuming at its gate.
+  let resuming: readonly ToolUse[] = trailingToolCalls(options.messages);
+
+  for (let index = 0; index < maxSteps; index++) {
+    if (options.signal?.aborted === true) return finish("aborted");
+    if (budget.state === "exhausted") return finish("budget_exhausted");
+
+    let toolCalls: readonly ToolUse[];
+    if (resuming.length > 0) {
+      toolCalls = resuming;
+      resuming = [];
+    } else {
+      const asked = await askModel(index);
+      if (asked.done) return asked.result;
+      toolCalls = asked.toolCalls;
+    }
 
     for (const call of toolCalls) {
       const signature = callSignature(call);
@@ -212,8 +276,38 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
       if (seen >= loopThreshold) return finish("loop_detected", { loopSignature: signature });
     }
 
+    if (options.approvalGate !== undefined) {
+      const pending = pendingApprovalFor(
+        toolCalls,
+        options.approvalGate,
+        { spentUsd: budget.spent.usd, spendApproved },
+        decisions,
+      );
+      if (pending !== null) return finish("awaiting_approval", { pendingApproval: pending });
+
+      const spend = decisionFor(decisions, SPEND_APPROVAL_KEY);
+      if (spend?.decision === "declined") {
+        const why = spend.reason === undefined ? "" : `: ${spend.reason}`;
+        return finish("spend_declined", {
+          error: new Error(`${spend.decidedBy} declined further spending${why}`),
+        });
+      }
+      if (spend?.decision === "approved") spendApproved = true;
+    }
+
     const results: ToolResult[] = [];
     for (const call of toolCalls) {
+      const decided = decisionFor(decisions, call.id);
+      if (decided?.decision === "declined") {
+        const why = decided.reason === undefined ? "" : `: ${decided.reason}`;
+        results.push({
+          type: "tool_result",
+          toolUseId: call.id,
+          content: `${decided.decidedBy} declined this call${why}`,
+          isError: true,
+        });
+        continue;
+      }
       if (options.toolset?.isFindTool(call) === true) {
         results.push(options.toolset.execute(call));
         continue;

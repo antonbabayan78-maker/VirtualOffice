@@ -3,6 +3,7 @@ import {
   FakeLlmProvider,
   LlmProviderError,
   reply,
+  defaultModelRegistry,
   systemText,
   toolCall,
   type CompletionRequest,
@@ -11,6 +12,7 @@ import {
   type ToolDefinition,
 } from "@vo/llm";
 import { ContextCompactor } from "./compaction.js";
+import { SPEND_APPROVAL_KEY, toolGateFromMap, type RunApprovalGate } from "./approval-gate.js";
 import { RunBudget } from "./token-budget.js";
 import {
   runAgent,
@@ -371,5 +373,211 @@ describe("tool result batching", () => {
       .map((b) => b.toolUseId);
     expect(uses).toEqual(["a", "b"]);
     expect(results).toEqual(["a", "b"]);
+  });
+});
+
+describe("runAgent: gating a call before it runs", () => {
+  const sendGate: RunApprovalGate = {
+    gatedActions: ["external_send"],
+    classify: toolGateFromMap({ post_message: ["external_send"] }),
+  };
+
+  const held = async (
+    executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "sent" }),
+    ),
+  ) => {
+    const result = await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [toolCall("post_message", { text: "hi" })] }),
+        approvalGate: sendGate,
+        executeTool,
+      }),
+    );
+    return { result, executeTool };
+  };
+
+  it("stops before executing and says what needs a decision", async () => {
+    const { result, executeTool } = await held();
+    expect(result.stopReason).toBe("awaiting_approval");
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result.pendingApproval?.items.map((i) => i.name)).toEqual(["post_message"]);
+    expect(result.pendingApproval?.gates).toEqual(["external_send"]);
+    // The conversation ends on the unanswered call, which is where a resume picks up.
+    expect(result.messages.at(-1)?.role).toBe("assistant");
+  });
+
+  it("runs the call and carries on once the owner approves", async () => {
+    const { result: firstRun } = await held();
+    const key = firstRun.pendingApproval?.items[0]?.key ?? "";
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "sent" }),
+    );
+    const provider = new FakeLlmProvider({ script: [reply("posted")] });
+
+    const resumed = await runAgent(
+      options({
+        provider,
+        approvalGate: sendGate,
+        executeTool,
+        messages: firstRun.messages,
+        approvals: [{ key, decision: "approved", decidedBy: "anton@example.com" }],
+      }),
+    );
+
+    expect(resumed.stopReason).toBe("completed");
+    expect(resumed.text).toBe("posted");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    // The model is asked again only after the held call has an answer.
+    expect(requestAt(provider, 0).messages.at(-1)?.content[0]).toMatchObject({
+      type: "tool_result",
+      content: "sent",
+    });
+  });
+
+  it("tells the model the call was declined instead of running it", async () => {
+    const { result: firstRun } = await held();
+    const key = firstRun.pendingApproval?.items[0]?.key ?? "";
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "sent" }),
+    );
+    const provider = new FakeLlmProvider({ script: [reply("understood")] });
+
+    const resumed = await runAgent(
+      options({
+        provider,
+        approvalGate: sendGate,
+        executeTool,
+        messages: firstRun.messages,
+        approvals: [
+          {
+            key,
+            decision: "declined",
+            decidedBy: "anton@example.com",
+            reason: "not to that channel",
+          },
+        ],
+      }),
+    );
+
+    expect(resumed.stopReason).toBe("completed");
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(requestAt(provider, 0).messages.at(-1)?.content[0]).toMatchObject({
+      type: "tool_result",
+      isError: true,
+    });
+    const answer = requestAt(provider, 0).messages.at(-1)?.content[0];
+    expect(answer?.type === "tool_result" ? answer.content : "").toMatch(/not to that channel/);
+  });
+
+  it("holds the whole turn when only one of its calls is gated", async () => {
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "ok" }),
+    );
+    const result = await runAgent(
+      options({
+        provider: new FakeLlmProvider({
+          script: [
+            {
+              content: [
+                { type: "tool_use", id: "toolu_a", name: "get_diff", input: { pr: 1 } },
+                { type: "tool_use", id: "toolu_b", name: "post_message", input: { text: "hi" } },
+              ],
+              stopReason: "tool_use",
+            },
+          ],
+        }),
+        approvalGate: sendGate,
+        executeTool,
+      }),
+    );
+    expect(result.stopReason).toBe("awaiting_approval");
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result.pendingApproval?.items.map((i) => i.key)).toEqual(["toolu_b"]);
+  });
+
+  it("leaves an ungated run untouched", async () => {
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "diff" }),
+    );
+    const result = await runAgent(
+      options({
+        provider: new FakeLlmProvider({
+          script: [toolCall("get_diff", { pr: 1 }), reply("read it")],
+        }),
+        approvalGate: sendGate,
+        executeTool,
+      }),
+    );
+    expect(result.stopReason).toBe("completed");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runAgent: gating the run's spend", () => {
+  const spendGate = (spendThresholdUsd: number): RunApprovalGate => ({
+    gatedActions: ["spend"],
+    spendThresholdUsd,
+    classify: () => [],
+  });
+
+  const priced = (): RunBudget =>
+    new RunBudget(
+      {},
+      {
+        registry: defaultModelRegistry(),
+        model: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
+    );
+
+  it("holds the run once the cost passes the threshold, then not again", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("get_diff", { pr: 1 }), toolCall("get_diff", { pr: 2 }), reply("done")],
+    });
+    const first = await runAgent(
+      options({ provider, approvalGate: spendGate(1e-9), budget: priced() }),
+    );
+    expect(first.stopReason).toBe("awaiting_approval");
+    expect(first.pendingApproval?.items.map((i) => i.key)).toEqual([SPEND_APPROVAL_KEY]);
+
+    const resumed = await runAgent(
+      options({
+        provider: new FakeLlmProvider({
+          script: [toolCall("get_diff", { pr: 2 }), reply("done")],
+        }),
+        approvalGate: spendGate(1e-9),
+        budget: priced(),
+        messages: first.messages,
+        approvals: [
+          { key: SPEND_APPROVAL_KEY, decision: "approved", decidedBy: "anton@example.com" },
+        ],
+      }),
+    );
+    expect(resumed.stopReason).toBe("completed");
+  });
+
+  it("ends the run when further spending is declined", async () => {
+    const provider = new FakeLlmProvider({ script: [toolCall("get_diff", { pr: 1 })] });
+    const first = await runAgent(
+      options({ provider, approvalGate: spendGate(1e-9), budget: priced() }),
+    );
+    const declined = await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [reply("never asked")] }),
+        approvalGate: spendGate(1e-9),
+        budget: priced(),
+        messages: first.messages,
+        approvals: [
+          {
+            key: SPEND_APPROVAL_KEY,
+            decision: "declined",
+            decidedBy: "anton@example.com",
+            reason: "that is enough for today",
+          },
+        ],
+      }),
+    );
+    expect(declined.stopReason).toBe("spend_declined");
+    expect(declined.error?.message).toMatch(/that is enough for today/);
   });
 });
