@@ -46,6 +46,7 @@ describe("createTask", () => {
       status: "backlog",
       assigneeId: null,
       reviewerIds: [],
+      approvals: [],
       dependsOn: [],
       artifacts: [],
       tokenBudget: null,
@@ -54,6 +55,11 @@ describe("createTask", () => {
       createdAt: t0,
       updatedAt: t0,
     });
+  });
+
+  it("starts with no approvals gathered", () => {
+    expect(make().approvals).toEqual([]);
+    expect(make({ assigneeId: ada }).approvals).toEqual([]);
   });
 
   it("starts as assigned when an assignee is given", () => {

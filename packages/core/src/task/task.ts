@@ -67,6 +67,13 @@ export interface Task {
   readonly status: TaskStatus;
   readonly assigneeId: EmployeeId | null;
   readonly reviewerIds: readonly EmployeeId[];
+
+  /**
+   * Reviewers who have approved the current review round. Empty outside a
+   * review and reset whenever the work is resubmitted, so a quorum never
+   * inherits approvals given to an earlier version of the work.
+   */
+  readonly approvals: readonly EmployeeId[];
   readonly dependsOn: readonly TaskId[];
   /** References to produced artifacts (workspace paths, commit ids, document ids). */
   readonly artifacts: readonly string[];
@@ -181,6 +188,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     status,
     assigneeId,
     reviewerIds: [...reviewerIds],
+    approvals: [],
     dependsOn: [...dependsOn] as TaskId[],
     artifacts: [],
     tokenBudget,
