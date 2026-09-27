@@ -7,6 +7,7 @@ import {
   transitionTask,
   type EmployeeId,
   type EmployeeStatus,
+  type GatedAction,
   type ReviewPolicy,
   type Result,
   type Task,
@@ -51,12 +52,24 @@ export type WorkflowEvent =
       readonly type: "check_reported";
       readonly report: CheckReport;
       readonly actorId?: EmployeeId;
+    }
+  | {
+      /**
+       * A person's decision on a gated task, dispatched by the application on
+       * behalf of the authenticated human. No employee acted, hence no actorId;
+       * `decidedBy` records who it was.
+       */
+      readonly type: "gate_decided";
+      readonly decision: "approved" | "rejected";
+      readonly decidedBy: string;
+      readonly reason?: string;
+      readonly actorId?: never;
     };
 
 /** The events a review policy decides; everything else is policy-independent. */
 export type PolicyEvent = Extract<
   WorkflowEvent,
-  { type: "submit" | "approve" | "request_changes" | "check_reported" }
+  { type: "submit" | "approve" | "request_changes" | "check_reported" | "gate_decided" }
 >;
 
 export type WorkflowEffect =
@@ -67,7 +80,13 @@ export type WorkflowEffect =
     }
   | { readonly type: "escalate"; readonly reason: string }
   /** Ask the caller to run a named check and dispatch a "check_reported" event. */
-  | { readonly type: "run_check"; readonly checkId: string };
+  | { readonly type: "run_check"; readonly checkId: string }
+  /** Put the task in the owner's approvals inbox and wait for a "gate_decided" event. */
+  | {
+      readonly type: "request_approval";
+      readonly gates: readonly GatedAction[];
+      readonly summary: string;
+    };
 
 export interface WorkflowOutcome {
   readonly task: Task;

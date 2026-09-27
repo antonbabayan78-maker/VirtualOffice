@@ -15,7 +15,7 @@
  * `check_reported` event, which keeps the engine pure and testable.
  */
 import type { Result, Task } from "@vo/core";
-import { approveReview, requestChangesOrEscalate } from "./review-common.js";
+import { approveReview, rejectPolicyEvent, requestChangesOrEscalate } from "./review-common.js";
 import {
   applyTransition,
   workflowError,
@@ -131,6 +131,8 @@ export const AUTOMATED_POLICY_HANDLER: PolicyHandler = {
         return queueCheck(task, event, context, checkId.value);
       case "check_reported":
         return decide(task, event, context, checkId.value);
+      case "gate_decided":
+        return rejectPolicyEvent("automated", event);
       case "approve":
       case "request_changes":
         return workflowError(

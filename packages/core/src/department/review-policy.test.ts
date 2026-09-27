@@ -124,6 +124,21 @@ describe("parseReviewPolicy", () => {
     }
   });
 
+  it("accepts a human gate over the categories that need a person", () => {
+    expect(unwrap(parseReviewPolicy({ kind: "gate", gatedActions: ["deploy", "spend"] }))).toEqual({
+      kind: "gate",
+      gatedActions: ["deploy", "spend"],
+    });
+  });
+
+  it("rejects a gate that gates nothing, or an unknown category", () => {
+    for (const gatedActions of [undefined, [], "deploy", ["launch_rocket"], ["spend", "spend"]]) {
+      const r = parseReviewPolicy({ kind: "gate", gatedActions });
+      expect(isErr(r), JSON.stringify(gatedActions)).toBe(true);
+      if (isErr(r)) expect(r.error.map((e) => e.path)).toContain("gatedActions");
+    }
+  });
+
   it("rejects unknown kinds and non-objects", () => {
     for (const input of [{ kind: "committee" }, "manager", null, 3]) {
       const r = parseReviewPolicy(input);

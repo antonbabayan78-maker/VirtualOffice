@@ -10,7 +10,7 @@
 import type { EmployeeId } from "@vo/core";
 import {
   approveReview,
-  rejectCheckReport,
+  rejectPolicyEvent,
   requestChangesOrEscalate,
   submitForReview,
   supervisorChoice,
@@ -76,7 +76,8 @@ export const PEER_POLICY_HANDLER: PolicyHandler = {
       case "request_changes":
         return requestChangesOrEscalate(task, event, context, event.reason);
       case "check_reported":
-        return rejectCheckReport("peer");
+      case "gate_decided":
+        return rejectPolicyEvent("peer", event);
     }
   },
 };

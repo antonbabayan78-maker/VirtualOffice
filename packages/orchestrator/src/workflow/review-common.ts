@@ -75,9 +75,15 @@ export function assertReviewer<T = WorkflowOutcome>(
   return null;
 }
 
-/** A policy with no automated check refuses a check report rather than ignoring it. */
-export function rejectCheckReport<T = WorkflowOutcome>(kind: string): Result<T> {
-  return workflowError<T>("event", `the "${kind}" review policy does not run automated checks`);
+/** A policy refuses an event it cannot act on rather than ignoring it. */
+export function rejectPolicyEvent<T = WorkflowOutcome>(
+  kind: string,
+  event: PolicyEvent,
+): Result<T> {
+  return workflowError<T>(
+    "event",
+    `the "${kind}" review policy does not handle a "${event.type}" event`,
+  );
 }
 
 /**
