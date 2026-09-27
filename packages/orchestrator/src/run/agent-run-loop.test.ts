@@ -13,6 +13,7 @@ import {
 } from "@vo/llm";
 import { ContextCompactor } from "./compaction.js";
 import { SPEND_APPROVAL_KEY, toolGateFromMap, type RunApprovalGate } from "./approval-gate.js";
+import { InMemoryRunCheckpointStore } from "./checkpoint.js";
 import { RunBudget } from "./token-budget.js";
 import {
   runAgent,
@@ -579,5 +580,161 @@ describe("runAgent: gating the run's spend", () => {
     );
     expect(declined.stopReason).toBe("spend_declined");
     expect(declined.error?.message).toMatch(/that is enough for today/);
+  });
+});
+
+describe("runAgent: checkpoints", () => {
+  const runId = "run-42";
+
+  it("records a checkpoint after each step, with the conversation so far", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [toolCall("get_diff", { pr: 1 }), reply("done")] }),
+        checkpoint: { store, runId },
+      }),
+    );
+    const saved = await store.load(runId);
+    expect(saved?.finished).toMatchObject({ stopReason: "completed", text: "done" });
+    expect(saved?.step).toBeGreaterThanOrEqual(1);
+    expect(saved?.budget.spend.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("picks a killed run back up at its last checkpoint instead of starting over", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "a diff" }),
+    );
+
+    // The worker dies after one step: the provider has nothing more to give.
+    const dying = new FakeLlmProvider({ script: [toolCall("get_diff", { pr: 1 })] });
+    const crashed = await runAgent(
+      options({ provider: dying, executeTool, checkpoint: { store, runId }, maxSteps: 4 }),
+    );
+    expect(crashed.stopReason).toBe("provider_error");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+
+    const checkpointed = await store.load(runId);
+    expect(checkpointed?.messages.length).toBeGreaterThan(1);
+
+    // A fresh worker takes the run on. It must not repeat the tool call it can see.
+    const survivor = new FakeLlmProvider({ script: [reply("finished from the checkpoint")] });
+    const resumed = await runAgent(
+      options({
+        provider: survivor,
+        executeTool,
+        checkpoint: { store, runId },
+        messages: brief,
+        maxSteps: 4,
+      }),
+    );
+    expect(resumed.stopReason).toBe("completed");
+    expect(resumed.text).toBe("finished from the checkpoint");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    // The resumed run was asked to continue the old conversation, not the brief.
+    expect(requestAt(survivor, 0).messages.length).toBeGreaterThan(1);
+  });
+
+  it("carries the spend already incurred so a resumed run does not get a fresh budget", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    const dying = new FakeLlmProvider({ script: [toolCall("get_diff", { pr: 1 })] });
+    await runAgent(options({ provider: dying, checkpoint: { store, runId }, maxSteps: 2 }));
+    const spentBefore = (await store.load(runId))?.budget.spend.inputTokens ?? 0;
+    expect(spentBefore).toBeGreaterThan(0);
+
+    const budget = new RunBudget({ maxTotalTokens: 1_000_000 });
+    await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [reply("done")] }),
+        checkpoint: { store, runId },
+        budget,
+      }),
+    );
+    expect(budget.spent.inputTokens).toBeGreaterThan(spentBefore);
+  });
+
+  it("gives a redelivered finished run its recorded result instead of doing the work twice", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "sent" }),
+    );
+    const first = await runAgent(
+      options({
+        provider: new FakeLlmProvider({
+          script: [toolCall("post_message", { text: "hi" }), reply("posted")],
+        }),
+        executeTool,
+        checkpoint: { store, runId },
+      }),
+    );
+    expect(first.stopReason).toBe("completed");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+
+    // The queue delivers the same job again. Nothing may run a second time.
+    const provider = new FakeLlmProvider({ script: [reply("should never be asked")] });
+    const again = await runAgent(options({ provider, executeTool, checkpoint: { store, runId } }));
+    expect(again.stopReason).toBe("completed");
+    expect(again.text).toBe("posted");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("records a suspended run so another worker can take the decision on", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    const gate: RunApprovalGate = {
+      gatedActions: ["external_send"],
+      classify: toolGateFromMap({ post_message: ["external_send"] }),
+    };
+    const held = await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [toolCall("post_message", { text: "hi" })] }),
+        approvalGate: gate,
+        checkpoint: { store, runId },
+      }),
+    );
+    expect(held.stopReason).toBe("awaiting_approval");
+
+    const saved = await store.load(runId);
+    expect(saved?.finished).toBeUndefined();
+    expect(saved?.pendingApproval?.items.map((i) => i.name)).toEqual(["post_message"]);
+
+    const executeTool = vi.fn((_call: ToolUse): Promise<ToolOutcome> =>
+      Promise.resolve({ content: "sent" }),
+    );
+    const resumed = await runAgent(
+      options({
+        provider: new FakeLlmProvider({ script: [reply("posted")] }),
+        approvalGate: gate,
+        checkpoint: { store, runId },
+        executeTool,
+        approvals: [
+          {
+            key: saved?.pendingApproval?.items[0]?.key ?? "",
+            decision: "approved",
+            decidedBy: "anton@example.com",
+          },
+        ],
+      }),
+    );
+    expect(resumed.stopReason).toBe("completed");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the checkpoint inside its size bound as the conversation grows", async () => {
+    const store = new InMemoryRunCheckpointStore();
+    const long = "x".repeat(4_000);
+    await runAgent(
+      options({
+        provider: new FakeLlmProvider({
+          handler: (_r, i) => (i < 3 ? toolCall("get_diff", { pr: i }) : reply("done")),
+        }),
+        executeTool: () => Promise.resolve({ content: long }),
+        checkpoint: { store, runId, maxBytes: 3_000 },
+      }),
+    );
+    const saved = await store.load(runId);
+    expect(saved).not.toBeNull();
+    expect(JSON.stringify(saved).length).toBeLessThanOrEqual(3_500);
+    expect(saved?.droppedMessages).toBeGreaterThan(0);
   });
 });

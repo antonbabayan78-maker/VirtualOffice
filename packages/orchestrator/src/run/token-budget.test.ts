@@ -139,3 +139,25 @@ describe("RunBudget", () => {
     expect(restored.spent.totalTokens).toBe(180);
   });
 });
+
+describe("RunBudget.adopt", () => {
+  it("takes on a snapshot's spend while keeping its own limits and pricing", () => {
+    const budget = new RunBudget({ maxTotalTokens: 10_000 });
+    budget.adopt({
+      limits: {},
+      spend: {
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadInputTokens: 10,
+        cacheCreationInputTokens: 5,
+        totalTokens: 165,
+        usd: 0.25,
+      },
+      turns: 3,
+    });
+    expect(budget.spent).toMatchObject({ inputTokens: 100, outputTokens: 50, usd: 0.25 });
+    expect(budget.turns).toBe(3);
+    // The limits it was built with still apply, not the snapshot's.
+    expect(budget.snapshot().limits).toEqual({ maxTotalTokens: 10_000 });
+  });
+});

@@ -29,6 +29,12 @@ import {
   type PendingApproval,
   type RunApprovalGate,
 } from "./approval-gate.js";
+import {
+  MAX_CHECKPOINT_BYTES,
+  boundCheckpoint,
+  type RunCheckpoint,
+  type RunCheckpointStore,
+} from "./checkpoint.js";
 import type { ContextCompactor } from "./compaction.js";
 import { RunBudget, type BudgetSpend } from "./token-budget.js";
 
@@ -102,10 +108,31 @@ export interface AgentRunOptions {
   readonly approvalGate?: RunApprovalGate;
   /** Decisions for a run resumed after it stopped on "awaiting_approval". */
   readonly approvals?: readonly ApprovalDecision[];
+  /**
+   * Write progress after every step so another worker can take the run on, and
+   * read it back so a redelivered run is not done twice.
+   */
+  readonly checkpoint?: {
+    readonly store: RunCheckpointStore;
+    readonly runId: string;
+    readonly maxBytes?: number;
+  };
   readonly signal?: AbortSignal;
 }
 
 export const DEFAULT_MAX_STEPS = 12;
+/**
+ * Outcomes that mean the run is over and must not be repeated on a redelivery.
+ * A provider failure is not one of them: that is exactly what a retry is for,
+ * and an abort leaves the run resumable rather than closing it.
+ */
+const SETTLED_REASONS: readonly RunStopReason[] = [
+  "completed",
+  "step_limit",
+  "loop_detected",
+  "budget_exhausted",
+  "spend_declined",
+];
 export const DEFAULT_LOOP_THRESHOLD = 3;
 
 function canonical(value: unknown): string {
@@ -252,87 +279,149 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentRunResult
 
   const decisions = options.approvals ?? [];
   let spendApproved = false;
-  // A conversation ending on unanswered calls is a run resuming at its gate.
-  let resuming: readonly ToolUse[] = trailingToolCalls(options.messages);
 
-  for (let index = 0; index < maxSteps; index++) {
-    if (options.signal?.aborted === true) return finish("aborted");
-    if (budget.state === "exhausted") return finish("budget_exhausted");
+  const saveCheckpoint = async (step: number, result?: AgentRunResult): Promise<void> => {
+    const config = options.checkpoint;
+    if (config === undefined) return;
+    // A settled run records its outcome so a redelivery reads it instead of
+    // repeating the work; an unsettled one stays resumable.
+    const settled =
+      result !== undefined && SETTLED_REASONS.includes(result.stopReason)
+        ? {
+            finished: {
+              stopReason: result.stopReason,
+              text: result.text,
+              ...(result.structuredResult === undefined
+                ? {}
+                : { structuredResult: result.structuredResult }),
+            },
+          }
+        : {};
+    const checkpoint: RunCheckpoint = {
+      runId: config.runId,
+      step,
+      messages,
+      budget: budget.snapshot(),
+      spendApproved,
+      droppedMessages: 0,
+      updatedAt: Date.now(),
+      ...(result?.pendingApproval === undefined ? {} : { pendingApproval: result.pendingApproval }),
+      ...settled,
+    };
+    await config.store.save(boundCheckpoint(checkpoint, config.maxBytes ?? MAX_CHECKPOINT_BYTES));
+  };
 
-    let toolCalls: readonly ToolUse[];
-    if (resuming.length > 0) {
-      toolCalls = resuming;
-      resuming = [];
-    } else {
-      const asked = await askModel(index);
-      if (asked.done) return asked.result;
-      toolCalls = asked.toolCalls;
+  if (options.checkpoint !== undefined) {
+    const saved = await options.checkpoint.store.load(options.checkpoint.runId);
+    if (saved?.finished !== undefined) {
+      // The work and its transitions already happened; hand back what they produced.
+      return {
+        stopReason: saved.finished.stopReason,
+        text: saved.finished.text,
+        ...(saved.finished.structuredResult === undefined
+          ? {}
+          : { structuredResult: saved.finished.structuredResult }),
+        messages: saved.messages,
+        steps: [],
+        usage: saved.budget.spend,
+        compactions: 0,
+      };
     }
-
-    for (const call of toolCalls) {
-      const signature = callSignature(call);
-      const seen = (signatureCounts.get(signature) ?? 0) + 1;
-      signatureCounts.set(signature, seen);
-      if (seen >= loopThreshold) return finish("loop_detected", { loopSignature: signature });
+    if (saved !== null) {
+      messages = [...saved.messages];
+      budget.adopt(saved.budget);
+      spendApproved = saved.spendApproved;
     }
-
-    if (options.approvalGate !== undefined) {
-      const pending = pendingApprovalFor(
-        toolCalls,
-        options.approvalGate,
-        { spentUsd: budget.spent.usd, spendApproved },
-        decisions,
-      );
-      if (pending !== null) return finish("awaiting_approval", { pendingApproval: pending });
-
-      const spend = decisionFor(decisions, SPEND_APPROVAL_KEY);
-      if (spend?.decision === "declined") {
-        const why = spend.reason === undefined ? "" : `: ${spend.reason}`;
-        return finish("spend_declined", {
-          error: new Error(`${spend.decidedBy} declined further spending${why}`),
-        });
-      }
-      if (spend?.decision === "approved") spendApproved = true;
-    }
-
-    const results: ToolResult[] = [];
-    for (const call of toolCalls) {
-      const decided = decisionFor(decisions, call.id);
-      if (decided?.decision === "declined") {
-        const why = decided.reason === undefined ? "" : `: ${decided.reason}`;
-        results.push({
-          type: "tool_result",
-          toolUseId: call.id,
-          content: `${decided.decidedBy} declined this call${why}`,
-          isError: true,
-        });
-        continue;
-      }
-      if (options.toolset?.isFindTool(call) === true) {
-        results.push(options.toolset.execute(call));
-        continue;
-      }
-      try {
-        const outcome = await options.executeTool(call);
-        results.push({
-          type: "tool_result",
-          toolUseId: call.id,
-          content: outcome.content,
-          ...(outcome.isError === undefined ? {} : { isError: outcome.isError }),
-        });
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        results.push({
-          type: "tool_result",
-          toolUseId: call.id,
-          content: `tool "${call.name}" failed: ${message}`,
-          isError: true,
-        });
-      }
-    }
-    // Every result for a turn goes back in one user message, as the API requires.
-    messages = [...messages, { role: "user", content: results }];
   }
 
-  return finish("step_limit");
+  // A conversation ending on unanswered calls is a run resuming at its gate.
+  let resuming: readonly ToolUse[] = trailingToolCalls(messages);
+
+  const drive = async (): Promise<AgentRunResult> => {
+    for (let index = 0; index < maxSteps; index++) {
+      if (options.signal?.aborted === true) return finish("aborted");
+      if (budget.state === "exhausted") return finish("budget_exhausted");
+
+      let toolCalls: readonly ToolUse[];
+      if (resuming.length > 0) {
+        toolCalls = resuming;
+        resuming = [];
+      } else {
+        const asked = await askModel(index);
+        if (asked.done) return asked.result;
+        toolCalls = asked.toolCalls;
+      }
+
+      for (const call of toolCalls) {
+        const signature = callSignature(call);
+        const seen = (signatureCounts.get(signature) ?? 0) + 1;
+        signatureCounts.set(signature, seen);
+        if (seen >= loopThreshold) return finish("loop_detected", { loopSignature: signature });
+      }
+
+      if (options.approvalGate !== undefined) {
+        const pending = pendingApprovalFor(
+          toolCalls,
+          options.approvalGate,
+          { spentUsd: budget.spent.usd, spendApproved },
+          decisions,
+        );
+        if (pending !== null) return finish("awaiting_approval", { pendingApproval: pending });
+
+        const spend = decisionFor(decisions, SPEND_APPROVAL_KEY);
+        if (spend?.decision === "declined") {
+          const why = spend.reason === undefined ? "" : `: ${spend.reason}`;
+          return finish("spend_declined", {
+            error: new Error(`${spend.decidedBy} declined further spending${why}`),
+          });
+        }
+        if (spend?.decision === "approved") spendApproved = true;
+      }
+
+      const results: ToolResult[] = [];
+      for (const call of toolCalls) {
+        const decided = decisionFor(decisions, call.id);
+        if (decided?.decision === "declined") {
+          const why = decided.reason === undefined ? "" : `: ${decided.reason}`;
+          results.push({
+            type: "tool_result",
+            toolUseId: call.id,
+            content: `${decided.decidedBy} declined this call${why}`,
+            isError: true,
+          });
+          continue;
+        }
+        if (options.toolset?.isFindTool(call) === true) {
+          results.push(options.toolset.execute(call));
+          continue;
+        }
+        try {
+          const outcome = await options.executeTool(call);
+          results.push({
+            type: "tool_result",
+            toolUseId: call.id,
+            content: outcome.content,
+            ...(outcome.isError === undefined ? {} : { isError: outcome.isError }),
+          });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          results.push({
+            type: "tool_result",
+            toolUseId: call.id,
+            content: `tool "${call.name}" failed: ${message}`,
+            isError: true,
+          });
+        }
+      }
+      // Every result for a turn goes back in one user message, as the API requires.
+      messages = [...messages, { role: "user", content: results }];
+      await saveCheckpoint(index + 1);
+    }
+
+    return finish("step_limit");
+  };
+
+  const result = await drive();
+  await saveCheckpoint(steps.length, result);
+  return result;
 }
