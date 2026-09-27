@@ -6,6 +6,7 @@ import { isErr, isOk, unwrap } from "../shared/result.js";
 import {
   canTransition,
   createTask,
+  type CreateTaskInput,
   TASK_STATUSES,
   TASK_TRANSITIONS,
   TERMINAL_TASK_STATUSES,
@@ -48,6 +49,7 @@ describe("createTask", () => {
       reviewerIds: [],
       approvals: [],
       stage: null,
+      gatedActions: [],
       dependsOn: [],
       artifacts: [],
       tokenBudget: null,
@@ -56,6 +58,27 @@ describe("createTask", () => {
       createdAt: t0,
       updatedAt: t0,
     });
+  });
+
+  it("records which consequential actions the work involves", () => {
+    expect(make().gatedActions).toEqual([]);
+    expect(make({ gatedActions: ["deploy", "spend"] }).gatedActions).toEqual(["deploy", "spend"]);
+  });
+
+  it("rejects unknown or repeated gated actions", () => {
+    const unknown = createTask(
+      { ...base, gatedActions: ["launch_rocket"] } as unknown as CreateTaskInput,
+      deps,
+    );
+    expect(isErr(unknown)).toBe(true);
+    if (isErr(unknown)) expect(unknown.error[0]?.path).toBe("gatedActions");
+
+    const repeated = createTask(
+      { ...base, gatedActions: ["deploy", "deploy"] } as unknown as CreateTaskInput,
+      deps,
+    );
+    expect(isErr(repeated)).toBe(true);
+    if (isErr(repeated)) expect(repeated.error[0]?.path).toBe("gatedActions");
   });
 
   it("starts outside any review pipeline stage", () => {

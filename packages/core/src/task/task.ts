@@ -9,6 +9,7 @@
 import type { DepartmentId } from "../department/department.js";
 import type { EmployeeId } from "../employee/employee.js";
 import type { OfficeId } from "../office/office.js";
+import { GATED_ACTIONS, isGatedAction, type GatedAction } from "../shared/gated-action.js";
 import { err, ok, type Result, type ValidationError } from "../shared/result.js";
 
 declare const taskIdBrand: unique symbol;
@@ -81,6 +82,12 @@ export interface Task {
    * null under any other review policy. Shown on the canvas.
    */
   readonly stage: string | null;
+
+  /**
+   * Consequential categories this work involves, recorded as it happens. A
+   * human gate holds the task when these overlap what the department gates.
+   */
+  readonly gatedActions: readonly GatedAction[];
   readonly dependsOn: readonly TaskId[];
   /** References to produced artifacts (workspace paths, commit ids, document ids). */
   readonly artifacts: readonly string[];
@@ -99,6 +106,7 @@ export interface CreateTaskInput {
   readonly priority?: string;
   readonly assigneeId?: EmployeeId;
   readonly reviewerIds?: readonly EmployeeId[];
+  readonly gatedActions?: readonly GatedAction[];
   readonly dependsOn?: readonly string[];
   readonly tokenBudget?: number;
   readonly deadline?: Date;
@@ -166,6 +174,15 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     errors.push({ path: "reviewerIds", message: "an employee cannot review their own work" });
   }
 
+  const gatedActions = input.gatedActions ?? [];
+  if (gatedActions.some((action) => !isGatedAction(action))) {
+    errors.push({
+      path: "gatedActions",
+      message: `must each be one of ${GATED_ACTIONS.join(", ")}`,
+    });
+  }
+  errors.push(...uniqueIds(gatedActions, "gatedActions", "gated action"));
+
   const dependsOn = input.dependsOn ?? [];
   if (dependsOn.includes(id))
     errors.push({ path: "dependsOn", message: "a task cannot depend on itself" });
@@ -197,6 +214,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     reviewerIds: [...reviewerIds],
     approvals: [],
     stage: null,
+    gatedActions: [...gatedActions],
     dependsOn: [...dependsOn] as TaskId[],
     artifacts: [],
     tokenBudget,

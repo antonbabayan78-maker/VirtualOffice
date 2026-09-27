@@ -16,7 +16,7 @@
  */
 import type { ReviewStage, Result, Task } from "@vo/core";
 import {
-  rejectCheckReport,
+  rejectPolicyEvent,
   requestChangesOrEscalate,
   submitForReview,
   supervisorChoice,
@@ -174,7 +174,8 @@ export const PIPELINE_POLICY_HANDLER: PolicyHandler = {
           event.reason,
         );
       case "check_reported":
-        return rejectCheckReport("pipeline");
+      case "gate_decided":
+        return rejectPolicyEvent("pipeline", event);
     }
   },
 };

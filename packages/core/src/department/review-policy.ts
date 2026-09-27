@@ -4,6 +4,7 @@
  * Automated-reviewer and human-gate kinds are added with the engine.
  */
 import type { EmployeeId } from "../employee/employee.js";
+import { GATED_ACTIONS, isGatedAction, type GatedAction } from "../shared/gated-action.js";
 import { err, ok, type Result, type ValidationError } from "../shared/result.js";
 
 /**
@@ -25,6 +26,7 @@ export type ReviewPolicy =
   | { readonly kind: "manager"; readonly maxIterations: number }
   | { readonly kind: "peer"; readonly maxIterations: number }
   | { readonly kind: "quorum"; readonly required: number; readonly maxIterations: number }
+  | { readonly kind: "gate"; readonly gatedActions: readonly GatedAction[] }
   | { readonly kind: "automated"; readonly checkId: string; readonly maxIterations: number }
   | {
       readonly kind: "pipeline";
@@ -38,7 +40,7 @@ export const DEFAULT_REVIEW_POLICY: ReviewPolicy = {
   maxIterations: DEFAULT_MAX_ITERATIONS,
 };
 
-const KINDS = ["direct", "manager", "peer", "quorum", "pipeline", "automated"] as const;
+const KINDS = ["direct", "manager", "peer", "quorum", "pipeline", "automated", "gate"] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -147,6 +149,30 @@ export function parseReviewPolicy(input: unknown): Result<ReviewPolicy> {
     return err([{ path: "kind", message: `must be one of ${KINDS.join(", ")}` }]);
   }
   if (kind === "direct") return ok({ kind: "direct" });
+
+  // A gate has no iteration cap: the owner is already the top of the chain, so
+  // there is nobody to escalate a repeated rejection to.
+  if (kind === "gate") {
+    const raw = input["gatedActions"];
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return err([
+        { path: "gatedActions", message: "a gate must gate at least one category of action" },
+      ]);
+    }
+    const gatedActions: GatedAction[] = [];
+    for (const entry of raw as readonly unknown[]) {
+      if (!isGatedAction(entry)) {
+        return err([
+          { path: "gatedActions", message: `must each be one of ${GATED_ACTIONS.join(", ")}` },
+        ]);
+      }
+      if (gatedActions.includes(entry)) {
+        return err([{ path: "gatedActions", message: `duplicate category "${entry}"` }]);
+      }
+      gatedActions.push(entry);
+    }
+    return ok({ kind: "gate", gatedActions });
+  }
 
   const errors: ValidationError[] = [];
   const iterations = positiveInt(input["maxIterations"], "maxIterations", DEFAULT_MAX_ITERATIONS);

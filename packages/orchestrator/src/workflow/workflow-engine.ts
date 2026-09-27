@@ -11,6 +11,7 @@
  */
 import type { Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
+import { GATE_POLICY_HANDLER } from "./gate-policy.js";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
 import { PEER_POLICY_HANDLER } from "./peer-policy.js";
 import { PIPELINE_POLICY_HANDLER } from "./pipeline-policy.js";
@@ -96,7 +97,8 @@ export class WorkflowEngine {
       case "submit":
       case "approve":
       case "request_changes":
-      case "check_reported": {
+      case "check_reported":
+      case "gate_decided": {
         const handler = this.handlers.get(context.policy.kind);
         if (!handler) {
           return workflowError(
@@ -119,5 +121,6 @@ export function defaultWorkflowEngine(): WorkflowEngine {
     QUORUM_POLICY_HANDLER,
     PIPELINE_POLICY_HANDLER,
     AUTOMATED_POLICY_HANDLER,
+    GATE_POLICY_HANDLER,
   ]);
 }
