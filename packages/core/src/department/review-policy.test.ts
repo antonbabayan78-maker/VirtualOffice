@@ -110,6 +110,20 @@ describe("parseReviewPolicy", () => {
     if (isErr(twice)) expect(twice.error[0]?.path).toBe("stages[0].reviewerIds");
   });
 
+  it("accepts an automated reviewer naming the check that decides", () => {
+    expect(
+      unwrap(parseReviewPolicy({ kind: "automated", checkId: " unit-tests ", maxIterations: 2 })),
+    ).toEqual({ kind: "automated", checkId: "unit-tests", maxIterations: 2 });
+  });
+
+  it("rejects an automated reviewer with no check to run", () => {
+    for (const checkId of [undefined, "", "   ", 7]) {
+      const r = parseReviewPolicy({ kind: "automated", checkId });
+      expect(isErr(r), JSON.stringify(checkId)).toBe(true);
+      if (isErr(r)) expect(r.error.map((e) => e.path)).toContain("checkId");
+    }
+  });
+
   it("rejects unknown kinds and non-objects", () => {
     for (const input of [{ kind: "committee" }, "manager", null, 3]) {
       const r = parseReviewPolicy(input);

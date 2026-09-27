@@ -13,6 +13,7 @@ import type { Result, Task } from "@vo/core";
 import { rankPeers } from "./peer-policy.js";
 import {
   approveReview,
+  rejectCheckReport,
   requestChangesOrEscalate,
   submitForReview,
   tallyApproval,
@@ -99,7 +100,9 @@ export const QUORUM_POLICY_HANDLER: PolicyHandler = {
       case "approve":
         return gatherApproval(task, event, context);
       case "request_changes":
-        return requestChangesOrEscalate(task, event, context);
+        return requestChangesOrEscalate(task, event, context, event.reason);
+      case "check_reported":
+        return rejectCheckReport("quorum");
     }
   },
 };

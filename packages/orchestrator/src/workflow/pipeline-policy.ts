@@ -16,6 +16,7 @@
  */
 import type { ReviewStage, Result, Task } from "@vo/core";
 import {
+  rejectCheckReport,
   requestChangesOrEscalate,
   submitForReview,
   supervisorChoice,
@@ -170,7 +171,10 @@ export const PIPELINE_POLICY_HANDLER: PolicyHandler = {
           { ...task, assigneeId: stage.workerId ?? task.assigneeId },
           event,
           context,
+          event.reason,
         );
+      case "check_reported":
+        return rejectCheckReport("pipeline");
     }
   },
 };

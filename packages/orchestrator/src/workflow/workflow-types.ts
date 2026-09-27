@@ -12,6 +12,7 @@ import {
   type Task,
   type TaskStatus,
 } from "@vo/core";
+import type { CheckReport } from "./check-runner.js";
 
 /** A colleague the peer policy may pick as reviewer, resolved by the caller from storage. */
 export interface PeerCandidate {
@@ -44,12 +45,18 @@ export type WorkflowEvent =
   | { readonly type: "request_changes"; readonly actorId: EmployeeId; readonly reason: string }
   | { readonly type: "block"; readonly reason: string; readonly actorId?: EmployeeId }
   | { readonly type: "unblock"; readonly actorId?: EmployeeId }
-  | { readonly type: "cancel"; readonly reason: string; readonly actorId?: EmployeeId };
+  | { readonly type: "cancel"; readonly reason: string; readonly actorId?: EmployeeId }
+  | {
+      /** The result of an automated check, dispatched by whoever ran it. */
+      readonly type: "check_reported";
+      readonly report: CheckReport;
+      readonly actorId?: EmployeeId;
+    };
 
 /** The events a review policy decides; everything else is policy-independent. */
 export type PolicyEvent = Extract<
   WorkflowEvent,
-  { type: "submit" | "approve" | "request_changes" }
+  { type: "submit" | "approve" | "request_changes" | "check_reported" }
 >;
 
 export type WorkflowEffect =
@@ -58,7 +65,9 @@ export type WorkflowEffect =
       readonly audience: "supervisor" | "owner" | "assignee" | "reviewer";
       readonly message: string;
     }
-  | { readonly type: "escalate"; readonly reason: string };
+  | { readonly type: "escalate"; readonly reason: string }
+  /** Ask the caller to run a named check and dispatch a "check_reported" event. */
+  | { readonly type: "run_check"; readonly checkId: string };
 
 export interface WorkflowOutcome {
   readonly task: Task;

@@ -8,6 +8,7 @@
  */
 import {
   approveReview,
+  rejectCheckReport,
   requestChangesOrEscalate,
   submitForReview,
   supervisorChoice,
@@ -28,7 +29,9 @@ export const MANAGER_POLICY_HANDLER: PolicyHandler = {
       case "approve":
         return approveReview(task, event, context);
       case "request_changes":
-        return requestChangesOrEscalate(task, event, context);
+        return requestChangesOrEscalate(task, event, context, event.reason);
+      case "check_reported":
+        return rejectCheckReport("manager");
     }
   },
 };
