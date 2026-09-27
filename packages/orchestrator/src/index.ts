@@ -14,6 +14,8 @@ export * from "./run/approval-gate.js";
 export * from "./run/checkpoint.js";
 export * from "./queue/types.js";
 export * from "./queue/in-process-queue.js";
+export * from "./schedule/cron.js";
+export * from "./schedule/scheduler.js";
 export * from "./workflow/workflow-engine.js";
 export * from "./workflow/manager-policy.js";
 export * from "./workflow/peer-policy.js";

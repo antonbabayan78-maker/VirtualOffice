@@ -44,6 +44,7 @@ describe("createDepartment", () => {
       size: DEFAULT_DEPARTMENT_SIZE,
       config: {},
       reviewPolicy: DEFAULT_REVIEW_POLICY,
+      schedule: { kind: "always" },
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
   });
@@ -132,6 +133,33 @@ describe("createDepartment", () => {
     const r = createDepartment({ ...base, reviewPolicy: { kind: "quorum" } }, [], deps);
     expect(isErr(r)).toBe(true);
     if (isErr(r)) expect(r.error.map((e) => e.path)).toContain("reviewPolicy.required");
+  });
+
+  it("works round the clock unless given its own hours", () => {
+    expect(unwrap(createDepartment(base, [], deps)).schedule).toEqual({ kind: "always" });
+    const nights = createDepartment(
+      {
+        ...base,
+        schedule: {
+          kind: "windows",
+          timezone: "Asia/Nicosia",
+          windows: [{ days: ["mon"], start: "22:00", end: "06:00" }],
+        },
+      },
+      [],
+      deps,
+    );
+    expect(unwrap(nights).schedule).toMatchObject({ kind: "windows", timezone: "Asia/Nicosia" });
+  });
+
+  it("rejects hours it cannot read, saying which field", () => {
+    const r = createDepartment(
+      { ...base, schedule: { kind: "windows", timezone: "Mars/Olympus" } },
+      [],
+      deps,
+    );
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.error[0]?.path).toMatch(/^schedule/);
   });
 
   it("collects errors from several fields at once", () => {

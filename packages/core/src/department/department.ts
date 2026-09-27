@@ -4,6 +4,7 @@
  */
 import type { OfficeId } from "../office/office.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
+import { parseSchedule, type Schedule } from "../office/schedule.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
 declare const departmentIdBrand: unique symbol;
@@ -32,6 +33,8 @@ export interface Department {
   /** Free-form department configuration, interpreted by plugins and the UI. */
   readonly config: Readonly<Record<string, unknown>>;
   readonly reviewPolicy: ReviewPolicy;
+  /** When this department works; the office's hours gate it too. */
+  readonly schedule: Schedule;
   readonly createdAt: Date;
 }
 
@@ -45,6 +48,7 @@ export interface CreateDepartmentInput {
   readonly config?: Record<string, unknown>;
   /** Unvalidated; defaults to manager review. */
   readonly reviewPolicy?: unknown;
+  readonly schedule?: unknown;
 }
 
 export interface DepartmentDeps {
@@ -158,7 +162,12 @@ export function createDepartment(
   const reviewPolicy = parseReviewPolicy(input.reviewPolicy);
   if (!reviewPolicy.ok) errors.push(...prefixErrors("reviewPolicy", reviewPolicy.error));
 
-  if (errors.length > 0 || !name.ok || !color.ok || !reviewPolicy.ok) return err(errors);
+  const schedule = parseSchedule(input.schedule ?? { kind: "always" });
+  if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
+
+  if (errors.length > 0 || !name.ok || !color.ok || !reviewPolicy.ok || !schedule.ok) {
+    return err(errors);
+  }
 
   return ok({
     id: deps.id(),
@@ -170,6 +179,7 @@ export function createDepartment(
     size: { width: size.width, height: size.height },
     config: { ...config },
     reviewPolicy: reviewPolicy.value,
+    schedule: schedule.value,
     createdAt: deps.now(),
   });
 }
