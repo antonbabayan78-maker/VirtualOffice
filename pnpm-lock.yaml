@@ -256,6 +256,10 @@ importers:
       '@vo/llm':
         specifier: workspace:*
         version: link:../llm
+    devDependencies:
+      '@vo/storage':
+        specifier: workspace:*
+        version: link:../storage
 
   packages/skills: {}
 

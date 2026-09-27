@@ -11,6 +11,7 @@ export * from "./run/token-budget.js";
 export * from "./run/compaction.js";
 export * from "./run/agent-run-loop.js";
 export * from "./run/approval-gate.js";
+export * from "./run/checkpoint.js";
 export * from "./queue/types.js";
 export * from "./queue/in-process-queue.js";
 export * from "./workflow/workflow-engine.js";

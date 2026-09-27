@@ -25,5 +25,8 @@
   "dependencies": {
     "@vo/core": "workspace:*",
     "@vo/llm": "workspace:*"
+  },
+  "devDependencies": {
+    "@vo/storage": "workspace:*"
   }
 }

@@ -214,6 +214,19 @@ export class RunBudget {
     if (exhausted) throw new BudgetExhaustedError(exhausted.reason, exhausted.message);
   }
 
+  /**
+   * Takes on a snapshot's spend, keeping this budget's own limits and pricing.
+   * How a resumed run carries what it has already cost.
+   */
+  adopt(snapshot: BudgetSnapshot): void {
+    this.input = snapshot.spend.inputTokens;
+    this.output = snapshot.spend.outputTokens;
+    this.cacheRead = snapshot.spend.cacheReadInputTokens;
+    this.cacheWrite = snapshot.spend.cacheCreationInputTokens;
+    this.usd = snapshot.spend.usd;
+    this.turnCount = snapshot.turns;
+  }
+
   snapshot(): BudgetSnapshot {
     return { limits: this.limits, spend: this.spent, turns: this.turnCount };
   }
