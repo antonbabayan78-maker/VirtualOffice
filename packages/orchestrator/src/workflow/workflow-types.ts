@@ -6,17 +6,31 @@ import {
   err,
   transitionTask,
   type EmployeeId,
+  type EmployeeStatus,
   type ReviewPolicy,
   type Result,
   type Task,
   type TaskStatus,
 } from "@vo/core";
 
+/** A colleague the peer policy may pick as reviewer, resolved by the caller from storage. */
+export interface PeerCandidate {
+  readonly id: EmployeeId;
+  readonly status: EmployeeStatus;
+  readonly skillIds: readonly string[];
+  /** Open tasks currently assigned, used to spread review load. */
+  readonly openTasks: number;
+}
+
 export interface WorkflowContext {
   readonly policy: ReviewPolicy;
   readonly now: Date;
   /** Who reviews this department's work; null or absent when the office owner does. */
   readonly supervisorId?: EmployeeId | null;
+  /** Colleagues eligible for peer review. */
+  readonly peers?: readonly PeerCandidate[];
+  /** Skills the work needs, used to rank peer reviewers. */
+  readonly reviewSkills?: readonly string[];
 }
 
 export type WorkflowEvent =
@@ -41,7 +55,7 @@ export type PolicyEvent = Extract<
 export type WorkflowEffect =
   | {
       readonly type: "notify";
-      readonly audience: "supervisor" | "owner" | "assignee";
+      readonly audience: "supervisor" | "owner" | "assignee" | "reviewer";
       readonly message: string;
     }
   | { readonly type: "escalate"; readonly reason: string };
@@ -56,7 +70,7 @@ export interface PolicyHandler {
   handle(task: Task, event: PolicyEvent, context: WorkflowContext): Result<WorkflowOutcome>;
 }
 
-export function workflowError(path: string, message: string): Result<WorkflowOutcome> {
+export function workflowError<T = WorkflowOutcome>(path: string, message: string): Result<T> {
   return err([{ path, message }]);
 }
 

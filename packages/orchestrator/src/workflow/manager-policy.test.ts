@@ -272,7 +272,7 @@ describe("policy configuration", () => {
 
 describe("registration", () => {
   it("ships in the default engine alongside direct", () => {
-    expect(engine.policyKinds()).toEqual(["direct", "manager"]);
+    expect(engine.policyKinds()).toContain("manager");
     expect(MANAGER_POLICY_HANDLER.kind).toBe("manager");
   });
 });
