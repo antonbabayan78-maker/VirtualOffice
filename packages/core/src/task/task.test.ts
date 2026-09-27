@@ -47,6 +47,7 @@ describe("createTask", () => {
       assigneeId: null,
       reviewerIds: [],
       approvals: [],
+      stage: null,
       dependsOn: [],
       artifacts: [],
       tokenBudget: null,
@@ -55,6 +56,21 @@ describe("createTask", () => {
       createdAt: t0,
       updatedAt: t0,
     });
+  });
+
+  it("starts outside any review pipeline stage", () => {
+    expect(make().stage).toBeNull();
+  });
+
+  it("hands an approved task on to the next pipeline stage", () => {
+    const approved = walk(make({ assigneeId: ada }), ["in_progress", "in_review", "approved"]);
+    const handed = transitionTask(approved, "assigned", {
+      at: t1,
+      actorId: ada,
+      reason: "cleared Draft",
+    });
+    expect(isOk(handed)).toBe(true);
+    expect(unwrap(handed).status).toBe("assigned");
   });
 
   it("starts with no approvals gathered", () => {
@@ -169,7 +185,9 @@ describe("transition table", () => {
       "transferred",
       "cancelled",
     ]);
-    expect(TASK_TRANSITIONS.approved).toEqual(["done"]);
+    // "assigned" is the multi-stage pipeline hand-off: a stage signs off and the
+    // work moves on to the next stage's worker instead of completing.
+    expect(TASK_TRANSITIONS.approved).toEqual(["done", "assigned"]);
     expect(TASK_TRANSITIONS.blocked).toEqual([
       "assigned",
       "in_progress",

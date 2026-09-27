@@ -35,7 +35,8 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   in_progress: ["in_review", "done", "blocked", "escalated", "transferred", "cancelled"],
   in_review: ["approved", "changes_requested", "escalated", "cancelled"],
   changes_requested: ["in_progress", "escalated", "transferred", "cancelled"],
-  approved: ["done"],
+  // "assigned" hands a pipeline task to the next stage instead of completing it.
+  approved: ["done", "assigned"],
   blocked: ["assigned", "in_progress", "escalated", "transferred", "cancelled"],
   escalated: ["assigned", "in_progress", "transferred", "cancelled"],
   transferred: ["assigned", "cancelled"],
@@ -74,6 +75,12 @@ export interface Task {
    * inherits approvals given to an earlier version of the work.
    */
   readonly approvals: readonly EmployeeId[];
+
+  /**
+   * Which stage of a multi-stage review pipeline the work is at, by stage name;
+   * null under any other review policy. Shown on the canvas.
+   */
+  readonly stage: string | null;
   readonly dependsOn: readonly TaskId[];
   /** References to produced artifacts (workspace paths, commit ids, document ids). */
   readonly artifacts: readonly string[];
@@ -189,6 +196,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     assigneeId,
     reviewerIds: [...reviewerIds],
     approvals: [],
+    stage: null,
     dependsOn: [...dependsOn] as TaskId[],
     artifacts: [],
     tokenBudget,

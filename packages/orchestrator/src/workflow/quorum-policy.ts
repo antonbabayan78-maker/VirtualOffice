@@ -13,9 +13,9 @@ import type { Result, Task } from "@vo/core";
 import { rankPeers } from "./peer-policy.js";
 import {
   approveReview,
-  assertReviewer,
   requestChangesOrEscalate,
   submitForReview,
+  tallyApproval,
 } from "./review-common.js";
 import {
   workflowError,
@@ -68,32 +68,21 @@ function gatherApproval(
 ): Result<WorkflowOutcome> {
   const required = requiredApprovals(context);
   if (!required.ok) return required;
-  if (task.status !== "in_review") {
-    return workflowError(
-      "status",
-      `approvals are only gathered while a task is in review; this one is "${task.status}"`,
-    );
-  }
-  const denied = assertReviewer(task, event, "approve");
-  if (denied) return denied;
 
-  // A reviewer who approves twice has still only approved once.
-  const approvals = task.approvals.includes(event.actorId)
-    ? task.approvals
-    : [...task.approvals, event.actorId];
-  const staged: Task = { ...task, approvals };
+  const tally = tallyApproval(task, event, required.value);
+  if (!tally.ok) return tally;
+  if (tally.value.reached) return approveReview(tally.value.task, event, context);
 
-  if (approvals.length >= required.value) return approveReview(staged, event, context);
   return {
     ok: true,
     value: {
-      task: staged,
+      task: tally.value.task,
       effects: [
         {
           type: "notify",
           audience: "reviewer",
           message:
-            `task "${task.title}" has ${String(approvals.length)} of ` +
+            `task "${task.title}" has ${String(tally.value.gathered)} of ` +
             `${String(required.value)} approvals`,
         },
       ],

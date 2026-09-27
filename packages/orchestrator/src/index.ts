@@ -14,4 +14,5 @@ export * from "./workflow/workflow-engine.js";
 export * from "./workflow/manager-policy.js";
 export * from "./workflow/peer-policy.js";
 export * from "./workflow/quorum-policy.js";
+export * from "./workflow/pipeline-policy.js";
 export * from "./workflow/review-common.js";

@@ -57,20 +57,51 @@ export function submitForReview(
   ]);
 }
 
-export function assertReviewer(
+export function assertReviewer<T = WorkflowOutcome>(
   task: Task,
   event: PolicyEvent,
   action: string,
-): Result<WorkflowOutcome> | null {
+): Result<T> | null {
   // No named reviewers means the office owner reviews, and any actor may act for them.
   if (task.reviewerIds.length === 0) return null;
   if (!task.reviewerIds.includes(event.actorId)) {
-    return workflowError(
+    return workflowError<T>(
       "actorId",
       `"${event.actorId}" is not a reviewer of this task and may not ${action} it`,
     );
   }
   return null;
+}
+
+/**
+ * Approvals gathered so far against the number a review needs. Policies that
+ * need more than one sign-off (quorum, and each stage of a pipeline) share this
+ * counting so a reviewer who approves twice is still counted once.
+ */
+export type ApprovalTally =
+  | { readonly reached: false; readonly task: Task; readonly gathered: number }
+  | { readonly reached: true; readonly task: Task };
+
+export function tallyApproval(
+  task: Task,
+  event: Extract<PolicyEvent, { type: "approve" }>,
+  required: number,
+): Result<ApprovalTally> {
+  if (task.status !== "in_review") {
+    return workflowError<ApprovalTally>(
+      "status",
+      `approvals are only gathered while a task is in review; this one is "${task.status}"`,
+    );
+  }
+  const denied = assertReviewer<ApprovalTally>(task, event, "approve");
+  if (denied) return denied;
+
+  const approvals = task.approvals.includes(event.actorId)
+    ? task.approvals
+    : [...task.approvals, event.actorId];
+  const staged: Task = { ...task, approvals };
+  if (approvals.length >= required) return { ok: true, value: { reached: true, task: staged } };
+  return { ok: true, value: { reached: false, task: staged, gathered: approvals.length } };
 }
 
 export function approveReview(
