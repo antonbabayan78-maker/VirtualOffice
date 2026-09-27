@@ -191,12 +191,12 @@ describe("policy registry", () => {
     const result = engine.handle(
       task("in_progress"),
       { type: "submit", actorId: ada },
-      context({ kind: "manager", maxIterations: 3 }),
+      context({ kind: "peer", maxIterations: 3 }),
     );
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error[0]?.path).toBe("policy.kind");
-      expect(result.error[0]?.message).toMatch(/manager/);
+      expect(result.error[0]?.message).toMatch(/peer/);
       expect(result.error[0]?.message).toMatch(/direct/);
     }
   });
