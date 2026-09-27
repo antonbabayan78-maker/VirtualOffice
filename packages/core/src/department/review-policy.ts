@@ -25,6 +25,7 @@ export type ReviewPolicy =
   | { readonly kind: "manager"; readonly maxIterations: number }
   | { readonly kind: "peer"; readonly maxIterations: number }
   | { readonly kind: "quorum"; readonly required: number; readonly maxIterations: number }
+  | { readonly kind: "automated"; readonly checkId: string; readonly maxIterations: number }
   | {
       readonly kind: "pipeline";
       readonly stages: readonly ReviewStage[];
@@ -37,7 +38,7 @@ export const DEFAULT_REVIEW_POLICY: ReviewPolicy = {
   maxIterations: DEFAULT_MAX_ITERATIONS,
 };
 
-const KINDS = ["direct", "manager", "peer", "quorum", "pipeline"] as const;
+const KINDS = ["direct", "manager", "peer", "quorum", "pipeline", "automated"] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -156,6 +157,15 @@ export function parseReviewPolicy(input: unknown): Result<ReviewPolicy> {
     errors.push(...required.errors);
     if (errors.length > 0) return err(errors);
     return ok({ kind: "quorum", required: required.value, maxIterations: iterations.value });
+  }
+
+  if (kind === "automated") {
+    const checkId = nonEmptyId(input["checkId"]);
+    if (checkId === null) {
+      errors.push({ path: "checkId", message: "must name the check that decides" });
+    }
+    if (checkId === null || errors.length > 0) return err(errors);
+    return ok({ kind: "automated", checkId, maxIterations: iterations.value });
   }
 
   if (kind === "pipeline") {

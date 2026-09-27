@@ -9,6 +9,7 @@ import {
   workflowError,
   type PolicyEvent,
   type WorkflowContext,
+  type WorkflowEvent,
   type WorkflowOutcome,
 } from "./workflow-types.js";
 
@@ -59,18 +60,24 @@ export function submitForReview(
 
 export function assertReviewer<T = WorkflowOutcome>(
   task: Task,
-  event: PolicyEvent,
+  event: WorkflowEvent,
   action: string,
 ): Result<T> | null {
   // No named reviewers means the office owner reviews, and any actor may act for them.
   if (task.reviewerIds.length === 0) return null;
-  if (!task.reviewerIds.includes(event.actorId)) {
+  const actorId = event.actorId;
+  if (actorId === undefined || !task.reviewerIds.includes(actorId)) {
     return workflowError<T>(
       "actorId",
-      `"${event.actorId}" is not a reviewer of this task and may not ${action} it`,
+      `"${actorId ?? "nobody"}" is not a reviewer of this task and may not ${action} it`,
     );
   }
   return null;
+}
+
+/** A policy with no automated check refuses a check report rather than ignoring it. */
+export function rejectCheckReport<T = WorkflowOutcome>(kind: string): Result<T> {
+  return workflowError<T>("event", `the "${kind}" review policy does not run automated checks`);
 }
 
 /**
@@ -106,7 +113,7 @@ export function tallyApproval(
 
 export function approveReview(
   task: Task,
-  event: Extract<PolicyEvent, { type: "approve" }>,
+  event: WorkflowEvent,
   context: WorkflowContext,
 ): Result<WorkflowOutcome> {
   const denied = assertReviewer(task, event, "approve");
@@ -120,10 +127,11 @@ export function approveReview(
 
 export function requestChangesOrEscalate(
   task: Task,
-  event: Extract<PolicyEvent, { type: "request_changes" }>,
+  event: WorkflowEvent,
   context: WorkflowContext,
+  rawReason: string,
 ): Result<WorkflowOutcome> {
-  const reason = event.reason.trim();
+  const reason = rawReason.trim();
   if (reason.length === 0) {
     return workflowError("reason", "a change request needs a reason the assignee can act on");
   }
