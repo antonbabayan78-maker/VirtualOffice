@@ -44,6 +44,8 @@ export function submitForReview(
   const staged: Task = {
     ...task,
     reviewerIds: [...choice.reviewerIds],
+    // A new round is judged on its own merits, never on earlier approvals.
+    approvals: [],
     artifacts: [...task.artifacts, ...(event.artifacts ?? [])],
   };
   return applyTransition(staged, "in_review", event, context, [
@@ -55,7 +57,7 @@ export function submitForReview(
   ]);
 }
 
-function assertReviewer(
+export function assertReviewer(
   task: Task,
   event: PolicyEvent,
   action: string,
@@ -124,7 +126,8 @@ export function requestChangesOrEscalate(
     );
   }
 
-  const changed = applyTransition(task, "changes_requested", event, context, [], reason);
+  const staged: Task = { ...task, approvals: [] };
+  const changed = applyTransition(staged, "changes_requested", event, context, [], reason);
   if (!changed.ok) return changed;
   return applyTransition(changed.value.task, "in_progress", event, context, [
     {

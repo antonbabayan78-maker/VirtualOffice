@@ -23,12 +23,16 @@ export interface PeerSelection {
   readonly reviewSkills: readonly string[];
 }
 
-export function selectPeerReviewer(
+/**
+ * Every eligible reviewer, best first: most overlapping skills, then lightest
+ * open-task load, then lowest id. The assignee and anyone not active are out.
+ */
+export function rankPeers(
   peers: readonly PeerCandidate[],
   selection: PeerSelection,
-): EmployeeId | null {
+): readonly PeerCandidate[] {
   const required = new Set(selection.reviewSkills);
-  const ranked = peers
+  return peers
     .filter((p) => p.status === "active" && p.id !== selection.assigneeId)
     .map((peer) => ({ peer, overlap: peer.skillIds.filter((skill) => required.has(skill)).length }))
     .sort(
@@ -36,8 +40,15 @@ export function selectPeerReviewer(
         b.overlap - a.overlap ||
         a.peer.openTasks - b.peer.openTasks ||
         (a.peer.id < b.peer.id ? -1 : a.peer.id > b.peer.id ? 1 : 0),
-    );
-  return ranked[0]?.peer.id ?? null;
+    )
+    .map((ranked) => ranked.peer);
+}
+
+export function selectPeerReviewer(
+  peers: readonly PeerCandidate[],
+  selection: PeerSelection,
+): EmployeeId | null {
+  return rankPeers(peers, selection)[0]?.id ?? null;
 }
 
 export const PEER_POLICY_HANDLER: PolicyHandler = {

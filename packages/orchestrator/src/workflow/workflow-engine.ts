@@ -12,6 +12,7 @@
 import type { Result, Task } from "@vo/core";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
 import { PEER_POLICY_HANDLER } from "./peer-policy.js";
+import { QUORUM_POLICY_HANDLER } from "./quorum-policy.js";
 import {
   applyTransition,
   workflowError,
@@ -108,5 +109,10 @@ export class WorkflowEngine {
 
 /** An engine with every policy handler that ships today. */
 export function defaultWorkflowEngine(): WorkflowEngine {
-  return new WorkflowEngine([DIRECT_POLICY_HANDLER, MANAGER_POLICY_HANDLER, PEER_POLICY_HANDLER]);
+  return new WorkflowEngine([
+    DIRECT_POLICY_HANDLER,
+    MANAGER_POLICY_HANDLER,
+    PEER_POLICY_HANDLER,
+    QUORUM_POLICY_HANDLER,
+  ]);
 }
