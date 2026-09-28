@@ -740,3 +740,78 @@ describe("standing priority over the wire", () => {
     ).toBe("high");
   });
 });
+
+describe("choosing the least busy reviewer", () => {
+  /** A department that reviews by peer, with three people in it. */
+  async function aTeam() {
+    const officeId = await anOffice();
+    const created = await post(`/offices/${officeId}/departments`, {
+      name: "Engineering",
+      color: "#3366ff",
+      position: { x: 0, y: 0 },
+      reviewPolicy: { kind: "peer", maxIterations: 3 },
+    });
+    const departmentId = created.json<{ id: string }>().id;
+
+    const hire = async (name: string): Promise<string> => {
+      const person = await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      });
+      return person.json<{ id: string }>().id;
+    };
+
+    const ada = await hire("Ada");
+    const grace = await hire("Grace");
+    const linus = await hire("Linus");
+
+    const task = async (assigneeId: string, title: string): Promise<string> => {
+      const made = await post(`/offices/${officeId}/tasks`, { departmentId, title, assigneeId });
+      return made.json<{ id: string }>().id;
+    };
+
+    return { officeId, departmentId, ada, grace, linus, task };
+  }
+
+  it("gives the review to whoever has the least on, not to whoever sorts first", async () => {
+    const team = await aTeam();
+    // Grace is buried; Linus is free. Both are equally qualified.
+    await team.task(team.grace, "Grace is busy with this");
+    await team.task(team.grace, "and with this");
+    const mine = await team.task(team.ada, "Write the parser");
+
+    await post(`/tasks/${mine}/events`, { type: "start", actorId: team.ada });
+    const submitted = await post(`/tasks/${mine}/events`, { type: "submit", actorId: team.ada });
+
+    expect(submitted.json<{ reviewerIds: string[] }>().reviewerIds).toEqual([team.linus]);
+  });
+
+  it("does not count finished work against somebody", async () => {
+    const team = await aTeam();
+    const old = await team.task(team.linus, "Linus finished this ages ago");
+    await post(`/tasks/${old}/events`, { type: "cancel", reason: "not needed" });
+    await team.task(team.grace, "Grace is busy with this");
+
+    const mine = await team.task(team.ada, "Write the parser");
+    await post(`/tasks/${mine}/events`, { type: "start", actorId: team.ada });
+    const submitted = await post(`/tasks/${mine}/events`, { type: "submit", actorId: team.ada });
+
+    // A cancelled task is over; Linus is still the freest person here.
+    expect(submitted.json<{ reviewerIds: string[] }>().reviewerIds).toEqual([team.linus]);
+  });
+
+  it("never asks somebody to review their own work, however free they are", async () => {
+    const team = await aTeam();
+    await team.task(team.grace, "Grace is busy");
+    await team.task(team.linus, "Linus is busy");
+
+    const mine = await team.task(team.ada, "Write the parser");
+    await post(`/tasks/${mine}/events`, { type: "start", actorId: team.ada });
+    const submitted = await post(`/tasks/${mine}/events`, { type: "submit", actorId: team.ada });
+
+    expect(submitted.json<{ reviewerIds: string[] }>().reviewerIds).not.toContain(team.ada);
+  });
+});

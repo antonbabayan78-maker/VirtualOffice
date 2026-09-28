@@ -47,6 +47,27 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
 
 export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = ["done", "cancelled"];
 
+/**
+ * How much work each person is still holding.
+ *
+ * Open means not finished, which includes blocked and awaiting review: a task
+ * somebody is stuck on is still theirs, and anyone choosing the least loaded
+ * person would choose wrongly if it were not counted. Anything terminal is
+ * over and counts for nothing.
+ *
+ * Returned as a plain count per employee rather than a list, because the only
+ * question anyone asks of it is who has the least on.
+ */
+export function openTaskCounts(tasks: readonly Task[]): Readonly<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const task of tasks) {
+    if (task.assigneeId === null) continue;
+    if (TERMINAL_TASK_STATUSES.includes(task.status)) continue;
+    counts[task.assigneeId] = (counts[task.assigneeId] ?? 0) + 1;
+  }
+  return counts;
+}
+
 export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 

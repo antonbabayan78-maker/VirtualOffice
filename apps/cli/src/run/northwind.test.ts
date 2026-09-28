@@ -304,3 +304,27 @@ describe("what the studio picks up first", () => {
     }
   });
 });
+
+describe("who reviews an engineer's work", () => {
+  it("is another engineer, chosen because they have the least on", async () => {
+    // Engineering reviews by peer. Grace and Kai are buried; Linus is free.
+    const busy = [
+      { ...brief("task-g1", "Grace is buried", "Grace"), status: "in_progress" as const },
+      { ...brief("task-g2", "and buried again", "Grace"), status: "in_progress" as const },
+      { ...brief("task-k1", "Kai is buried", "Kai"), status: "in_progress" as const },
+    ];
+    const mine = brief("task-mine", "Rewrite the query planner", "Ada");
+
+    const result = await runOffice({
+      config,
+      tasks: [...busy, mine],
+      provider: studio(),
+      decide: approveEverything,
+      maxTicks: 60,
+    });
+
+    const done = result.tasks.find((task) => task.id === "task-mine");
+    const approval = (done?.history ?? []).find((event) => event.to === "approved");
+    expect(approval?.actorId).toBe(person("Linus"));
+  });
+});

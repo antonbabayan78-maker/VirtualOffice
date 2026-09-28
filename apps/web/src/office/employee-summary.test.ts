@@ -134,3 +134,21 @@ describe("what to say about somebody when you point at them", () => {
     expect(skilled.skills).toEqual(["sql", "code-review"]);
   });
 });
+
+describe("counting the same way the office does", () => {
+  it("counts work that is escalated or awaiting approval, which are not finished", () => {
+    const stuck = [
+      { ...task("Escalated one", "escalated"), id: "task-e" as TaskId },
+      { ...task("Approved but not closed", "approved"), id: "task-a" as TaskId },
+    ];
+    expect(summary(stuck).openTasks).toBe(2);
+  });
+
+  it("counts nothing that is over", () => {
+    const over = [
+      { ...task("Done", "done"), id: "task-d" as TaskId },
+      { ...task("Cancelled", "cancelled"), id: "task-c" as TaskId },
+    ];
+    expect(summary(over).openTasks).toBe(0);
+  });
+});

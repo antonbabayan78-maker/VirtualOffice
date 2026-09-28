@@ -9,6 +9,7 @@
  * busy canvas: who is this, what are they for, what are they doing right now,
  * what is it costing, and who do they answer to.
  */
+import { openTaskCounts, TERMINAL_TASK_STATUSES } from "@vo/core";
 import type { Department, Employee, Task } from "@vo/core";
 import { describeActivity } from "./activity.js";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
@@ -33,12 +34,13 @@ export interface SummaryContext {
   readonly activity: ActivityState;
 }
 
-/** Work still on somebody's desk: anything that has not finished or been dropped. */
-const OPEN = ["backlog", "assigned", "in_progress", "in_review", "changes_requested", "blocked"];
-
 export function summariseEmployee(employee: Employee, context: SummaryContext): EmployeeSummary {
+  // Counted the way the office itself counts, so what a tooltip says is on
+  // somebody's desk is what a review policy sees when it looks for whoever has
+  // the least on. Two definitions of "open" would disagree in front of you.
+  const open = openTaskCounts(context.tasks)[employee.id] ?? 0;
   const mine = context.tasks.filter(
-    (task) => task.assigneeId === employee.id && OPEN.includes(task.status),
+    (task) => task.assigneeId === employee.id && !TERMINAL_TASK_STATUSES.includes(task.status),
   );
   const supervisor =
     employee.supervisorId === null
@@ -56,7 +58,7 @@ export function summariseEmployee(employee: Employee, context: SummaryContext): 
     activity:
       context.activity === "idle" ? "nothing right now" : describeActivity(context.activity),
     task: mine[0]?.title ?? null,
-    openTasks: mine.length,
+    openTasks: open,
     skills: employee.skillIds,
   };
 }
