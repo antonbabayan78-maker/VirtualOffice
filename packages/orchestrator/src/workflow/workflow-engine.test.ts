@@ -256,6 +256,7 @@ describe("finishing here starts work next door", () => {
     officeId,
     fromId,
     toId,
+    enabled: true,
     kind,
     rules,
     createdAt: at,
@@ -280,7 +281,7 @@ describe("finishing here starts work next door", () => {
     );
 
   const handoffs = (outcome: { effects: readonly WorkflowEffect[] }): readonly WorkflowEffect[] =>
-    outcome.effects.filter((effect) => effect.type === "hand_off");
+    outcome.effects.filter((effect) => effect.type === "create_work");
 
   it("hands the work on when the departments are wired for it", () => {
     const outcome = finish(wired([connection(departmentId, design)]));
@@ -329,8 +330,8 @@ describe("finishing here starts work next door", () => {
 
   it("carries a brief naming where the work came from", () => {
     const [effect] = handoffs(finish(wired([connection(departmentId, design)])));
-    expect(effect?.type).toBe("hand_off");
-    if (effect?.type === "hand_off") expect(effect.brief).toContain("Write the parser");
+    expect(effect?.type).toBe("create_work");
+    if (effect?.type === "create_work") expect(effect.brief).toContain("Write the parser");
   });
 
   it("carries the route it has taken, with this department added", () => {
@@ -339,8 +340,8 @@ describe("finishing here starts work next door", () => {
         route: ["dept-product" as DepartmentId],
       }),
     );
-    expect(effect?.type).toBe("hand_off");
-    if (effect?.type === "hand_off") {
+    expect(effect?.type).toBe("create_work");
+    if (effect?.type === "create_work") {
       expect(effect.route).toEqual(["dept-product", departmentId]);
     }
   });
@@ -368,6 +369,7 @@ describe("work going round in circles", () => {
     officeId,
     fromId,
     toId,
+    enabled: true,
     kind: "handoff",
     rules: {},
     createdAt: at,
@@ -394,11 +396,13 @@ describe("work going round in circles", () => {
     outcome.effects.map((effect) => effect.type);
 
   it("allows work to come back once, which is ordinary rework", () => {
-    expect(kinds(finish([design, departmentId]))).toContain("hand_off");
+    expect(kinds(finish([design, departmentId]))).toContain("create_work");
   });
 
   it("stops handing on when the work would arrive somewhere for the third time", () => {
-    expect(kinds(finish([design, departmentId, design, departmentId]))).not.toContain("hand_off");
+    expect(kinds(finish([design, departmentId, design, departmentId]))).not.toContain(
+      "create_work",
+    );
   });
 
   it("escalates instead, so a person decides rather than the office spinning", () => {
@@ -448,5 +452,95 @@ describe("a department with no reviewer still answers the list", () => {
 
   it("finishes as it always did when the office asked for nothing", () => {
     expect(unwrap(submit(undefined, context(direct))).task.status).toBe("done");
+  });
+});
+
+describe("the office noticing what its departments do", () => {
+  const operations = "dept-operations" as DepartmentId;
+  const at = new Date("2026-09-29T09:00:00Z");
+
+  const watching = (moments: string[]): Connection => ({
+    id: "conn-watch" as ConnectionId,
+    officeId,
+    fromId: operations,
+    toId: departmentId,
+    kind: "watches",
+    enabled: true,
+    rules: { for: moments },
+    createdAt: at,
+  });
+
+  const wired = (connections: readonly Connection[]): WorkflowContext =>
+    context(direct, {
+      escalationGraph: {
+        employees: [{ id: ada, departmentId, supervisorId: boss, status: "active" }],
+        connections,
+      },
+    });
+
+  const raised = (effects: readonly WorkflowEffect[]) =>
+    effects.filter((effect) => effect.type === "create_work");
+
+  it("raises work in the watching department when something goes wrong", () => {
+    // A block is not a transition any policy owns, so this also proves the hook
+    // sees moments that never reach a review policy at all.
+    const outcome = unwrap(
+      engine.handle(
+        task("in_progress"),
+        { type: "block", reason: "the staging database is down" },
+        wired([watching(["work_went_wrong"])]),
+      ),
+    );
+    expect(raised(outcome.effects)).toHaveLength(1);
+  });
+
+  it("raises work when a task merely starts, which no handoff would ever see", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("assigned"),
+        { type: "start", actorId: ada },
+        wired([watching(["work_started"])]),
+      ),
+    );
+    expect(raised(outcome.effects)).toHaveLength(1);
+  });
+
+  it("still hands work on as well as being watched, when both arrows exist", () => {
+    const handoff: Connection = {
+      ...watching(["work_finished"]),
+      id: "conn-handoff" as ConnectionId,
+      kind: "handoff",
+      fromId: departmentId,
+      toId: operations,
+      rules: {},
+    };
+    const outcome = unwrap(
+      engine.handle(
+        task("in_progress"),
+        { type: "submit", actorId: ada },
+        wired([watching(["work_finished"]), handoff]),
+      ),
+    );
+    const reasons = raised(outcome.effects).map((effect) => effect.because);
+    expect(reasons).toContain("watching");
+    expect(reasons).toContain("handoff");
+  });
+
+  it("raises nothing at a moment nobody is watching for", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("assigned"),
+        { type: "start", actorId: ada },
+        wired([watching(["work_finished"])]),
+      ),
+    );
+    expect(raised(outcome.effects)).toEqual([]);
+  });
+
+  it("leaves an office with no watching arrows completely alone", () => {
+    const outcome = unwrap(
+      engine.handle(task("assigned"), { type: "start", actorId: ada }, context(direct)),
+    );
+    expect(outcome.effects).toEqual([]);
   });
 });

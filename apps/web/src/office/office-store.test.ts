@@ -36,6 +36,7 @@ const connection = (from: Department, to: Department, kind = "handoff"): Connect
   fromId: from.id,
   toId: to.id,
   kind: kind as Connection["kind"],
+  enabled: true,
   rules: {},
   createdAt: new Date("2026-09-28T09:00:00Z"),
 });

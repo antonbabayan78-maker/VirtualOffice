@@ -20,6 +20,7 @@ export const CONNECTION_KINDS = [
   "handoff",
   "reviews",
   "escalates_to",
+  "watches",
 ] as const;
 export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
 
@@ -34,12 +35,20 @@ export interface Connection {
   readonly fromId: DepartmentId;
   readonly toId: DepartmentId;
   readonly kind: ConnectionKind;
+  /**
+   * Whether this arrow is in force. An office is wired once and turned on and
+   * off as it changes; deleting an arrow to pause it would lose the id that
+   * everything referring to it depends on.
+   */
+  readonly enabled: boolean;
   /** Kind-specific rules (e.g. handoff brief format), interpreted by the workflow engine. */
   readonly rules: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
 }
 
 export interface CreateConnectionInput {
+  /** Defaults to on. An office can be drawn before it is meant to run. */
+  readonly enabled?: boolean;
   readonly officeId: OfficeId;
   readonly fromId: DepartmentId;
   readonly toId: DepartmentId;
@@ -154,6 +163,25 @@ function validateEdge(
  * Checked when the arrow is drawn rather than when work arrives, so a mistake
  * surfaces to whoever made it instead of stopping a handoff weeks later.
  */
+/**
+ * The moments one department can watch another for.
+ *
+ * Read off the task's own status transitions rather than off the office event
+ * log: these are a closed vocabulary the domain already owns, while the log is
+ * a delivery channel for the canvas that happens to carry strings.
+ */
+export const WATCHABLE_MOMENTS = [
+  "work_started",
+  "work_finished",
+  "work_went_wrong",
+  "decision_wanted",
+] as const;
+export type WatchableMoment = (typeof WATCHABLE_MOMENTS)[number];
+
+export function isWatchableMoment(value: unknown): value is WatchableMoment {
+  return typeof value === "string" && (WATCHABLE_MOMENTS as readonly string[]).includes(value);
+}
+
 export type HandoffAssignment =
   | { readonly kind: "named"; readonly employeeId: string }
   | { readonly kind: "skill"; readonly skill: string }
@@ -194,6 +222,29 @@ export function parseHandoffRules(rules: Readonly<Record<string, unknown>>): Res
   return ok({ assign: assign.value });
 }
 
+/** What a watching arrow is pointed at, and who takes the work it raises. */
+export function parseWatchRules(rules: Readonly<Record<string, unknown>>): Result<{
+  readonly moments: readonly WatchableMoment[];
+  readonly assign: HandoffAssignment;
+}> {
+  const raw = rules["for"];
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return err([
+      {
+        path: "for",
+        message: `must say what it watches for: ${WATCHABLE_MOMENTS.join(", ")}`,
+      },
+    ]);
+  }
+  if (!raw.every(isWatchableMoment)) {
+    return err([{ path: "for", message: `must each be one of ${WATCHABLE_MOMENTS.join(", ")}` }]);
+  }
+
+  const assign = parseHandoffAssignment(rules["assign"]);
+  if (!assign.ok) return err(assign.error);
+  return ok({ moments: raw, assign: assign.value });
+}
+
 export function createConnection(
   input: CreateConnectionInput,
   ctx: CreateConnectionContext,
@@ -201,8 +252,16 @@ export function createConnection(
 ): Result<Connection> {
   const errors = validateEdge(input, ctx.departments, ctx.existing, "");
   const rules = input.rules ?? {};
+  const enabled = input.enabled ?? true;
+  if (typeof enabled !== "boolean") {
+    errors.push({ path: "enabled", message: "must be true or false" });
+  }
+
   if (!isRecord(rules)) errors.push({ path: "rules", message: "must be an object" });
-  else if (input.kind === "handoff") {
+  else if (input.kind === "watches") {
+    const parsed = parseWatchRules(rules);
+    if (!parsed.ok) errors.push(...prefixErrors("rules", parsed.error));
+  } else if (input.kind === "handoff") {
     // Only a handoff interprets these. The same key on another kind is somebody
     // else's business, not something to refuse.
     const parsed = parseHandoffRules(rules);
@@ -215,6 +274,7 @@ export function createConnection(
     fromId: input.fromId,
     toId: input.toId,
     kind: input.kind,
+    enabled,
     rules: { ...rules },
     createdAt: deps.now(),
   });

@@ -112,14 +112,18 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         createdAt: e.createdAt.toISOString(),
       }),
     ),
-    connections: byId(config.connections).map((c) => ({
-      id: c.id,
-      from: c.fromId,
-      to: c.toId,
-      kind: c.kind,
-      rules: c.rules,
-      createdAt: c.createdAt.toISOString(),
-    })),
+    connections: byId(config.connections).map((c) =>
+      omitNull({
+        id: c.id,
+        from: c.fromId,
+        to: c.toId,
+        kind: c.kind,
+        // An arrow that is simply on is not worth writing down.
+        enabled: c.enabled ? null : false,
+        rules: c.rules,
+        createdAt: c.createdAt.toISOString(),
+      }),
+    ),
     connectors: byId(config.connectors).map((k) =>
       omitNull({
         id: k.id,
@@ -479,6 +483,7 @@ export function importOfficeYaml(
         fromId: x["from"] as DepartmentId,
         toId: x["to"] as DepartmentId,
         kind: x["kind"] as ConnectionKind,
+        ...(typeof x["enabled"] === "boolean" ? { enabled: x["enabled"] } : {}),
         ...(isRecord(x["rules"]) ? { rules: x["rules"] } : {}),
       },
       { departments: departmentIds, existing: connections },
