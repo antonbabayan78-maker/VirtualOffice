@@ -11,7 +11,7 @@
  * system then rejects on save.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { isErr, type Employee, type ValidationError } from "@vo/core";
+import type { Employee, ValidationError } from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
@@ -123,37 +123,41 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
   };
 
   const save = (): void => {
-    const result = store.getState().updateEmployee(employee.id, {
-      name: draft.name,
-      role: draft.role,
-      color: draft.color,
-      avatar: draft.avatar.trim().length === 0 ? null : draft.avatar.trim(),
-      llm: {
-        provider: draft.model.provider,
-        model: draft.model.model,
-        params: employee.llm.params,
-        fallbacks: draft.fallbacks,
-      },
-      skillIds: draft.skills
-        .split(",")
-        .map((skill) => skill.trim())
-        .filter((skill) => skill.length > 0),
-      supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
-      workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
-      // Null hands the employee back to their department's hours.
-      schedule: draft.hours.own
-        ? {
-            kind: "windows",
-            timezone: draft.hours.timezone,
-            windows: [{ days: draft.hours.days, start: draft.hours.start, end: draft.hours.end }],
-          }
-        : null,
-    });
-    if (isErr(result)) {
-      setProblems(result.error);
-      return;
-    }
-    close();
+    void store
+      .getState()
+      .saveEmployee(employee.id, {
+        name: draft.name,
+        role: draft.role,
+        color: draft.color,
+        avatar: draft.avatar.trim().length === 0 ? null : draft.avatar.trim(),
+        llm: {
+          provider: draft.model.provider,
+          model: draft.model.model,
+          params: employee.llm.params,
+          fallbacks: draft.fallbacks,
+        },
+        skillIds: draft.skills
+          .split(",")
+          .map((skill) => skill.trim())
+          .filter((skill) => skill.length > 0),
+        supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
+        workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
+        // Null hands the employee back to their department's hours.
+        schedule: draft.hours.own
+          ? {
+              kind: "windows",
+              timezone: draft.hours.timezone,
+              windows: [{ days: draft.hours.days, start: draft.hours.start, end: draft.hours.end }],
+            }
+          : null,
+      })
+      .then((result) => {
+        if (result.ok) {
+          close();
+          return;
+        }
+        setProblems(result.problems);
+      });
   };
 
   return (

@@ -80,6 +80,18 @@ export class OfficeEventLog {
     return offset >= oldest.offset - 1;
   }
 
+  /**
+   * Whether this entity changed after the offset a client is working from.
+   *
+   * When the history no longer reaches that far back it answers true: nobody
+   * can prove the client is up to date, and refusing a save it might clobber is
+   * the safer of the two wrong answers.
+   */
+  changedSince(officeId: string, entityId: string, offset: number): boolean {
+    if (!this.canReplayFrom(officeId, offset)) return true;
+    return this.since(officeId, offset).some((event) => event.data["id"] === entityId);
+  }
+
   subscribe(officeId: string, listener: EventListener): () => void {
     const channel = this.channelFor(officeId);
     channel.listeners.add(listener);

@@ -90,3 +90,38 @@ describe("the office event log", () => {
     expect(events.canReplayFrom("office-1", 1)).toBe(false);
   });
 });
+
+describe("has this changed under me", () => {
+  it("says so when the entity changed after the offset a client holds", () => {
+    const events = log();
+    events.publish("office-1", { kind: "department.updated", id: "d1" });
+    expect(events.changedSince("office-1", "d1", 0)).toBe(true);
+  });
+
+  it("says no when the only change is the one the client already has", () => {
+    const events = log();
+    events.publish("office-1", { kind: "department.updated", id: "d1" });
+    expect(events.changedSince("office-1", "d1", 1)).toBe(false);
+  });
+
+  it("does not confuse one entity's changes with another's", () => {
+    const events = log();
+    events.publish("office-1", { kind: "department.updated", id: "d1" });
+    events.publish("office-1", { kind: "department.updated", id: "d2" });
+    expect(events.changedSince("office-1", "d1", 1)).toBe(false);
+    expect(events.changedSince("office-1", "d2", 1)).toBe(true);
+  });
+
+  it("does not confuse one office with another", () => {
+    const events = log();
+    events.publish("office-2", { kind: "department.updated", id: "d1" });
+    expect(events.changedSince("office-1", "d1", 0)).toBe(false);
+  });
+
+  it("assumes the worst when the history no longer reaches back that far", () => {
+    const events = new OfficeEventLog({ now: () => 0, historyLimit: 2 });
+    for (const kind of ["a", "b", "c"]) events.publish("office-1", { kind, id: "other" });
+    // The client's offset is older than anything kept, so nobody can say.
+    expect(events.changedSince("office-1", "d1", 0)).toBe(true);
+  });
+});

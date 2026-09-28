@@ -5,3 +5,6 @@ packages:
 
 allowBuilds:
   esbuild: true
+  # msw's postinstall installs a browser service worker; the tests intercept in
+  # Node, so it has nothing to do here.
+  msw: false

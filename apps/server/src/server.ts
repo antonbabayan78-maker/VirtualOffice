@@ -62,6 +62,19 @@ function fail(reply: FastifyReply, errors: readonly ValidationError[]): FastifyR
   return reply.code(400).send({ errors });
 }
 
+/**
+ * The offset a client claims to be working from, when it offers one. A client
+ * that says nothing makes no claim to be up to date and gets no protection —
+ * which is right for a script, and why the canvas always sends it.
+ */
+function claimedOffset(request: FastifyRequest): number | null {
+  const header = request.headers["x-vo-since-offset"];
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (raw === undefined) return null;
+  const offset = Number(raw);
+  return Number.isFinite(offset) ? offset : null;
+}
+
 function missing(reply: FastifyReply, what: string): FastifyReply {
   return reply.code(404).send({ error: `${what} not found` });
 }
@@ -232,10 +245,23 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     );
   });
 
+  app.get("/departments/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const department = await store.departments.get(id);
+    return department ?? missing(reply, "department");
+  });
+
   app.patch("/departments/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const department = await store.departments.get(id);
     if (department === null) return missing(reply, "department");
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(department.officeId, id, since)) {
+      return reply.code(409).send({
+        error: "this department changed since you loaded it",
+        current: department,
+      });
+    }
     const siblings = await store.departments.list({ where: { officeId: department.officeId } });
 
     const updated = updateDepartment(
@@ -317,6 +343,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const { id } = request.params as { id: string };
     const employee = await store.employees.get(id);
     if (employee === null) return missing(reply, "employee");
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(employee.officeId, id, since)) {
+      return reply.code(409).send({
+        error: "this employee changed since you loaded them",
+        current: employee,
+      });
+    }
     const body = request.body as { supervisorId?: string | null };
     const supervisor =
       body.supervisorId === undefined || body.supervisorId === null

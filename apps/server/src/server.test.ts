@@ -351,3 +351,85 @@ describe("saying what changed", () => {
     expect(event?.data).toMatchObject({ kind: "department.created", id: departmentId });
   });
 });
+
+describe("two people editing the same thing", () => {
+  const sinceHeader = (offset: number) => ({ ...auth, "x-vo-since-offset": String(offset) });
+
+  it("accepts a change from somebody working from what the server holds", async () => {
+    const officeId = await anOffice();
+    const id = await aDepartment(officeId);
+    const offset = events.since(officeId, 0).at(-1)?.offset ?? 0;
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: `/departments/${id}`,
+      headers: sinceHeader(offset),
+      payload: { name: "Platform" },
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("refuses a change written over somebody else's, and hands back what is current", async () => {
+    const officeId = await anOffice();
+    const id = await aDepartment(officeId);
+    const stale = events.since(officeId, 0).at(-1)?.offset ?? 0;
+
+    // Somebody else gets there first.
+    await patch(`/departments/${id}`, { name: "Platform" });
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: `/departments/${id}`,
+      headers: sinceHeader(stale),
+      payload: { name: "Infrastructure" },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json<{ current: { name: string } }>().current.name).toBe("Platform");
+  });
+
+  it("leaves the department as the first writer left it", async () => {
+    const officeId = await anOffice();
+    const id = await aDepartment(officeId);
+    const stale = events.since(officeId, 0).at(-1)?.offset ?? 0;
+    await patch(`/departments/${id}`, { name: "Platform" });
+    await server.inject({
+      method: "PATCH",
+      url: `/departments/${id}`,
+      headers: sinceHeader(stale),
+      payload: { name: "Infrastructure" },
+    });
+    expect((await get(`/departments/${id}`)).json<{ name: string }>().name).toBe("Platform");
+  });
+
+  it("takes a change from a client that says nothing about what it has seen", async () => {
+    const officeId = await anOffice();
+    const id = await aDepartment(officeId);
+    await patch(`/departments/${id}`, { name: "Platform" });
+    const response = await patch(`/departments/${id}`, { name: "Infrastructure" });
+    // No offset offered means no claim to be up to date, and no protection.
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("guards an employee the same way", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const hired = await post(`/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Engineer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+    const id = hired.json<{ id: string }>().id;
+    const stale = events.since(officeId, 0).at(-1)?.offset ?? 0;
+    await patch(`/employees/${id}`, { role: "Staff engineer" });
+
+    const response = await server.inject({
+      method: "PATCH",
+      url: `/employees/${id}`,
+      headers: sinceHeader(stale),
+      payload: { role: "Principal engineer" },
+    });
+    expect(response.statusCode).toBe(409);
+  });
+});
