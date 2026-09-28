@@ -143,6 +143,29 @@ function normalize(config: OfficeConfig): OfficeConfig {
   };
 }
 
+describe("department hours", () => {
+  it("carries a department's own working hours through the file", () => {
+    const config = sampleConfig();
+    const withHours: OfficeConfig = {
+      ...config,
+      departments: config.departments.map((d, i) =>
+        i === 0
+          ? {
+              ...d,
+              schedule: {
+                kind: "windows" as const,
+                timezone: "Asia/Nicosia",
+                windows: [{ days: ["mon" as const], start: "09:00", end: "17:00" }],
+              },
+            }
+          : d,
+      ),
+    };
+    const reloaded = unwrap(importOfficeYaml(exportOfficeYaml(withHours), deps));
+    expect(reloaded.departments[0]?.schedule).toEqual(withHours.departments[0]?.schedule);
+  });
+});
+
 describe("exportOfficeYaml", () => {
   it("writes a versioned, human-readable document with entities sorted by id", () => {
     const yaml = exportOfficeYaml(sampleConfig());

@@ -212,7 +212,20 @@ importers:
         specifier: ^2.8.1
         version: 2.9.1
 
-  apps/cli: {}
+  apps/cli:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@vo/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
+      '@vo/orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/orchestrator
+      '@vo/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
 
   apps/server: {}
 

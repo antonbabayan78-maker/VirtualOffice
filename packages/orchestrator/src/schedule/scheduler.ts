@@ -56,8 +56,15 @@ export interface RunnableTask {
   readonly assigneeId: EmployeeId | null;
   readonly status: TaskStatus;
   readonly priority: TaskPriority;
-  /** When the task last changed. Ticks that change nothing enqueue nothing. */
-  readonly lastEventAt: number;
+  /** Who owes this task a review; empty when a person or a check decides. */
+  readonly reviewerIds: readonly EmployeeId[];
+  /**
+   * How many times this task has changed: its history length. Used to key work
+   * so repeated ticks queue one job while a task that genuinely moved on earns
+   * another. Deliberately not a timestamp — two changes can land in the same
+   * millisecond, and a key that repeats means real work is silently dropped.
+   */
+  readonly revision: number;
 }
 
 export interface RecurringJob {
@@ -120,6 +127,8 @@ const JOB_PRIORITY: Readonly<Record<TaskPriority, number>> = {
 };
 
 export const AGENT_RUN_JOB = "agent_run";
+/** A review is due work too: it is the reviewer's move, not the author's. */
+export const AGENT_REVIEW_JOB = "agent_review";
 
 interface Closure {
   readonly reason: SkipReason;
@@ -157,6 +166,45 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
   const recurringFired: { id: string; dueAt: number }[] = [];
 
   for (const task of snapshot.tasks) {
+    if (task.status === "in_review") {
+      // An empty reviewer list means a person reviews, or an automated check
+      // does. Either way it is not an agent's move and not ours to queue.
+      if (task.reviewerIds.length === 0) continue;
+
+      let blocked: Closure | null = null;
+      let queued = false;
+      for (const reviewerId of task.reviewerIds) {
+        const reviewer = employees.get(reviewerId);
+        if (reviewer === undefined) {
+          blocked ??= { reason: "unknown_employee", detail: reviewerId };
+          continue;
+        }
+        // A reviewer may sit in another department, so their own hours apply.
+        const closed = closedBecause(
+          now,
+          offices.get(task.officeId),
+          departments.get(reviewer.departmentId),
+          reviewer,
+        );
+        if (closed !== null) {
+          blocked ??= closed;
+          continue;
+        }
+        jobs.push({
+          officeId: task.officeId,
+          employeeId: reviewerId,
+          kind: AGENT_REVIEW_JOB,
+          payload: { taskId: task.id, departmentId: task.departmentId },
+          priority: JOB_PRIORITY[task.priority],
+          idempotencyKey: `${AGENT_REVIEW_JOB}:${task.id}:${String(task.revision)}`,
+        });
+        queued = true;
+        break;
+      }
+      if (!queued && blocked !== null) skipped.push({ what: task.id, ...blocked });
+      continue;
+    }
+
     if (!AGENT_TURN.includes(task.status)) continue;
     if (task.assigneeId === null) {
       skipped.push({ what: task.id, reason: "unassigned" });
@@ -186,7 +234,7 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
       priority: JOB_PRIORITY[task.priority],
       // Keyed by the task's last change, so ticking twice queues one run, and a
       // task that moves on genuinely earns another.
-      idempotencyKey: `${AGENT_RUN_JOB}:${task.id}:${String(task.lastEventAt)}`,
+      idempotencyKey: `${AGENT_RUN_JOB}:${task.id}:${String(task.revision)}`,
     });
   }
 

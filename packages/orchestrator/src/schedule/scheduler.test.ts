@@ -11,6 +11,7 @@ import type {
 } from "@vo/core";
 import { InProcessJobQueue } from "../queue/in-process-queue.js";
 import {
+  AGENT_REVIEW_JOB,
   computeDueWork,
   enqueueDueWork,
   type RecurringJob,
@@ -41,7 +42,8 @@ const task = (overrides: Partial<RunnableTask> = {}): RunnableTask => ({
   assigneeId: ada,
   status: "assigned",
   priority: "normal",
-  lastEventAt: 1_700_000_000_000,
+  reviewerIds: [],
+  revision: 1,
   ...overrides,
 });
 
@@ -176,16 +178,77 @@ describe("computeDueWork: tasks", () => {
     }
   });
 
-  it("keys a run by the task's last change, so repeated ticks are one job", () => {
+  it("keys a run by the task's revision, so repeated ticks are one job", () => {
     const first = computeDueWork(snapshot({ tasks: [task()] }), duringHours);
     const again = computeDueWork(snapshot({ tasks: [task()] }), duringHours);
     expect(first.jobs[0]?.idempotencyKey).toBe(again.jobs[0]?.idempotencyKey);
 
-    const moved = computeDueWork(
-      snapshot({ tasks: [task({ lastEventAt: 1_700_000_060_000 })] }),
+    const moved = computeDueWork(snapshot({ tasks: [task({ revision: 2 })] }), duringHours);
+    expect(moved.jobs[0]?.idempotencyKey).not.toBe(first.jobs[0]?.idempotencyKey);
+  });
+});
+
+describe("computeDueWork: reviews", () => {
+  // Two changes can share a millisecond, so the key must not be time-based.
+  const bob = "emp-bob" as EmployeeId;
+  const withReviewer = (overrides: Partial<SchedulerSnapshot> = {}): SchedulerSnapshot => ({
+    ...snapshot(),
+    employees: [
+      { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+      { id: bob, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+    ],
+    ...overrides,
+  });
+
+  it("asks the reviewer to review, not the author to work", () => {
+    const due = computeDueWork(
+      withReviewer({ tasks: [task({ status: "in_review", reviewerIds: [bob] })] }),
       duringHours,
     );
-    expect(moved.jobs[0]?.idempotencyKey).not.toBe(first.jobs[0]?.idempotencyKey);
+    expect(due.jobs.map((j) => j.kind)).toEqual([AGENT_REVIEW_JOB]);
+    expect(due.jobs[0]).toMatchObject({ employeeId: bob });
+    expect(due.jobs[0]?.payload).toMatchObject({ taskId: "task-1" });
+  });
+
+  it("leaves a review with no named reviewer to the human it belongs to", () => {
+    const due = computeDueWork(
+      withReviewer({ tasks: [task({ status: "in_review", reviewerIds: [] })] }),
+      duringHours,
+    );
+    expect(due.jobs).toEqual([]);
+  });
+
+  it("asks the first reviewer who is actually available", () => {
+    const paused = withReviewer({
+      tasks: [task({ status: "in_review", reviewerIds: [bob, ada] })],
+      employees: [
+        { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+        { id: bob, officeId: office, departmentId: dept, status: "paused", schedule: ALWAYS },
+      ],
+    });
+    expect(computeDueWork(paused, duringHours).jobs[0]).toMatchObject({ employeeId: ada });
+  });
+
+  it("holds the review until the reviewer is at work", () => {
+    const closed = withReviewer({
+      tasks: [task({ status: "in_review", reviewerIds: [bob] })],
+      employees: [
+        { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+        { id: bob, officeId: office, departmentId: dept, status: "active", schedule: OFFICE_HOURS },
+      ],
+    });
+    expect(computeDueWork(closed, duringHours).jobs).toHaveLength(1);
+    const outOfHours = computeDueWork(closed, afterHours);
+    expect(outOfHours.jobs).toEqual([]);
+    expect(outOfHours.skipped[0]).toMatchObject({ reason: "employee_closed" });
+  });
+
+  it("keys a review by the task's revision, so one review is queued once", () => {
+    const input = withReviewer({ tasks: [task({ status: "in_review", reviewerIds: [bob] })] });
+    const first = computeDueWork(input, duringHours);
+    const again = computeDueWork(input, duringHours);
+    expect(first.jobs[0]?.idempotencyKey).toBe(again.jobs[0]?.idempotencyKey);
+    expect(first.jobs[0]?.idempotencyKey).toMatch(/^agent_review:/);
   });
 });
 
