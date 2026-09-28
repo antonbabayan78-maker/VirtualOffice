@@ -49,6 +49,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
           departments: [eng],
           employees: [ada],
           tasks: [],
+          connections: [],
         },
       } satisfies ApiResult<OfficeSnapshot>),
     getDepartment: (id) =>
@@ -203,6 +204,7 @@ describe("falling too far behind", () => {
           departments: [{ ...eng, name: "Renamed while away" }],
           employees: [],
           tasks: [],
+          connections: [],
         },
       }),
     );
@@ -218,5 +220,38 @@ describe("falling too far behind", () => {
     await follow(api).reload();
     expect(store.getState().departments[0]?.name).toBe("Engineering");
     expect(store.getState().notice).toMatch(/unreachable/);
+  });
+});
+
+describe("the arrows the office says are there", () => {
+  it("draws them when the office is loaded", async () => {
+    const sales = { ...eng, id: "dept-sales" as DepartmentId, name: "Sales" };
+    const api = fakeApi({
+      loadOffice: () =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            office: { id: officeId } as never,
+            departments: [eng, sales],
+            employees: [],
+            tasks: [],
+            connections: [
+              {
+                id: "conn-1",
+                officeId,
+                fromId: eng.id,
+                toId: sales.id,
+                kind: "handoff",
+                rules: {},
+                createdAt: at,
+              },
+            ] as never,
+          },
+        }),
+    });
+
+    await follow(api).reload();
+    expect(store.getState().links).toHaveLength(1);
+    expect(store.getState().links[0]).toMatchObject({ from: eng.id, to: sales.id });
   });
 });

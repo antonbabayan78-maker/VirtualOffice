@@ -6,7 +6,7 @@
  * translates: store to nodes on the way in, node changes to store calls on the
  * way out. Nothing about snapping, minimum sizes or persistence is decided here.
  */
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -23,16 +23,37 @@ import { ActivityLegend } from "./ActivityLegend.js";
 import { PALETTE_MIME } from "./Palette.js";
 import { dropItem, type PaletteKind } from "./drop.js";
 import { DepartmentNode, type DepartmentNodeType } from "./DepartmentNode.js";
+import { DepartmentMenu, type DepartmentMenuTarget } from "./DepartmentMenu.js";
+import { edgesFrom } from "./edges.js";
 
 const NODE_TYPES = { department: DepartmentNode };
 
-function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
+function CanvasSurface({
+  store,
+  onContextMenu,
+}: {
+  readonly store: OfficeStore;
+  readonly onContextMenu: (target: DepartmentMenuTarget) => void;
+}): ReactNode {
   const flow = useReactFlow();
   const departments = store((state) => state.departments);
   const employees = store((state) => state.employees);
   const activity = store((state) => state.activity);
   const settings = store((state) => state.settings);
   const selectedId = store((state) => state.selectedId);
+  const links = store((state) => state.links);
+
+  const boxes = useMemo(
+    () =>
+      Object.fromEntries(
+        departments.map((department) => [
+          department.id,
+          { ...department.position, ...department.size },
+        ]),
+      ),
+    [departments],
+  );
+  const edges = useMemo(() => edgesFrom(links, boxes), [links, boxes]);
 
   const nodes = useMemo<DepartmentNodeType[]>(
     () =>
@@ -94,7 +115,17 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
   return (
     <ReactFlow
       nodes={nodes}
+      edges={edges}
       nodeTypes={NODE_TYPES}
+      onNodeContextMenu={(event, node) => {
+        event.preventDefault();
+        onContextMenu({
+          id: node.id as DepartmentId,
+          name: (node.data as { name: string }).name,
+          x: event.clientX,
+          y: event.clientY,
+        });
+      }}
       onNodesChange={onNodesChange}
       snapToGrid={settings.snapToGrid}
       snapGrid={[settings.gridSize, settings.gridSize]}
@@ -124,6 +155,7 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
 
 export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
   const departments = store((state) => state.departments);
+  const [menu, setMenu] = useState<DepartmentMenuTarget | null>(null);
   const settings = store((state) => state.settings);
   const notice = store((state) => state.notice);
   // Actions are called through getState rather than selected: selecting a
@@ -176,8 +208,18 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
         </div>
       ) : (
         <ReactFlowProvider>
-          <CanvasSurface store={store} />
+          <CanvasSurface store={store} onContextMenu={setMenu} />
         </ReactFlowProvider>
+      )}
+
+      {menu !== null && (
+        <DepartmentMenu
+          store={store}
+          target={menu}
+          onClose={() => {
+            setMenu(null);
+          }}
+        />
       )}
     </div>
   );

@@ -11,7 +11,7 @@
  * the edge. A Date that is secretly a string survives right up until something
  * compares or formats it.
  */
-import type { Department, Employee, Office, Task, ValidationError } from "@vo/core";
+import type { Connection, Department, Employee, Office, Task, ValidationError } from "@vo/core";
 
 export type ApiResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -24,6 +24,7 @@ export interface OfficeSnapshot {
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
   readonly tasks: readonly Task[];
+  readonly connections: readonly Connection[];
 }
 
 export interface ApiClient {
@@ -74,6 +75,10 @@ function reviveTask(raw: Record<string, unknown>): Task {
     ...raw,
     history: history.map((event) => ({ ...event, at: asDate(event["at"]) })),
   } as unknown as Task;
+}
+
+function reviveConnection(raw: Record<string, unknown>): Connection {
+  return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Connection;
 }
 
 function reviveEmployee(raw: Record<string, unknown>): Employee {
@@ -189,9 +194,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       const departments = await call(`/offices/${officeId}/departments`);
       const employees = await call(`/offices/${officeId}/employees`);
       const tasks = await call(`/offices/${officeId}/tasks`);
+      const connections = await call(`/offices/${officeId}/connections`);
       if (!departments.ok) return { ok: false, kind: "transport", message: departments.message };
       if (!employees.ok) return { ok: false, kind: "transport", message: employees.message };
       if (!tasks.ok) return { ok: false, kind: "transport", message: tasks.message };
+      if (!connections.ok) return { ok: false, kind: "transport", message: connections.message };
 
       const items = (response: { body: unknown }): Record<string, unknown>[] =>
         (response.body as { items?: Record<string, unknown>[] } | null)?.items ?? [];
@@ -203,6 +210,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           departments: items(departments).map(reviveDepartment),
           employees: items(employees).map(reviveEmployee),
           tasks: items(tasks).map(reviveTask),
+          connections: items(connections).map(reviveConnection),
         },
       };
     },

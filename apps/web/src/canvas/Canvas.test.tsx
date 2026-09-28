@@ -7,6 +7,8 @@ import {
   unwrap,
   type Department,
   type DepartmentId,
+  type Connection,
+  type ConnectionId,
   type Employee,
   type EmployeeId,
   type OfficeId,
@@ -30,6 +32,8 @@ const department = (id: string, name: string, color: string): Department =>
 
 const eng = department("dept-eng", "Engineering", "#3366ff");
 const sales = department("dept-sales", "Sales", "#cc3366");
+// Nobody works here, which is what makes it deletable.
+const ops = department("dept-ops", "Operations", "#f59e0b");
 
 const employee = (id: string, name: string, departmentId: string): Employee =>
   unwrap(
@@ -45,7 +49,17 @@ const employee = (id: string, name: string, departmentId: string): Employee =>
     ),
   );
 
-function openCanvas(): OfficeStore {
+const link = (from: Department, to: Department, kind = "handoff"): Connection => ({
+  id: `conn-${from.id}-${to.id}-${kind}` as ConnectionId,
+  officeId,
+  fromId: from.id,
+  toId: to.id,
+  kind: kind as Connection["kind"],
+  rules: {},
+  createdAt: at,
+});
+
+function openCanvas(connections: readonly Connection[] = []): OfficeStore {
   const store = createOfficeStore({
     storage: { readLayout: () => null, writeLayout: () => undefined },
     id: () => "dept-new",
@@ -54,8 +68,10 @@ function openCanvas(): OfficeStore {
   store
     .getState()
     .load(
-      [eng, sales],
+      [eng, sales, ops],
       [employee("emp-ada", "Ada", "dept-eng"), employee("emp-bob", "Bob", "dept-sales")],
+      [],
+      connections,
     );
   render(<Canvas store={store} />);
   return store;
@@ -151,5 +167,64 @@ describe("the canvas", () => {
     });
     render(<Canvas store={store} />);
     expect(screen.getByText(/no departments yet/i)).toBeInTheDocument();
+  });
+});
+
+describe("the arrows between departments", () => {
+  it("hands the canvas one arrow per relationship", () => {
+    const store = openCanvas([link(eng, sales)]);
+    expect(store.getState().links).toHaveLength(1);
+  });
+
+  it("hands it one arrow, not two, when the work goes both ways", () => {
+    const store = openCanvas([link(eng, sales), link(sales, eng)]);
+    expect(store.getState().links).toHaveLength(1);
+    expect(store.getState().links[0]?.twoWay).toBe(true);
+  });
+});
+
+describe("closing a department down", () => {
+  it("offers to remove an empty department when it is right-clicked", async () => {
+    const user = userEvent.setup();
+    openCanvas();
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("Operations") });
+
+    expect(screen.getByRole("menuitem", { name: /delete/i })).toBeTruthy();
+  });
+
+  it("removes it when that is chosen", async () => {
+    const user = userEvent.setup();
+    const store = openCanvas();
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("Operations") });
+    await user.click(screen.getByRole("menuitem", { name: /delete/i }));
+
+    expect(store.getState().departments.map((d) => d.name)).toEqual(["Engineering", "Sales"]);
+  });
+
+  it("will not offer to delete a department with people in it", async () => {
+    const user = userEvent.setup();
+    openCanvas();
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("Engineering") });
+
+    const item = screen.getByRole("menuitem", { name: /delete/i });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("says why it cannot, rather than a button that does nothing", async () => {
+    const user = userEvent.setup();
+    openCanvas();
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("Engineering") });
+
+    expect(screen.getByText(/still has 1 person/i)).toBeTruthy();
+  });
+
+  it("closes the menu without deleting anything when the canvas is clicked", async () => {
+    const user = userEvent.setup();
+    const store = openCanvas();
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByText("Operations") });
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
+    expect(store.getState().departments).toHaveLength(3);
   });
 });

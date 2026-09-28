@@ -20,6 +20,8 @@ import {
   isErr,
   updateDepartment,
   updateEmployee,
+  type Connection,
+  type ConnectionId,
   type Department,
   type DepartmentId,
   type Employee,
@@ -36,6 +38,7 @@ import type { ApiClient } from "@vo/api-client";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
 import { activityFromTasks } from "./activity.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";
+import { linksFrom, type DepartmentLink } from "./links.js";
 
 export interface Position {
   readonly x: number;
@@ -69,6 +72,13 @@ export interface OfficeStoreState {
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
   readonly tasks: readonly Task[];
+  readonly connections: readonly Connection[];
+  /**
+   * The arrows to draw: one per relationship, with two heads where the work
+   * goes both ways. Derived from the connections rather than stored beside
+   * them, so an arrow cannot survive the connection it stands for.
+   */
+  readonly links: readonly DepartmentLink[];
   /**
    * What each employee is doing right now, worked out from the office's tasks
    * rather than reported separately. Runtime state, not employment status: a
@@ -81,7 +91,12 @@ export interface OfficeStoreState {
     departments: readonly Department[],
     employees?: readonly Employee[],
     tasks?: readonly Task[],
+    connections?: readonly Connection[],
   ): void;
+  putConnection(connection: Connection): void;
+  removeConnection(id: ConnectionId): void;
+  /** Closes a department down. Refused while anybody still works there. */
+  removeDepartment(id: DepartmentId): SaveOutcome;
   activityOf(id: EmployeeId): ActivityState;
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
@@ -132,6 +147,36 @@ export interface OfficeStoreDeps {
 
 const snap = (value: number, grid: number): number => Math.round(value / grid) * grid;
 
+/** Whether a change actually changed where or how big a department is. */
+function same(a: Department, b: Department): boolean {
+  return (
+    a.position.x === b.position.x &&
+    a.position.y === b.position.y &&
+    a.size.width === b.size.width &&
+    a.size.height === b.size.height &&
+    a.name === b.name &&
+    a.color === b.color &&
+    a.reviewPolicy === b.reviewPolicy
+  );
+}
+
+/**
+ * The arrows that can actually be drawn: both ends have to be on the canvas.
+ * A connection to a department this client has not loaded is not wrong, it is
+ * simply not drawable, and a dangling arrow is worse than a missing one.
+ */
+function drawable(
+  connections: readonly Connection[],
+  departments: readonly Department[],
+): readonly DepartmentLink[] {
+  const present = new Set(departments.map((department) => department.id as string));
+  return linksFrom(
+    connections.filter(
+      (connection) => present.has(connection.fromId) && present.has(connection.toId),
+    ),
+  );
+}
+
 function snapPosition(position: Position, settings: CanvasSettings): Position {
   if (!settings.snapToGrid) return position;
   return { x: snap(position.x, settings.gridSize), y: snap(position.y, settings.gridSize) };
@@ -177,10 +222,17 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       change: (department: Department, settings: CanvasSettings) => Department,
     ): void => {
       const { departments, settings } = get();
-      if (!departments.some((department) => department.id === id)) return;
-      const next = departments.map((department) =>
-        department.id === id ? change(department, settings) : department,
-      );
+      const current = departments.find((department) => department.id === id);
+      if (current === undefined) return;
+
+      const changed = change(current, settings);
+      // A change that changes nothing must not produce a new array. The canvas
+      // re-renders on a new one, which makes React Flow measure again, which
+      // reports the same change again — a loop that never settles, and edges
+      // never get drawn because the graph is never still.
+      if (same(current, changed)) return;
+
+      const next = departments.map((department) => (department.id === id ? changed : department));
       set({ departments: next });
       persist(next, settings);
     };
@@ -193,20 +245,77 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       tasks: [],
       activity: {},
       notice: null,
+      connections: [],
+      links: [],
       selectedEmployeeId: null,
       seenOffset: 0,
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
 
-      load: (departments, employees = [], tasks = []) => {
+      load: (departments, employees = [], tasks = [], connections = []) => {
         const layout = deps.storage.readLayout();
         set({
           departments: applyStoredLayout(departments, layout),
           employees,
           tasks,
+          connections,
+          links: drawable(connections, departments),
           activity: activityFromTasks(tasks),
           settings: { snapToGrid: layout?.snapToGrid ?? get().settings.snapToGrid, gridSize },
         });
+      },
+
+      putConnection: (connection) => {
+        const existing = get().connections;
+        const connections = existing.some((candidate) => candidate.id === connection.id)
+          ? existing.map((candidate) => (candidate.id === connection.id ? connection : candidate))
+          : [...existing, connection];
+        set({ connections, links: drawable(connections, get().departments) });
+      },
+
+      removeConnection: (id) => {
+        const connections = get().connections.filter((candidate) => candidate.id !== id);
+        set({ connections, links: drawable(connections, get().departments) });
+      },
+
+      removeDepartment: (id) => {
+        const { departments, employees, connections, settings, selectedId } = get();
+        const department = departments.find((candidate) => candidate.id === id);
+        if (department === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such department" }] };
+        }
+
+        const staff = employees.filter((employee) => employee.departmentId === id);
+        if (staff.length > 0) {
+          // Deleting people by deleting the room around them is not a thing a
+          // canvas should do quietly; move them out first.
+          return {
+            ok: false,
+            problems: [
+              {
+                path: "employees",
+                message: `${department.name} still has ${String(staff.length)} ${
+                  staff.length === 1 ? "person" : "people"
+                } in it`,
+              },
+            ],
+          };
+        }
+
+        const next = departments.filter((candidate) => candidate.id !== id);
+        // An arrow to a department that is gone cannot be drawn, so the
+        // connections go with it rather than becoming invisible orphans.
+        const kept = connections.filter(
+          (connection) => connection.fromId !== id && connection.toId !== id,
+        );
+        set({
+          departments: next,
+          connections: kept,
+          links: drawable(kept, next),
+          ...(selectedId === id ? { selectedId: null } : {}),
+        });
+        persist(next, settings);
+        return { ok: true };
       },
 
       moveDepartment: (id, position) => {
