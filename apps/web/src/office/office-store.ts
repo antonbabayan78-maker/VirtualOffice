@@ -30,6 +30,7 @@ import {
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
+import type { ApiClient } from "../api/client.js";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";
 
@@ -87,6 +88,16 @@ export interface OfficeStoreState {
   selectEmployee(id: EmployeeId | null): void;
   updateEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Result<Employee>;
   updateDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Result<Department>;
+  /**
+   * Changes a department here and then at the office. The canvas shows it at
+   * once; if the office refuses, or somebody else got there first, or it cannot
+   * be reached, the canvas is put back to what the office actually holds.
+   */
+  saveDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Promise<SaveOutcome>;
+  saveEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Promise<SaveOutcome>;
+  /** The last event offset this client has seen, which a save is judged against. */
+  readonly seenOffset: number;
+  setSeenOffset(offset: number): void;
   setSnapToGrid(on: boolean): void;
 }
 
@@ -94,8 +105,14 @@ export type OfficeStore = UseBoundStore<StoreApi<OfficeStoreState>>;
 
 export const DEFAULT_GRID_SIZE = 20;
 
+/** What a save came to in the end, for the drawer that asked for it. */
+export type SaveOutcome =
+  { readonly ok: true } | { readonly ok: false; readonly problems: readonly ValidationError[] };
+
 export interface OfficeStoreDeps {
   readonly storage: LayoutStorage;
+  /** Absent means a canvas with nobody to save to, which still works locally. */
+  readonly api?: ApiClient;
   /** Ids for anything the canvas creates: departments and people alike. */
   readonly id: () => string;
   readonly now: () => Date;
@@ -166,6 +183,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       activity: {},
       notice: null,
       selectedEmployeeId: null,
+      seenOffset: 0,
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
 
@@ -256,6 +274,87 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         set({ departments: next });
         persist(next, settings);
         return updated;
+      },
+
+      setSeenOffset: (offset) => {
+        // Only ever forward: an older event is not newer news.
+        set({ seenOffset: Math.max(get().seenOffset, offset) });
+      },
+
+      saveDepartment: async (id, changes) => {
+        const before = get().departments.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such department" }] };
+        }
+
+        // Refused here means never sent: the office would only say the same.
+        const applied = get().updateDepartment(id, changes);
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        if (deps.api === undefined) return { ok: true };
+
+        const answer = await deps.api.patchDepartment(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        const restore = (department: Department): void => {
+          set({
+            departments: get().departments.map((candidate) =>
+              candidate.id === id ? department : candidate,
+            ),
+          });
+        };
+
+        if (answer.ok) {
+          // What the office holds, not what was sent: it may have tidied it.
+          restore(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "conflict") {
+          restore(answer.current);
+          set({ notice: "Somebody else changed this first; showing what the office now holds." });
+          return { ok: false, problems: [] };
+        }
+        restore(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveEmployee: async (id, changes) => {
+        const before = get().employees.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
+        }
+
+        const applied = get().updateEmployee(id, changes);
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        if (deps.api === undefined) return { ok: true };
+
+        const answer = await deps.api.patchEmployee(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        const restore = (employee: Employee): void => {
+          set({
+            employees: get().employees.map((candidate) =>
+              candidate.id === id ? employee : candidate,
+            ),
+          });
+        };
+
+        if (answer.ok) {
+          restore(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "conflict") {
+          restore(answer.current);
+          set({ notice: "Somebody else changed this first; showing what the office now holds." });
+          return { ok: false, problems: [] };
+        }
+        restore(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 
       setNotice: (notice) => {

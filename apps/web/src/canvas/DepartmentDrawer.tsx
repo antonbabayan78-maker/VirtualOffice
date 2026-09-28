@@ -10,7 +10,7 @@
  * offered is one the workflow engine can actually run.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { isErr, type Department, type GatedAction, type ValidationError } from "@vo/core";
+import type { Department, GatedAction, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
@@ -103,24 +103,28 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
   };
 
   const save = (): void => {
-    const result = store.getState().updateDepartment(department.id, {
-      name: draft.name,
-      color: draft.color,
-      icon: draft.icon.trim().length === 0 ? null : draft.icon.trim(),
-      reviewPolicy: policyFromDraft(draft.policy),
-      schedule: draft.hours.own
-        ? {
-            kind: "windows",
-            timezone: draft.hours.timezone,
-            windows: [{ days: draft.hours.days, start: draft.hours.start, end: draft.hours.end }],
-          }
-        : { kind: "always" },
-    });
-    if (isErr(result)) {
-      setProblems(result.error);
-      return;
-    }
-    close();
+    void store
+      .getState()
+      .saveDepartment(department.id, {
+        name: draft.name,
+        color: draft.color,
+        icon: draft.icon.trim().length === 0 ? null : draft.icon.trim(),
+        reviewPolicy: policyFromDraft(draft.policy),
+        schedule: draft.hours.own
+          ? {
+              kind: "windows",
+              timezone: draft.hours.timezone,
+              windows: [{ days: draft.hours.days, start: draft.hours.start, end: draft.hours.end }],
+            }
+          : { kind: "always" },
+      })
+      .then((result) => {
+        if (result.ok) {
+          close();
+          return;
+        }
+        setProblems(result.problems);
+      });
   };
 
   return (
