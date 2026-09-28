@@ -70,6 +70,11 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
       } else if (kind === "department.created" || kind === "department.updated") {
         const fetched = await api.getDepartment(id);
         if (fetched.ok) replaceDepartment(fetched.value);
+      } else if (kind === "task.created" || kind === "task.updated") {
+        // A task moving is what makes the office look busy, so this is the
+        // event that changes what the figures on the canvas are doing.
+        const fetched = await api.getTask(id);
+        if (fetched.ok) store.getState().putTask(fetched.value);
       } else if (kind === "employee.created" || kind === "employee.updated") {
         const fetched = await api.getEmployee(id);
         if (fetched.ok) replaceEmployee(fetched.value);
@@ -89,7 +94,9 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         .setNotice(snapshot.kind === "transport" ? snapshot.message : "could not load this office");
       return;
     }
-    store.getState().load(snapshot.value.departments, snapshot.value.employees);
+    store
+      .getState()
+      .load(snapshot.value.departments, snapshot.value.employees, snapshot.value.tasks);
   };
 
   return { apply, reload };

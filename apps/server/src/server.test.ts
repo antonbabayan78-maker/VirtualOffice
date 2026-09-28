@@ -506,3 +506,92 @@ describe("being called from a canvas in a browser", () => {
     expect(response.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
+
+describe("moving a task along", () => {
+  const anOfficeWithWork = async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const boss = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Grace",
+        role: "Manager",
+        color: "#ff8800",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    const ada = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        supervisorId: boss,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    const taskId = (
+      await post(`/offices/${officeId}/tasks`, {
+        departmentId,
+        title: "Write the parser",
+        assigneeId: ada,
+      })
+    ).json<{ id: string }>().id;
+    return { officeId, departmentId, taskId, ada, boss };
+  };
+
+  it("starts work on a task", async () => {
+    const { taskId, ada } = await anOfficeWithWork();
+    const response = await post(`/tasks/${taskId}/events`, { type: "start", actorId: ada });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "in_progress" });
+  });
+
+  it("sends finished work for review, to the reviewer the policy picks", async () => {
+    const { taskId, ada, boss } = await anOfficeWithWork();
+    await post(`/tasks/${taskId}/events`, { type: "start", actorId: ada });
+    const response = await post(`/tasks/${taskId}/events`, { type: "submit", actorId: ada });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "in_review", reviewerIds: [boss] });
+  });
+
+  it("finishes a task the reviewer approved", async () => {
+    const { taskId, ada, boss } = await anOfficeWithWork();
+    await post(`/tasks/${taskId}/events`, { type: "start", actorId: ada });
+    await post(`/tasks/${taskId}/events`, { type: "submit", actorId: ada });
+    const response = await post(`/tasks/${taskId}/events`, { type: "approve", actorId: boss });
+    expect(response.json()).toMatchObject({ status: "done" });
+  });
+
+  it("refuses a move the office does not allow, saying why", async () => {
+    const { taskId, boss } = await anOfficeWithWork();
+    const response = await post(`/tasks/${taskId}/events`, { type: "approve", actorId: boss });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("refuses an event it does not know", async () => {
+    const { taskId, ada } = await anOfficeWithWork();
+    const response = await post(`/tasks/${taskId}/events`, { type: "juggle", actorId: ada });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("says so for a task that is not there", async () => {
+    expect((await post("/tasks/task-nowhere/events", { type: "start" })).statusCode).toBe(404);
+  });
+
+  it("tells the office what happened, so a canvas can follow", async () => {
+    const { officeId, taskId, ada } = await anOfficeWithWork();
+    const before = events.since(officeId, 0).length;
+    await post(`/tasks/${taskId}/events`, { type: "start", actorId: ada });
+    const published = events.since(officeId, 0).slice(before);
+    expect(published.map((e) => e.data["kind"])).toEqual(["task.updated"]);
+    expect(published[0]?.data).toMatchObject({ id: taskId, status: "in_progress" });
+  });
+
+  it("gives a task back on its own, which is what a live canvas refetches", async () => {
+    const { taskId } = await anOfficeWithWork();
+    const response = await get(`/tasks/${taskId}`);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: taskId, title: "Write the parser" });
+  });
+});

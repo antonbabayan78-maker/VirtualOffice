@@ -44,7 +44,12 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     loadOffice: () =>
       Promise.resolve({
         ok: true,
-        value: { office: { id: officeId } as never, departments: [eng], employees: [ada] },
+        value: {
+          office: { id: officeId } as never,
+          departments: [eng],
+          employees: [ada],
+          tasks: [],
+        },
       } satisfies ApiResult<OfficeSnapshot>),
     getDepartment: (id) =>
       Promise.resolve({ ok: true, value: { ...eng, id: id as DepartmentId, name: "Platform" } }),
@@ -52,6 +57,17 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       Promise.resolve({
         ok: true,
         value: { ...ada, id: id as EmployeeId, role: "Staff engineer" },
+      }),
+    getTask: (id) =>
+      Promise.resolve({
+        ok: true,
+        value: {
+          id,
+          status: "in_progress",
+          assigneeId: ada.id,
+          reviewerIds: [],
+          history: [],
+        } as never,
       }),
     patchDepartment: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
@@ -91,6 +107,17 @@ describe("following what the office says happened", () => {
       data: { kind: "employee.updated", id: ada.id },
     });
     expect(store.getState().employees[0]?.role).toBe("Staff engineer");
+  });
+
+  it("lights somebody up when a task of theirs starts moving", async () => {
+    expect(store.getState().activityOf(ada.id)).toBe("idle");
+    await follow(fakeApi()).apply({
+      offset: 4,
+      officeId,
+      at: 0,
+      data: { kind: "task.updated", id: "task-1" },
+    });
+    expect(store.getState().activityOf(ada.id)).toBe("working");
   });
 
   it("remembers how far it has got, so a reconnect asks for the rest", async () => {
@@ -174,6 +201,7 @@ describe("falling too far behind", () => {
           office: { id: officeId } as never,
           departments: [{ ...eng, name: "Renamed while away" }],
           employees: [],
+          tasks: [],
         },
       }),
     );

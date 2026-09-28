@@ -30,6 +30,7 @@ import {
   type TaskId,
   type ValidationError,
 } from "@vo/core";
+import { defaultWorkflowEngine, type WorkflowContext, type WorkflowEvent } from "@vo/orchestrator";
 import type { RelationalStore } from "@vo/storage";
 import { bearerToken, type TokenVerifier } from "./auth.js";
 import { OfficeEventLog } from "./events.js";
@@ -54,6 +55,19 @@ export interface ServerOptions {
    */
   readonly allowedOrigins?: readonly string[];
 }
+
+/** The events a task may be given; anything else is a client mistake, not a 500. */
+const KNOWN_EVENTS: readonly string[] = [
+  "start",
+  "submit",
+  "approve",
+  "request_changes",
+  "block",
+  "unblock",
+  "cancel",
+  "check_reported",
+  "gate_decided",
+];
 
 /** Paths anyone may call: a health probe has no credentials to offer. */
 const OPEN_PATHS: readonly string[] = ["/health"];
@@ -108,6 +122,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
   const store = options.store;
   const events = options.events ?? new OfficeEventLog();
+  const workflow = defaultWorkflowEngine();
   const newId = options.id ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => new Date());
 
@@ -431,6 +446,67 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       "task.created",
       (task) => store.tasks.put(task),
     );
+  });
+
+  app.get("/tasks/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const task = await store.tasks.get(id);
+    return task ?? missing(reply, "task");
+  });
+
+  /**
+   * Moving a task is not a field change, so it is not a PATCH. The office
+   * decides what a move means — who reviews, when it escalates — and this hands
+   * the event to the same workflow engine the worker uses. One set of rules.
+   */
+  app.post("/tasks/:id/events", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const task = await store.tasks.get(id);
+    if (task === null) return missing(reply, "task");
+
+    const body = request.body as Record<string, unknown>;
+    const type = typeof body["type"] === "string" ? body["type"] : "";
+    if (!KNOWN_EVENTS.includes(type)) {
+      return fail(reply, [{ path: "type", message: `must be one of ${KNOWN_EVENTS.join(", ")}` }]);
+    }
+
+    const department = await store.departments.get(task.departmentId);
+    const assignee = task.assigneeId === null ? null : await store.employees.get(task.assigneeId);
+    const colleagues = await store.employees.list({ where: { officeId: task.officeId } });
+
+    const context: WorkflowContext = {
+      policy: department?.reviewPolicy ?? { kind: "direct" },
+      now: now(),
+      supervisorId: assignee?.supervisorId ?? null,
+      peers: colleagues.items
+        .filter((employee) => employee.departmentId === task.departmentId)
+        .map((employee) => ({
+          id: employee.id,
+          status: employee.status,
+          skillIds: employee.skillIds,
+          openTasks: 0,
+        })),
+      escalationGraph: {
+        employees: colleagues.items.map((employee) => ({
+          id: employee.id,
+          departmentId: employee.departmentId,
+          supervisorId: employee.supervisorId,
+          status: employee.status,
+        })),
+        connections: (await store.connections.list({ where: { officeId: task.officeId } })).items,
+      },
+    };
+
+    const outcome = workflow.handle(task, body as unknown as WorkflowEvent, context);
+    if (isErr(outcome)) return fail(reply, outcome.error);
+
+    await store.tasks.put(outcome.value.task);
+    events.publish(task.officeId, {
+      kind: "task.updated",
+      id,
+      status: outcome.value.task.status,
+    });
+    return outcome.value.task;
   });
 
   // -- connections -----------------------------------------------------------

@@ -26,12 +26,15 @@ import {
   type EmployeeId,
   type OfficeId,
   type Result,
+  type Task,
+  type TaskId,
   type UpdateDepartmentInput,
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
 import type { ApiClient } from "../api/client.js";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
+import { activityFromTasks } from "./activity.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";
 
 export interface Position {
@@ -65,17 +68,24 @@ export interface AddEmployeeInput {
 export interface OfficeStoreState {
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
+  readonly tasks: readonly Task[];
   /**
-   * What each employee is doing right now. Runtime state, not employment
-   * status: a paused employee is not the same thing as an idle one. Nothing
-   * writes to this yet; the live activity feed will.
+   * What each employee is doing right now, worked out from the office's tasks
+   * rather than reported separately. Runtime state, not employment status: a
+   * paused employee is not the same thing as an idle one.
    */
   readonly activity: Readonly<Record<string, ActivityState>>;
   readonly settings: CanvasSettings;
   readonly selectedId: DepartmentId | null;
-  load(departments: readonly Department[], employees?: readonly Employee[]): void;
+  load(
+    departments: readonly Department[],
+    employees?: readonly Employee[],
+    tasks?: readonly Task[],
+  ): void;
   activityOf(id: EmployeeId): ActivityState;
-  setActivity(id: EmployeeId, state: ActivityState): void;
+  /** Replaces one task and works out what that means for everyone's colour. */
+  putTask(task: Task): void;
+  removeTask(id: TaskId): void;
   moveDepartment(id: DepartmentId, position: Position): void;
   resizeDepartment(id: DepartmentId, size: Size): void;
   addDepartment(input: AddDepartmentInput): Result<Department>;
@@ -180,6 +190,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
     return {
       departments: [],
       employees: [],
+      tasks: [],
       activity: {},
       notice: null,
       selectedEmployeeId: null,
@@ -187,11 +198,13 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
 
-      load: (departments, employees = []) => {
+      load: (departments, employees = [], tasks = []) => {
         const layout = deps.storage.readLayout();
         set({
           departments: applyStoredLayout(departments, layout),
           employees,
+          tasks,
+          activity: activityFromTasks(tasks),
           settings: { snapToGrid: layout?.snapToGrid ?? get().settings.snapToGrid, gridSize },
         });
       },
@@ -234,8 +247,16 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
 
       activityOf: (id) => get().activity[id] ?? "idle",
 
-      setActivity: (id, state) => {
-        set({ activity: { ...get().activity, [id]: state } });
+      putTask: (task) => {
+        const tasks = get().tasks.some((candidate) => candidate.id === task.id)
+          ? get().tasks.map((candidate) => (candidate.id === task.id ? task : candidate))
+          : [...get().tasks, task];
+        set({ tasks, activity: activityFromTasks(tasks) });
+      },
+
+      removeTask: (id) => {
+        const tasks = get().tasks.filter((candidate) => candidate.id !== id);
+        set({ tasks, activity: activityFromTasks(tasks) });
       },
 
       addEmployee: (input) => {

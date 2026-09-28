@@ -158,19 +158,36 @@ describe("the people in the office", () => {
     expect(store.getState().employees).toEqual([]);
   });
 
-  it("keeps everyone idle until something says otherwise", () => {
+  it("keeps everyone idle until there is work in flight", () => {
     open([eng], [], undefined);
     expect(store.getState().activityOf("emp-ada" as EmployeeId)).toBe("idle");
   });
 
-  it("records what an employee is doing", () => {
-    store.getState().setActivity("emp-ada" as EmployeeId, "working");
+  it("shows somebody working once a task of theirs is under way", () => {
+    store.getState().putTask({
+      id: "task-1",
+      status: "in_progress",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+    } as never);
     expect(store.getState().activityOf("emp-ada" as EmployeeId)).toBe("working");
   });
 
   it("leaves everyone else alone", () => {
-    store.getState().setActivity("emp-ada" as EmployeeId, "error");
+    store.getState().putTask({
+      id: "task-1",
+      status: "escalated",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+    } as never);
     expect(store.getState().activityOf("emp-bob" as EmployeeId)).toBe("idle");
+  });
+
+  it("puts somebody back to idle when their task is finished", () => {
+    const task = { id: "task-1", status: "in_progress", assigneeId: "emp-ada", reviewerIds: [] };
+    store.getState().putTask(task as never);
+    store.getState().putTask({ ...task, status: "done" } as never);
+    expect(store.getState().activityOf("emp-ada" as EmployeeId)).toBe("idle");
   });
 });
 
