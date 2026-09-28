@@ -3,7 +3,11 @@
  * TDD guard.
  *
  * Rule: a production source file under `packages/<name>/src` or `apps/<name>/src`
- * may only change together with at least one `*.test.ts` change in the same package.
+ * may only change together with at least one test change in the same package.
+ *
+ * Both .ts and .tsx count. The web app is written in .tsx, and a guard that
+ * cannot see components would leave the whole canvas unguarded while quietly
+ * refusing changes to the .ts files beside them.
  *
  * Usage:
  *   node tooling/scripts/tdd-guard.ts                 # checks staged files (pre-commit)
@@ -25,7 +29,7 @@ export interface GuardResult {
 }
 
 const PACKAGE_ROOT = /^((?:packages|apps)\/[^/]+)\//;
-const SRC_FILE = /^(?:packages|apps)\/[^/]+\/src\/.+\.ts$/;
+const SRC_FILE = /^(?:packages|apps)\/[^/]+\/src\/.+\.tsx?$/;
 
 export function packageOf(file: string): string | null {
   const match = PACKAGE_ROOT.exec(file);
@@ -33,7 +37,7 @@ export function packageOf(file: string): string | null {
 }
 
 export function isTestFile(file: string): boolean {
-  return file.endsWith(".test.ts");
+  return file.endsWith(".test.ts") || file.endsWith(".test.tsx");
 }
 
 export function isProductionSource(file: string): boolean {
@@ -41,6 +45,7 @@ export function isProductionSource(file: string): boolean {
   if (isTestFile(file)) return false;
   if (file.endsWith(".d.ts")) return false;
   if (file.endsWith(".config.ts")) return false;
+  if (file.endsWith(".d.ts") || file.endsWith(".d.tsx")) return false;
   return true;
 }
 

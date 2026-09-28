@@ -18,6 +18,7 @@ import {
   createEmployee,
   err,
   isErr,
+  updateDepartment,
   updateEmployee,
   type Department,
   type DepartmentId,
@@ -25,6 +26,7 @@ import {
   type EmployeeId,
   type OfficeId,
   type Result,
+  type UpdateDepartmentInput,
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
@@ -84,6 +86,7 @@ export interface OfficeStoreState {
   readonly selectedEmployeeId: EmployeeId | null;
   selectEmployee(id: EmployeeId | null): void;
   updateEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Result<Employee>;
+  updateDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Result<Department>;
   setSnapToGrid(on: boolean): void;
 }
 
@@ -237,6 +240,22 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         if (isErr(created)) return created;
         set({ employees: [...employees, created.value] });
         return created;
+      },
+
+      updateDepartment: (id, changes) => {
+        const { departments, settings } = get();
+        const department = departments.find((candidate) => candidate.id === id);
+        if (department === undefined) {
+          return err([{ path: "id", message: "that department is not in this office" }]);
+        }
+        const updated = updateDepartment(department, changes, departments);
+        if (isErr(updated)) return updated;
+        const next = departments.map((candidate) =>
+          candidate.id === id ? updated.value : candidate,
+        );
+        set({ departments: next });
+        persist(next, settings);
+        return updated;
       },
 
       setNotice: (notice) => {

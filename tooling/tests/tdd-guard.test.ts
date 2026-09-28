@@ -9,7 +9,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
-import { evaluateChangedFiles, packageOf } from "../scripts/tdd-guard.js";
+import {
+  evaluateChangedFiles,
+  isProductionSource,
+  isTestFile,
+  packageOf,
+} from "../scripts/tdd-guard.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -131,5 +136,38 @@ describe("policy artifacts", () => {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts["tdd-guard"]).toBeTruthy();
+  });
+});
+
+describe("the web app, which is written in tsx", () => {
+  it("treats a component as production source", () => {
+    expect(isProductionSource("apps/web/src/canvas/Canvas.tsx")).toBe(true);
+  });
+
+  it("treats a component's test as a test", () => {
+    expect(isTestFile("apps/web/src/canvas/Canvas.test.tsx")).toBe(true);
+    expect(isProductionSource("apps/web/src/canvas/Canvas.test.tsx")).toBe(false);
+  });
+
+  it("lets a component change alongside a tsx test in the same package", () => {
+    const result = evaluateChangedFiles([
+      "apps/web/src/canvas/Canvas.tsx",
+      "apps/web/src/canvas/Canvas.test.tsx",
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("still refuses a component changed on its own", () => {
+    const result = evaluateChangedFiles(["apps/web/src/canvas/Canvas.tsx"]);
+    expect(result.ok).toBe(false);
+    expect(result.violations[0]?.sources).toEqual(["apps/web/src/canvas/Canvas.tsx"]);
+  });
+
+  it("lets a tsx test cover a ts change in the same package", () => {
+    const result = evaluateChangedFiles([
+      "apps/web/src/office/office-store.ts",
+      "apps/web/src/canvas/Canvas.test.tsx",
+    ]);
+    expect(result.ok).toBe(true);
   });
 });
