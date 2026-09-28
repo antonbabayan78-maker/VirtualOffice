@@ -16,6 +16,7 @@ export * from "./queue/types.js";
 export * from "./queue/in-process-queue.js";
 export * from "./schedule/cron.js";
 export * from "./schedule/scheduler.js";
+export * from "./escalation/escalation.js";
 export * from "./worker/leader.js";
 export * from "./worker/worker.js";
 export * from "./workflow/workflow-engine.js";

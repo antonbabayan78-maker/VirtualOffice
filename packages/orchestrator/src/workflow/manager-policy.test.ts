@@ -227,7 +227,12 @@ describe("manager policy: escalation", () => {
     expect(escalated.task.status).toBe("escalated");
     expect(escalated.task.history.at(-1)?.reason).toMatch(/2 review round/);
     expect(escalated.effects).toEqual([
-      { type: "escalate", reason: expect.stringContaining("review round") as string },
+      {
+        type: "escalate",
+        reason: expect.stringContaining("review round") as string,
+        // With no escalation path drawn, the owner is who hears about it.
+        to: { kind: "owner", hops: 0 },
+      },
       {
         type: "notify",
         audience: "owner",
@@ -235,6 +240,60 @@ describe("manager policy: escalation", () => {
       },
     ]);
     expect(reviewRounds(escalated.task)).toBe(2);
+  });
+
+  it("sends the escalation up the reporting line when the office has one", () => {
+    const policy = manager(1);
+    const chief = "emp-chief" as EmployeeId;
+    const escalationGraph = {
+      employees: [
+        { id: ada, departmentId, supervisorId: chief, status: "active" as const },
+        { id: chief, departmentId, supervisorId: null, status: "active" as const },
+      ],
+      connections: [],
+    };
+    let current = task("in_review", { reviewerIds: [boss] });
+    current = unwrap(
+      engine.handle(
+        current,
+        { type: "request_changes", actorId: boss, reason: "round 1" },
+        {
+          policy,
+          now: nextTime(),
+          supervisorId: boss,
+          escalationGraph,
+        },
+      ),
+    ).task;
+    current = unwrap(
+      engine.handle(
+        current,
+        { type: "submit", actorId: ada },
+        {
+          policy,
+          now: nextTime(),
+          supervisorId: boss,
+          escalationGraph,
+        },
+      ),
+    ).task;
+    const escalated = unwrap(
+      engine.handle(
+        current,
+        { type: "request_changes", actorId: boss, reason: "round 2" },
+        {
+          policy,
+          now: nextTime(),
+          supervisorId: boss,
+          escalationGraph,
+        },
+      ),
+    );
+    expect(escalated.task.status).toBe("escalated");
+    expect(escalated.effects[0]).toMatchObject({
+      type: "escalate",
+      to: { kind: "employee", employeeId: chief },
+    });
   });
 
   it("walks the full review loop from assigned to done", () => {
