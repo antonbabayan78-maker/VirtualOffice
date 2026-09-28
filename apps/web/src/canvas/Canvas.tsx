@@ -17,7 +17,7 @@ import {
   useReactFlow,
   type NodeChange,
 } from "@xyflow/react";
-import type { DepartmentId } from "@vo/core";
+import type { DepartmentId, EmployeeId } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { ActivityLegend } from "./ActivityLegend.js";
 import { PALETTE_MIME } from "./Palette.js";
@@ -53,9 +53,12 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
               name: employee.name,
               activity: activity[employee.id] ?? ("idle" as const),
             })),
+          onSelectEmployee: (id: string) => {
+            store.getState().selectEmployee(id as EmployeeId);
+          },
         },
       })),
-    [departments, employees, activity, selectedId],
+    [departments, employees, activity, selectedId, store],
   );
 
   const onNodesChange = useCallback(

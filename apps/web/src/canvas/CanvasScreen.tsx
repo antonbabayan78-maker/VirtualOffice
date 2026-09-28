@@ -9,6 +9,7 @@ import { isErr } from "@vo/core";
 import { officeStore } from "../office/store.js";
 import { loadSampleOffice } from "../office/sample-office.js";
 import { Canvas } from "./Canvas.js";
+import { EmployeeDrawer } from "./EmployeeDrawer.js";
 import { Palette } from "./Palette.js";
 
 export function CanvasScreen(): ReactNode {
@@ -39,6 +40,7 @@ export function CanvasScreen(): ReactNode {
       <div className="min-w-0 flex-1">
         <Canvas store={officeStore} />
       </div>
+      <EmployeeDrawer store={officeStore} />
     </div>
   );
 }

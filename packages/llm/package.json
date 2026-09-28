@@ -11,6 +11,11 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./registry": {
+      "development": "./src/registry/index.ts",
+      "types": "./dist/registry/index.d.ts",
+      "import": "./dist/registry/index.js"
     }
   },
   "files": [

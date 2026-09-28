@@ -18,6 +18,8 @@ export interface DepartmentNodeData extends Record<string, unknown> {
     readonly name: string;
     readonly activity: ActivityState;
   }[];
+  /** Opens the drawer for one of the people in this room. */
+  readonly onSelectEmployee: (id: string) => void;
 }
 
 export type DepartmentNodeType = Node<DepartmentNodeData, "department">;
@@ -55,11 +57,22 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
 
         <ul className="flex flex-wrap content-start gap-4 p-4">
           {data.employees.map((employee) => (
-            <li key={employee.id} className="flex w-16 flex-col items-center gap-1">
-              <EmployeeAvatar name={employee.name} state={employee.activity} size={44} />
-              <span className="w-full truncate text-center text-[11px] text-ink-muted">
-                {employee.name}
-              </span>
+            <li key={employee.id}>
+              <button
+                type="button"
+                // nodrag keeps a click from being read as a drag of the room.
+                className="nodrag flex w-16 cursor-pointer flex-col items-center gap-1 rounded-lg p-1 hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+                aria-label={`Configure ${employee.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  data.onSelectEmployee(employee.id);
+                }}
+              >
+                <EmployeeAvatar name={employee.name} state={employee.activity} size={44} />
+                <span className="w-full truncate text-center text-[11px] text-ink-muted">
+                  {employee.name}
+                </span>
+              </button>
             </li>
           ))}
         </ul>
