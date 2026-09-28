@@ -15,7 +15,7 @@ import { createTask, type Result, type Task, type TaskDeps } from "@vo/core";
 import { rankPeers } from "./peer-policy.js";
 import type { PeerCandidate, WorkflowEffect } from "./workflow-types.js";
 
-export type HandoffEffect = Extract<WorkflowEffect, { type: "hand_off" }>;
+export type CreateWorkEffect = Extract<WorkflowEffect, { type: "create_work" }>;
 
 /**
  * Who should take this, from the people in the receiving department.
@@ -24,7 +24,7 @@ export type HandoffEffect = Extract<WorkflowEffect, { type: "hand_off" }>;
  * placed rather than one to force on somebody who has left.
  */
 export function chooseRecipient(
-  effect: HandoffEffect,
+  effect: CreateWorkEffect,
   candidates: readonly PeerCandidate[],
 ): PeerCandidate["id"] | null {
   const active = candidates.filter((candidate) => candidate.status === "active");
@@ -45,8 +45,8 @@ export interface HandoffPlacement {
   readonly assignedTo: PeerCandidate["id"] | null;
 }
 
-export function performHandoff(
-  effect: HandoffEffect,
+export function performCreateWork(
+  effect: CreateWorkEffect,
   officeId: Task["officeId"],
   candidates: readonly PeerCandidate[],
   deps: TaskDeps,

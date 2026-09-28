@@ -23,6 +23,7 @@ export const LINK_LABELS: Readonly<Record<ConnectionKind, string>> = {
   handoff: "hands off to",
   reviews: "reviews",
   escalates_to: "escalates to",
+  watches: "watches",
 };
 
 export interface DepartmentLink {

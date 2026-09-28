@@ -35,7 +35,7 @@ import {
 import {
   acceptanceCriteriaFor,
   defaultWorkflowEngine,
-  performHandoff,
+  performCreateWork,
   type WorkflowContext,
   type WorkflowEvent,
 } from "@vo/orchestrator";
@@ -560,11 +560,11 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     // carries out. The engine says where the work goes and who should take it;
     // creating it is the store's business, and this is the store.
     for (const effect of outcome.value.effects) {
-      if (effect.type !== "hand_off") continue;
+      if (effect.type !== "create_work") continue;
       const receiving = colleagues.items.filter(
         (employee) => employee.departmentId === effect.toDepartmentId,
       );
-      const placed = performHandoff(
+      const placed = performCreateWork(
         effect,
         task.officeId,
         receiving.map((employee) => ({
@@ -615,6 +615,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           fromId: (typeof body["fromId"] === "string" ? body["fromId"] : "") as DepartmentId,
           toId: (typeof body["toId"] === "string" ? body["toId"] : "") as DepartmentId,
           kind: body["kind"] as never,
+          ...(typeof body["enabled"] === "boolean" ? { enabled: body["enabled"] } : {}),
           ...(body["rules"] === undefined
             ? {}
             : { rules: body["rules"] as Record<string, unknown> }),

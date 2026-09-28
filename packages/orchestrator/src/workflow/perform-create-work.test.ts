@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { unwrap, type DepartmentId, type EmployeeId, type OfficeId, type TaskId } from "@vo/core";
-import { chooseRecipient, performHandoff, type HandoffEffect } from "./perform-handoff.js";
+import {
+  chooseRecipient,
+  performCreateWork,
+  type CreateWorkEffect,
+} from "./perform-create-work.js";
 import type { PeerCandidate } from "./workflow-types.js";
 
 const officeId = "office-1" as OfficeId;
 const design = "dept-design" as DepartmentId;
 const deps = { id: () => "task-new" as TaskId, now: () => new Date("2026-09-28T09:00:00Z") };
 
-const effect = (overrides: Partial<HandoffEffect> = {}): HandoffEffect => ({
-  type: "hand_off",
+const effect = (overrides: Partial<CreateWorkEffect> = {}): CreateWorkEffect => ({
+  type: "create_work",
+  because: "handoff",
   connectionId: "conn-1" as never,
   toDepartmentId: design,
   title: "Draw the export screen",
@@ -89,7 +94,7 @@ describe("choosing who takes handed-on work", () => {
 
 describe("making the next department's work", () => {
   const placed = (candidates: readonly PeerCandidate[] = [person("emp-theo")]) =>
-    unwrap(performHandoff(effect(), officeId, candidates, deps));
+    unwrap(performCreateWork(effect(), officeId, candidates, deps));
 
   it("puts it in the department the work was handed to", () => {
     expect(placed().task.departmentId).toBe(design);

@@ -32,13 +32,14 @@ function edge(
 }
 
 describe("createConnection", () => {
-  it("lists the five connection kinds", () => {
+  it("lists every kind of arrow an office can draw", () => {
     expect(CONNECTION_KINDS).toEqual([
       "reports_to",
       "collaborates",
       "handoff",
       "reviews",
       "escalates_to",
+      "watches",
     ]);
   });
 
@@ -50,6 +51,7 @@ describe("createConnection", () => {
       fromId: A,
       toId: B,
       kind: "handoff",
+      enabled: true,
       rules: {},
       createdAt: now,
     });
@@ -250,6 +252,7 @@ describe("validateConnectionGraph", () => {
       fromId,
       toId,
       kind,
+      enabled: true,
       rules: {},
       createdAt: now,
     });
@@ -321,6 +324,91 @@ describe("what a handoff says about who picks the work up", () => {
     // somebody else's business, not something to refuse.
     const other = createConnection(
       { officeId, fromId: A, toId: B, kind: "collaborates", rules: { assign: {} } },
+      { departments, existing: [] },
+      deps,
+    );
+    expect(isOk(other)).toBe(true);
+  });
+});
+
+describe("an arrow that can be switched off", () => {
+  const made = (enabled?: boolean) =>
+    createConnection(
+      {
+        officeId,
+        fromId: A,
+        toId: B,
+        kind: "handoff",
+        ...(enabled === undefined ? {} : { enabled }),
+      },
+      { departments, existing: [] },
+      deps,
+    );
+
+  it("is on unless somebody turned it off", () => {
+    expect(unwrap(made()).enabled).toBe(true);
+  });
+
+  it("can be drawn already off, for wiring an office before it runs", () => {
+    expect(unwrap(made(false)).enabled).toBe(false);
+  });
+
+  it("refuses anything that is not plainly on or off", () => {
+    const result = createConnection(
+      { officeId, fromId: A, toId: B, kind: "handoff", enabled: "yes" as never },
+      { departments, existing: [] },
+      deps,
+    );
+    expect(isErr(result)).toBe(true);
+  });
+});
+
+describe("one department watching another", () => {
+  const watches = (rules: unknown) =>
+    createConnection(
+      { officeId, fromId: A, toId: B, kind: "watches", rules: rules as never },
+      { departments, existing: [] },
+      deps,
+    );
+
+  it("is a kind of arrow an office can draw", () => {
+    expect(CONNECTION_KINDS).toContain("watches");
+  });
+
+  it("watches the moments it was pointed at", () => {
+    const made = unwrap(watches({ for: ["work_finished"] }));
+    expect(made.rules).toEqual({ for: ["work_finished"] });
+  });
+
+  it("can watch for several moments at once", () => {
+    expect(isOk(watches({ for: ["work_finished", "work_went_wrong"] }))).toBe(true);
+  });
+
+  it("refuses a moment nobody has heard of, when the arrow is drawn", () => {
+    const result = watches({ for: ["work_vanished"] });
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) expect(result.error[0]?.path).toBe("rules.for");
+  });
+
+  it("refuses an arrow that watches for nothing, which would never fire", () => {
+    expect(isErr(watches({ for: [] }))).toBe(true);
+  });
+
+  it("refuses an arrow that does not say what it watches for", () => {
+    expect(isErr(watches({}))).toBe(true);
+  });
+
+  it("takes an assignment, since the work it raises has to land on somebody", () => {
+    expect(isOk(watches({ for: ["work_finished"], assign: { skill: "legal" } }))).toBe(true);
+  });
+
+  it("refuses a bad assignment on a watching arrow too", () => {
+    expect(isErr(watches({ for: ["work_finished"], assign: {} }))).toBe(true);
+  });
+
+  it("leaves other kinds of arrow alone", () => {
+    const other = createConnection(
+      { officeId, fromId: A, toId: B, kind: "collaborates", rules: { for: ["nonsense"] } },
       { departments, existing: [] },
       deps,
     );

@@ -244,6 +244,7 @@ describe("the arrows the office says are there", () => {
                 fromId: eng.id,
                 toId: sales.id,
                 kind: "handoff",
+                enabled: true,
                 rules: {},
                 createdAt: at,
               },

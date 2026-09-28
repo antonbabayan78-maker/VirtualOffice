@@ -581,3 +581,62 @@ departments:
     expect(exportOfficeYaml(silent)).not.toContain("definitionOfDone");
   });
 });
+
+describe("an arrow switched off in an office file", () => {
+  const YAML = `
+version: 1
+office:
+  id: office-1
+  name: Acme
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 } }
+  - { id: dept-b, name: B, color: "#cc3366", position: { x: 600, y: 0 } }
+connections:
+  - { id: conn-1, from: dept-a, to: dept-b, kind: handoff, enabled: false }
+  - id: conn-2
+    from: dept-b
+    to: dept-a
+    kind: watches
+    rules: { for: [work_went_wrong] }
+`;
+
+  it("reads that the arrow is off", () => {
+    const config = unwrap(importOfficeYaml(YAML, deps));
+    expect(at(config.connections, 0).enabled).toBe(false);
+  });
+
+  it("leaves an arrow on when the file says nothing", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).connections, 1).enabled).toBe(true);
+  });
+
+  it("reads what a watching arrow is pointed at", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).connections, 1).rules).toEqual({
+      for: ["work_went_wrong"],
+    });
+  });
+
+  it("refuses a moment nobody has heard of, on the way in", () => {
+    const bad = YAML.replace("work_went_wrong", "work_vanished");
+    expect(isErr(importOfficeYaml(bad, deps))).toBe(true);
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+    expect(at(again.connections, 0).enabled).toBe(false);
+    expect(at(again.connections, 1).rules).toEqual({ for: ["work_went_wrong"] });
+  });
+
+  it("keeps an arrow that is simply on out of the file", () => {
+    const on = `
+version: 1
+office: { id: office-1, name: Acme }
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 } }
+  - { id: dept-b, name: B, color: "#cc3366", position: { x: 600, y: 0 } }
+connections:
+  - { id: conn-1, from: dept-a, to: dept-b, kind: handoff }
+`;
+    expect(exportOfficeYaml(unwrap(importOfficeYaml(on, deps)))).not.toContain("enabled");
+  });
+});

@@ -55,6 +55,7 @@ const link = (from: Department, to: Department, kind = "handoff"): Connection =>
   fromId: from.id,
   toId: to.id,
   kind: kind as Connection["kind"],
+  enabled: true,
   rules: {},
   createdAt: at,
 });

@@ -12,6 +12,7 @@
 import type { Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
 import { handoffEffects } from "./handoff.js";
+import { watchEffects } from "./watch.js";
 import { outstandingFor } from "./review-common.js";
 import { GATE_POLICY_HANDLER } from "./gate-policy.js";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
@@ -87,17 +88,26 @@ export class WorkflowEngine {
     const outcome = this.decide(task, event, context);
     if (!outcome.ok) return outcome;
 
-    // Finishing here is where work elsewhere begins. Appended once, in the one
-    // place every event and every policy returns through, rather than at each
-    // of the five transitions that can reach done — applyTransition replaces
-    // effects rather than accumulating them, so five call sites would be five
-    // chances to get it wrong and a sixth waiting for the next policy added.
-    if (task.status === "done" || outcome.value.task.status !== "done") return outcome;
-    const handoffs = handoffEffects(outcome.value.task, context);
-    if (handoffs.length === 0) return outcome;
+    // What happens here makes work happen elsewhere: a department finishing
+    // hands work on, and any department watching this one may have its own work
+    // to raise. Appended once, in the one place every event and every policy
+    // returns through, rather than at each transition that could cause it —
+    // applyTransition replaces effects rather than accumulating them, so every
+    // call site would be another chance to get it wrong and one more waiting
+    // for the next policy added.
+    const raised = [
+      // Only a task that has just reached done hands anything on. Both halves
+      // of the test are needed: one for work that was already finished, one for
+      // work that did not get there.
+      ...(task.status !== "done" && outcome.value.task.status === "done"
+        ? handoffEffects(outcome.value.task, context)
+        : []),
+      ...watchEffects(task, outcome.value.task, outcome.value.effects, context),
+    ];
+    if (raised.length === 0) return outcome;
     return {
       ok: true,
-      value: { task: outcome.value.task, effects: [...outcome.value.effects, ...handoffs] },
+      value: { task: outcome.value.task, effects: [...outcome.value.effects, ...raised] },
     };
   }
 
