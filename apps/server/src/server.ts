@@ -10,6 +10,7 @@
  * Storage is injected. The server has no idea whether it is talking to SQLite,
  * Postgres or a map in memory, which is the whole point of the repositories.
  */
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
@@ -46,6 +47,12 @@ export interface ServerOptions {
    * again, and waiting for it stalls a shutdown.
    */
   readonly forceCloseConnections?: boolean;
+  /**
+   * Origins the canvas may be served from. A browser will not call this API
+   * from another origin without being told it may, so an empty list means the
+   * API is reachable by servers and command lines only.
+   */
+  readonly allowedOrigins?: readonly string[];
 }
 
 /** Paths anyone may call: a health probe has no credentials to offer. */
@@ -103,6 +110,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const events = options.events ?? new OfficeEventLog();
   const newId = options.id ?? (() => crypto.randomUUID());
   const now = options.now ?? (() => new Date());
+
+  if (options.allowedOrigins !== undefined && options.allowedOrigins.length > 0) {
+    const allowed = new Set(options.allowedOrigins);
+    void app.register(cors, {
+      origin: (origin, done) => {
+        // No origin at all is a server or a command line, which CORS does not
+        // govern; a browser always sends one.
+        done(null, origin === undefined || allowed.has(origin));
+      },
+      credentials: true,
+      allowedHeaders: ["authorization", "content-type", "x-vo-since-offset"],
+    });
+  }
 
   app.addHook("onRequest", (request: FastifyRequest, reply: FastifyReply, done) => {
     const path = request.url.split("?")[0] ?? "";
@@ -337,6 +357,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       "employee.created",
       (employee) => store.employees.put(employee),
     );
+  });
+
+  app.get("/employees/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    return employee ?? missing(reply, "employee");
   });
 
   app.patch("/employees/:id", async (request, reply) => {
