@@ -74,6 +74,7 @@ describe("an employee taking a turn at their own work", () => {
       type: "submit",
       actorId: ada.id,
       artifacts: ["parser written"],
+      met: [],
     });
   });
 
@@ -115,7 +116,7 @@ describe("an employee reviewing somebody else's work", () => {
     });
     const events = await turn(provider)({ task: inReview, actor: grace, kind: AGENT_REVIEW_JOB });
 
-    expect(events).toEqual([{ type: "approve", actorId: grace.id }]);
+    expect(events).toEqual([{ type: "approve", actorId: grace.id, met: [] }]);
   });
 
   it("sends the work back with the reason the reviewer gave", async () => {
@@ -187,5 +188,120 @@ describe("paying for what an employee does", () => {
     await turn(provider)({ task: assigned, actor: haiku, kind: AGENT_RUN_JOB });
 
     expect(provider.calls[0]?.model).toBe("claude-haiku-4-5-20251001");
+  });
+});
+
+describe("asking somebody about the list", () => {
+  const criteria = ["handles malformed input", "has tests for the error path"];
+
+  it("puts the criteria in front of the reviewer", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true })],
+    });
+    await llmAgentTurn({ provider })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    const system = JSON.stringify(provider.calls[0]?.system);
+    expect(system).toContain("handles malformed input");
+    expect(system).toContain("has tests for the error path");
+  });
+
+  it("puts them in front of somebody doing the work too, so they know the bar", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done" })],
+    });
+    await llmAgentTurn({ provider })({
+      task: assigned,
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    expect(JSON.stringify(provider.calls[0]?.system)).toContain("handles malformed input");
+  });
+
+  it("says nothing about a list when there is none", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true })],
+    });
+    await llmAgentTurn({ provider })({ task: inReview, actor: grace, kind: AGENT_REVIEW_JOB });
+
+    expect(JSON.stringify(provider.calls[0]?.system)).not.toContain("criteria");
+  });
+
+  it("carries what the reviewer verified back to the office", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true, met: criteria })],
+    });
+    const [event] = await llmAgentTurn({ provider })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    expect(event).toMatchObject({ type: "approve", met: criteria });
+  });
+
+  it("carries what the worker claims it met", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done", met: criteria })],
+    });
+    const events = await llmAgentTurn({ provider })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    expect(events[0]).toMatchObject({ type: "submit", met: criteria });
+  });
+
+  it("claims nothing when the answer is not a list of text", async () => {
+    // A loosely shaped answer must not become a claim that everything was met.
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true, met: "all of them" })],
+    });
+    const [event] = await llmAgentTurn({ provider })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    expect(event).toMatchObject({ type: "approve", met: [] });
+  });
+
+  it("keeps out anything in the list that is not text", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true, met: [criteria[0], 7] })],
+    });
+    const [event] = await llmAgentTurn({ provider })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    expect(event).toMatchObject({ met: [criteria[0]] });
+  });
+
+  it("offers the reviewer somewhere to answer the list", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("review_verdict", { approved: true })],
+    });
+    await llmAgentTurn({ provider })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      acceptanceCriteria: criteria,
+    });
+
+    const tool = provider.calls[0]?.tools?.find((candidate) => candidate.name === "review_verdict");
+    expect(JSON.stringify(tool?.inputSchema)).toContain("met");
   });
 });

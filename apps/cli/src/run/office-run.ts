@@ -32,6 +32,7 @@ import {
   defaultWorkflowEngine,
   llmAgentTurn,
   type Job,
+  acceptanceCriteriaFor,
   officeSnapshot,
   performHandoff,
   type PeerCandidate,
@@ -156,6 +157,10 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     const load = openTaskCounts([...tasks.values()]);
     return {
       policy: department?.reviewPolicy ?? { kind: "direct" },
+      acceptanceCriteria: acceptanceCriteriaFor(
+        task.acceptanceCriteria,
+        department?.definitionOfDone ?? [],
+      ),
       now: now(),
       supervisorId: assignee?.supervisorId ?? employee?.supervisorId ?? null,
       peers: config.employees
@@ -223,7 +228,16 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     if (actor === undefined) return;
 
     let current = task;
-    for (const event of await turn({ task: current, actor, kind: job.kind })) {
+    const criteria = acceptanceCriteriaFor(
+      current.acceptanceCriteria,
+      departments.get(current.departmentId)?.definitionOfDone ?? [],
+    );
+    for (const event of await turn({
+      task: current,
+      actor,
+      kind: job.kind,
+      acceptanceCriteria: criteria,
+    })) {
       // Each event is applied to where the last one left the task; a refused
       // one leaves it untouched and the next is judged against that.
       current = dispatch(current, event, job.employeeId);

@@ -17,7 +17,13 @@
  * better reported than retried until it runs out of attempts.
  */
 import type { ApiClient, ApiResult } from "@vo/api-client";
-import { AGENT_RUN_JOB, AGENT_REVIEW_JOB, type AgentTurn, type Job } from "@vo/orchestrator";
+import {
+  acceptanceCriteriaFor,
+  AGENT_RUN_JOB,
+  AGENT_REVIEW_JOB,
+  type AgentTurn,
+  type Job,
+} from "@vo/orchestrator";
 
 export interface JobHandlerOptions {
   readonly api: ApiClient;
@@ -52,10 +58,19 @@ export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Prom
       throw new Error(`could not read employee ${job.employeeId}: ${describe(actor)}`);
     }
 
+    // What done means here, asked of the office rather than assumed. A
+    // department it cannot read leaves no list rather than stopping the work.
+    const department = await options.api.getDepartment(task.value.departmentId);
+    const acceptanceCriteria = acceptanceCriteriaFor(
+      task.value.acceptanceCriteria,
+      department.ok ? department.value.definitionOfDone : [],
+    );
+
     const events = await options.agent({
       task: task.value,
       actor: actor.value,
       kind: job.kind as typeof AGENT_RUN_JOB | typeof AGENT_REVIEW_JOB,
+      acceptanceCriteria,
     });
 
     for (const event of events) {

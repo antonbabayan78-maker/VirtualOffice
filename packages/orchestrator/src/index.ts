@@ -22,6 +22,7 @@ export * from "./escalation/escalation.js";
 export * from "./worker/leader.js";
 export * from "./worker/worker.js";
 export * from "./workflow/workflow-engine.js";
+export * from "./workflow/acceptance.js";
 export * from "./workflow/perform-handoff.js";
 export * from "./workflow/handoff.js";
 export * from "./workflow/manager-policy.js";

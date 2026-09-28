@@ -14,6 +14,9 @@ const task = {
   status: "assigned",
   priority: "normal",
   reviewerIds: ["emp-grace"],
+  // As the client returns it: the wire fills these in even when an older
+  // office omits them, so a double that leaves them out is not a real answer.
+  acceptanceCriteria: [],
   history: [{ type: "created", at }],
 };
 const ada = { id: "emp-ada", name: "Ada", officeId: "office-1", departmentId: "dept-eng" };
@@ -22,7 +25,7 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     loadOffice: () => Promise.reject(new Error("not used here")),
     getOffice: () => Promise.reject(new Error("not used here")),
-    getDepartment: () => Promise.reject(new Error("not used here")),
+    getDepartment: () => Promise.resolve({ ok: true, value: { definitionOfDone: [] } as never }),
     getEmployee: () => Promise.resolve({ ok: true, value: ada as never }),
     getTask: () => Promise.resolve({ ok: true, value: task as never }),
     patchOffice: () => Promise.reject(new Error("not used here")),
@@ -88,7 +91,12 @@ describe("doing a piece of an office's work", () => {
 
     expect(getTask).toHaveBeenCalledWith("task-1");
     expect(getEmployee).toHaveBeenCalledWith("emp-ada");
-    expect(agent).toHaveBeenCalledWith({ task, actor: ada, kind: AGENT_RUN_JOB });
+    expect(agent).toHaveBeenCalledWith({
+      task,
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      acceptanceCriteria: [],
+    });
   });
 
   it("tells the agent it is reviewing, not working, when that is the job", async () => {
@@ -184,5 +192,52 @@ describe("doing a piece of an office's work", () => {
     );
     expect(agent).not.toHaveBeenCalled();
     expect(problems[0]).toMatch(/nightly_report/);
+  });
+});
+
+describe("telling the agent what done means", () => {
+  it("asks the office what this department expects, and passes it on", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const getDepartment = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: { id: "dept-eng", definitionOfDone: ["has tests"] } as never,
+      }),
+    );
+    await officeJobHandler({ api: api({ getDepartment }), agent })(job());
+
+    expect(getDepartment).toHaveBeenCalledWith("dept-eng");
+    expect(agent).toHaveBeenCalledWith(
+      expect.objectContaining({ acceptanceCriteria: ["has tests"] }),
+    );
+  });
+
+  it("prefers what the task itself asks for", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const getTask = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: { ...task, acceptanceCriteria: ["migrates the old rows"] } as never,
+      }),
+    );
+    const getDepartment = vi.fn(() =>
+      Promise.resolve({ ok: true as const, value: { definitionOfDone: ["has tests"] } as never }),
+    );
+    await officeJobHandler({ api: api({ getTask, getDepartment }), agent })(job());
+
+    expect(agent).toHaveBeenCalledWith(
+      expect.objectContaining({ acceptanceCriteria: ["migrates the old rows"] }),
+    );
+  });
+
+  it("carries on with nothing when the department cannot be read", async () => {
+    // A department the office cannot answer about is not a reason to stop
+    // working; it is a reason to have no list.
+    const agent = vi.fn(() => Promise.resolve([]));
+    const getDepartment = () =>
+      Promise.resolve({ ok: false as const, kind: "transport" as const, message: "unreachable" });
+    await officeJobHandler({ api: api({ getDepartment }), agent })(job());
+
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ acceptanceCriteria: [] }));
   });
 });

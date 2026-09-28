@@ -229,3 +229,36 @@ describe("a department's standing priority", () => {
     expect(screen.getByText(/ahead of|outranks|before other departments/i)).toBeTruthy();
   });
 });
+
+describe("what this department expects of everything it makes", () => {
+  it("shows what it already expects", () => {
+    expect(screen.getByText(/nothing yet|expects nothing/i)).toBeTruthy();
+  });
+
+  it("takes a new expectation", async () => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/new expectation/i), "the tests cover the error path");
+    await user.click(screen.getByRole("button", { name: /add expectation/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.definitionOfDone).toEqual(["the tests cover the error path"]);
+  });
+
+  it("will not add an empty one", () => {
+    expect(screen.getByRole("button", { name: /add expectation/i })).toBeDisabled();
+  });
+
+  it("takes one away again", async () => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/new expectation/i), "has tests");
+    await user.click(screen.getByRole("button", { name: /add expectation/i }));
+    await user.click(screen.getByRole("button", { name: /remove has tests/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.definitionOfDone).toEqual([]);
+  });
+
+  it("says what the list is for, since it decides when work is done", () => {
+    expect(screen.getByText(/done|acceptable|finished/i)).toBeTruthy();
+  });
+});

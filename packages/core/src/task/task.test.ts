@@ -12,6 +12,7 @@ import {
   type CreateTaskInput,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  TASK_TITLE_MAX_LENGTH,
   TASK_TRANSITIONS,
   TERMINAL_TASK_STATUSES,
   transitionTask,
@@ -57,6 +58,7 @@ describe("createTask", () => {
       dependsOn: [],
       artifacts: [],
       route: [],
+      acceptanceCriteria: [],
       tokenBudget: null,
       deadline: null,
       history: [{ at: t0, from: null, to: "backlog", actorId: null, reason: null }],
@@ -423,5 +425,38 @@ describe("the route a piece of work has taken", () => {
 
   it("refuses artifacts that are not text", () => {
     expect(isErr(createTask({ ...base, artifacts: [{}] as never }, deps))).toBe(true);
+  });
+});
+
+describe("what would make this work acceptable", () => {
+  const base = { officeId, departmentId, title: "Write the parser" };
+
+  it("says nothing by default, which means the department decides", () => {
+    expect(unwrap(createTask(base, deps)).acceptanceCriteria).toEqual([]);
+  });
+
+  it("takes a list of its own", () => {
+    const criteria = ["handles malformed input", "has tests for the error path"];
+    expect(
+      unwrap(createTask({ ...base, acceptanceCriteria: criteria }, deps)).acceptanceCriteria,
+    ).toEqual(criteria);
+  });
+
+  it("refuses a criterion that is not text", () => {
+    expect(isErr(createTask({ ...base, acceptanceCriteria: [7] as never }, deps))).toBe(true);
+  });
+
+  it("refuses an empty criterion, which asks for nothing", () => {
+    expect(isErr(createTask({ ...base, acceptanceCriteria: ["  "] }, deps))).toBe(true);
+  });
+
+  it("refuses a criterion too long to be one thing", () => {
+    const rambling = "x".repeat(TASK_TITLE_MAX_LENGTH + 1);
+    expect(isErr(createTask({ ...base, acceptanceCriteria: [rambling] }, deps))).toBe(true);
+  });
+
+  it("refuses the same criterion twice, which would be asked about twice", () => {
+    const twice = ["has tests", "has tests"];
+    expect(isErr(createTask({ ...base, acceptanceCriteria: twice }, deps))).toBe(true);
   });
 });

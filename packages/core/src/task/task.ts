@@ -132,6 +132,12 @@ export interface Task {
    * work that keeps coming back around can be recognised as going in circles.
    */
   readonly route: readonly DepartmentId[];
+  /**
+   * What would make this work acceptable. Empty means the department's standing
+   * definition applies instead — a task states its own only when the work needs
+   * something the department does not always ask for.
+   */
+  readonly acceptanceCriteria: readonly string[];
   readonly tokenBudget: number | null;
   readonly deadline: Date | null;
   readonly history: readonly TaskEvent[];
@@ -151,6 +157,8 @@ export interface CreateTaskInput {
   readonly route?: readonly DepartmentId[];
   /** What it is continuing from; a handoff carries the work, not just a title. */
   readonly artifacts?: readonly string[];
+  /** What this work in particular has to achieve, over its department's standing list. */
+  readonly acceptanceCriteria?: readonly string[];
   readonly gatedActions?: readonly GatedAction[];
   readonly dependsOn?: readonly string[];
   readonly tokenBudget?: number;
@@ -243,6 +251,24 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     errors.push({ path: "artifacts", message: "must each be text" });
   }
 
+  const acceptanceCriteria = input.acceptanceCriteria ?? [];
+  if (
+    acceptanceCriteria.some(
+      (criterion) =>
+        typeof criterion !== "string" ||
+        criterion.trim().length === 0 ||
+        criterion.length > TASK_TITLE_MAX_LENGTH,
+    )
+  ) {
+    errors.push({
+      path: "acceptanceCriteria",
+      message: `must each be text of at most ${String(TASK_TITLE_MAX_LENGTH)} characters`,
+    });
+  }
+  // Asked about twice, answered twice, and a reviewer left wondering which one
+  // it meant.
+  errors.push(...uniqueIds(acceptanceCriteria, "acceptanceCriteria", "criterion"));
+
   const tokenBudget = input.tokenBudget ?? null;
   if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
     errors.push({ path: "tokenBudget", message: "must be a positive integer" });
@@ -273,6 +299,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     dependsOn: [...dependsOn] as TaskId[],
     artifacts: [...artifacts],
     route: [...route],
+    acceptanceCriteria: [...acceptanceCriteria],
     tokenBudget,
     deadline,
     history: [{ at: now, from: null, to: status, actorId: null, reason: null }],

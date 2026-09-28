@@ -24,12 +24,29 @@ import type { WorkflowEvent } from "../workflow/workflow-types.js";
 import { runAgent } from "./agent-run-loop.js";
 
 /** What an employee calls to hand finished work over. */
+/**
+ * How the acceptance criteria are written into a prompt.
+ *
+ * Exported because a rehearsal has to answer the question it was asked, and
+ * scraping a sentence it does not own would break the first time this wording
+ * changed.
+ */
+export const CRITERIA_PREFIX = "This work is done when:";
+export const CRITERIA_SEPARATOR = " | ";
+
 export const SUBMIT_TOOL: ToolDefinition = {
   name: "submit_work",
   description: "Hand the finished work over for review.",
   inputSchema: {
     type: "object",
-    properties: { summary: { type: "string" } },
+    properties: {
+      summary: { type: "string" },
+      met: {
+        type: "array",
+        items: { type: "string" },
+        description: "Each acceptance criterion this work meets, copied exactly.",
+      },
+    },
     required: ["summary"],
   },
 };
@@ -40,7 +57,15 @@ export const REVIEW_TOOL: ToolDefinition = {
   description: "Approve the work, or send it back with a reason.",
   inputSchema: {
     type: "object",
-    properties: { approved: { type: "boolean" }, reason: { type: "string" } },
+    properties: {
+      approved: { type: "boolean" },
+      reason: { type: "string" },
+      met: {
+        type: "array",
+        items: { type: "string" },
+        description: "Each acceptance criterion you have verified, copied exactly.",
+      },
+    },
     required: ["approved"],
   },
 };
@@ -49,6 +74,8 @@ export type TurnKind = typeof AGENT_RUN_JOB | typeof AGENT_REVIEW_JOB;
 
 export interface AgentTurnRequest {
   readonly task: Task;
+  /** What this work has to achieve, already resolved by whoever asked. */
+  readonly acceptanceCriteria?: readonly string[];
   /** Whose turn it is: the assignee for a run, the reviewer for a review. */
   readonly actor: Employee;
   readonly kind: TurnKind;
@@ -75,7 +102,7 @@ export interface AgentTurnOptions {
 export type AgentTurn = (request: AgentTurnRequest) => Promise<readonly WorkflowEvent[]>;
 
 export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
-  return async ({ task, actor, kind }) => {
+  return async ({ task, actor, kind, acceptanceCriteria = [] }) => {
     const reviewing = kind === AGENT_REVIEW_JOB;
     const resultTool = reviewing ? REVIEW_TOOL : SUBMIT_TOOL;
     const attribution: TurnAttribution = {
@@ -87,15 +114,26 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
     const provider = options.wrapProvider?.(options.provider, attribution) ?? options.provider;
 
     const instruction = reviewing
-      ? `Review the work on this task and call ${REVIEW_TOOL.name} with your decision.`
+      ? `Review the work on this task and call ${REVIEW_TOOL.name} with your decision.` +
+        (acceptanceCriteria.length === 0
+          ? ""
+          : ` List in "met" every criterion you have verified, copied exactly. Anything you` +
+            ` leave out is treated as not met, and the work goes back.`)
       : `Do the work described and call ${SUBMIT_TOOL.name} when it is finished.`;
+
+    // Dynamic rather than stable: the list belongs to this task, and the stable
+    // half is what prompt caching keeps between calls.
+    const dynamic = [`Task: ${task.title}`];
+    if (acceptanceCriteria.length > 0) {
+      dynamic.push(`${CRITERIA_PREFIX} ${acceptanceCriteria.join(CRITERIA_SEPARATOR)}`);
+    }
 
     const result = await runAgent({
       provider,
       model: actor.llm.model,
       system: {
         stable: [`You are ${actor.name}, ${actor.role}.`],
-        dynamic: [`Task: ${task.title}`],
+        dynamic,
       },
       messages: [{ role: "user", content: [{ type: "text", text: instruction }] }],
       tools: [],
@@ -106,10 +144,17 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
 
     const verdict = result.structuredResult;
 
+    // Only text survives. A model answering "all of them" has claimed nothing,
+    // which is the safe reading: silence about a criterion is not assent.
+    const claimed = (raw: unknown): readonly string[] =>
+      Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+
     if (reviewing) {
       if (verdict === undefined) return [];
       // Strictly true, so a loosely worded answer is never read as a yes.
-      if (verdict["approved"] === true) return [{ type: "approve", actorId: actor.id }];
+      if (verdict["approved"] === true) {
+        return [{ type: "approve", actorId: actor.id, met: claimed(verdict["met"]) }];
+      }
       const reason = typeof verdict["reason"] === "string" ? verdict["reason"] : "changes needed";
       return [{ type: "request_changes", actorId: actor.id, reason }];
     }
@@ -121,6 +166,9 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
     if (verdict === undefined) return events;
 
     const summary = typeof verdict["summary"] === "string" ? verdict["summary"] : "work submitted";
-    return [...events, { type: "submit", actorId: actor.id, artifacts: [summary] }];
+    return [
+      ...events,
+      { type: "submit", actorId: actor.id, artifacts: [summary], met: claimed(verdict["met"]) },
+    ];
   };
 }

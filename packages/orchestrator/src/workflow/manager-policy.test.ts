@@ -335,3 +335,62 @@ describe("registration", () => {
     expect(MANAGER_POLICY_HANDLER.kind).toBe("manager");
   });
 });
+
+describe("approving against a definition of done", () => {
+  const criteria = ["handles malformed input", "has tests for the error path"];
+  const withCriteria = (): WorkflowContext => context(manager(), { acceptanceCriteria: criteria });
+
+  const approve = (met: readonly string[] | undefined, ctx = withCriteria()) =>
+    engine.handle(
+      task("in_review", { reviewerIds: [boss] }),
+      { type: "approve", actorId: boss, ...(met === undefined ? {} : { met }) },
+      ctx,
+    );
+
+  it("finishes the work when the reviewer verified the whole list", () => {
+    expect(unwrap(approve(criteria)).task.status).toBe("done");
+  });
+
+  it("sends the work back when a criterion was left out", () => {
+    expect(unwrap(approve([criteria[0] ?? ""])).task.status).toBe("in_progress");
+  });
+
+  it("names what was outstanding, so the next round knows what to do", () => {
+    const outcome = unwrap(approve([criteria[0] ?? ""]));
+    const reasons = outcome.task.history.map((event) => event.reason ?? "").join(" ");
+    expect(reasons).toContain("has tests for the error path");
+    expect(reasons).not.toContain("handles malformed input");
+  });
+
+  it("sends it back when the reviewer said yes but verified nothing", () => {
+    // Approving without answering the list is an opinion, not a verdict.
+    expect(unwrap(approve([])).task.status).toBe("in_progress");
+  });
+
+  it("sends it back when the reviewer said nothing about the list at all", () => {
+    expect(unwrap(approve(undefined)).task.status).toBe("in_progress");
+  });
+
+  it("finishes as it always did when the office asked for nothing", () => {
+    // The inertness claim: an office with no criteria is untouched by any of it.
+    const outcome = unwrap(approve(undefined, context()));
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("escalates rather than looping forever when the list is never met", () => {
+    const capped = context(manager(1), { acceptanceCriteria: criteria });
+    const once = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [boss] }),
+        { type: "approve", actorId: boss, met: [] },
+        capped,
+      ),
+    );
+    const twice = engine.handle(
+      { ...once.task, status: "in_review" },
+      { type: "approve", actorId: boss, met: [] },
+      capped,
+    );
+    expect(unwrap(twice).task.status).toBe("escalated");
+  });
+});

@@ -25,3 +25,32 @@ describe("rehearsalProvider", () => {
     expect(rehearsalProvider().id).toBe("anthropic");
   });
 });
+
+describe("rehearsing an office that has a definition of done", () => {
+  const withCriteria = (tools: string[], criteria: string[]): CompletionRequest => ({
+    ...ask(tools),
+    system: [{ text: `This work is done when: ${criteria.join(" | ")}`, cache: false }],
+  });
+
+  it("answers the list it was given, so a rehearsal is not sent back forever", async () => {
+    const criteria = ["handles malformed input", "has tests"];
+    const response = await rehearsalProvider().complete(withCriteria(["review_verdict"], criteria));
+    const block = response.content[0];
+    if (block?.type === "tool_use") expect(block.input).toMatchObject({ met: criteria });
+    else throw new Error("expected a verdict");
+  });
+
+  it("answers the list when doing the work as well", async () => {
+    const criteria = ["handles malformed input"];
+    const response = await rehearsalProvider().complete(withCriteria(["submit_work"], criteria));
+    const block = response.content[0];
+    if (block?.type === "tool_use") expect(block.input).toMatchObject({ met: criteria });
+    else throw new Error("expected a submission");
+  });
+
+  it("claims nothing when no list was given", async () => {
+    const response = await rehearsalProvider().complete(ask(["review_verdict"]));
+    const block = response.content[0];
+    if (block?.type === "tool_use") expect(block.input).toMatchObject({ met: [] });
+  });
+});

@@ -33,6 +33,7 @@ import {
   type ValidationError,
 } from "@vo/core";
 import {
+  acceptanceCriteriaFor,
   defaultWorkflowEngine,
   performHandoff,
   type WorkflowContext,
@@ -301,6 +302,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(body["reviewPolicy"] === undefined ? {} : { reviewPolicy: body["reviewPolicy"] }),
           ...(body["schedule"] === undefined ? {} : { schedule: body["schedule"] }),
           ...(body["priority"] === undefined ? {} : { priority: body["priority"] as string }),
+          ...(Array.isArray(body["definitionOfDone"])
+            ? { definitionOfDone: body["definitionOfDone"] as readonly string[] }
+            : {}),
         },
         existing.items,
         { id: () => newId() as DepartmentId, now },
@@ -468,6 +472,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           departmentId: departmentId as DepartmentId,
           title,
           ...(brief === undefined ? {} : { brief }),
+          ...(Array.isArray(body["acceptanceCriteria"])
+            ? { acceptanceCriteria: body["acceptanceCriteria"] as string[] }
+            : {}),
           ...(typeof body["assigneeId"] === "string"
             ? { assigneeId: body["assigneeId"] as EmployeeId }
             : {}),
@@ -514,6 +521,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
     const context: WorkflowContext = {
       policy: department?.reviewPolicy ?? { kind: "direct" },
+      acceptanceCriteria: acceptanceCriteriaFor(
+        task.acceptanceCriteria,
+        department?.definitionOfDone ?? [],
+      ),
       now: now(),
       supervisorId: assignee?.supervisorId ?? null,
       peers: colleagues.items

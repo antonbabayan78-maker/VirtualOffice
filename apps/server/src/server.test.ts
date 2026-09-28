@@ -953,3 +953,104 @@ describe("work crossing into another department", () => {
     expect(await tasksIn(officeId, departmentId)).toHaveLength(1);
   });
 });
+
+describe("what the office expects of work", () => {
+  /** A direct-review department with a standing definition of done. */
+  async function withStandard(definitionOfDone: string[]) {
+    const officeId = await anOffice();
+    const made = await post(`/offices/${officeId}/departments`, {
+      name: "Engineering",
+      color: "#3366ff",
+      position: { x: 0, y: 0 },
+      reviewPolicy: { kind: "direct" },
+      definitionOfDone,
+    });
+    const departmentId = made.json<{ id: string }>().id;
+    const person = await post(`/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Engineer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+    return { officeId, departmentId, ada: person.json<{ id: string }>().id };
+  }
+
+  const aTask = async (
+    officeId: string,
+    departmentId: string,
+    assigneeId: string,
+    acceptanceCriteria?: string[],
+  ) => {
+    const made = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Write the parser",
+      assigneeId,
+      ...(acceptanceCriteria === undefined ? {} : { acceptanceCriteria }),
+    });
+    return made;
+  };
+
+  it("keeps a department's standing definition of done", async () => {
+    const office = await withStandard(["has tests"]);
+    const read = await get(`/departments/${office.departmentId}`);
+    expect(read.json<{ definitionOfDone: string[] }>().definitionOfDone).toEqual(["has tests"]);
+  });
+
+  it("keeps criteria a task was given of its own", async () => {
+    const office = await withStandard([]);
+    const made = await aTask(office.officeId, office.departmentId, office.ada, ["migrates rows"]);
+    expect(made.json<{ acceptanceCriteria: string[] }>().acceptanceCriteria).toEqual([
+      "migrates rows",
+    ]);
+  });
+
+  it("refuses to finish work that has not met what the department expects", async () => {
+    const office = await withStandard(["has tests"]);
+    const made = await aTask(office.officeId, office.departmentId, office.ada);
+    const id = made.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.ada });
+
+    const refused = await post(`/tasks/${id}/events`, { type: "submit", actorId: office.ada });
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.stringify(refused.json())).toContain("has tests");
+  });
+
+  it("finishes it once the list has been met", async () => {
+    const office = await withStandard(["has tests"]);
+    const made = await aTask(office.officeId, office.departmentId, office.ada);
+    const id = made.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.ada });
+
+    const done = await post(`/tasks/${id}/events`, {
+      type: "submit",
+      actorId: office.ada,
+      met: ["has tests"],
+    });
+    expect(done.json<{ status: string }>().status).toBe("done");
+  });
+
+  it("asks about the task's own list rather than the department's when it has one", async () => {
+    const office = await withStandard(["has tests"]);
+    const made = await aTask(office.officeId, office.departmentId, office.ada, ["migrates rows"]);
+    const id = made.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.ada });
+
+    const done = await post(`/tasks/${id}/events`, {
+      type: "submit",
+      actorId: office.ada,
+      met: ["migrates rows"],
+    });
+    expect(done.json<{ status: string }>().status).toBe("done");
+  });
+
+  it("finishes work as it always did when the office expects nothing", async () => {
+    const office = await withStandard([]);
+    const made = await aTask(office.officeId, office.departmentId, office.ada);
+    const id = made.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.ada });
+
+    const done = await post(`/tasks/${id}/events`, { type: "submit", actorId: office.ada });
+    expect(done.json<{ status: string }>().status).toBe("done");
+  });
+});

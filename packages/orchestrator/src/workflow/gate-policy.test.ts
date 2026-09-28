@@ -194,3 +194,41 @@ describe("gate policy: registration", () => {
     }
   });
 });
+
+describe("a gate that has a definition of done behind it", () => {
+  const criteria = ["the release notes are written", "the rollback was rehearsed"];
+
+  it("refuses a submission that has not met the list, before anybody is asked", () => {
+    // No point putting work in front of a person when the office can already
+    // see it is not finished.
+    const refused = engine.handle(
+      task("in_progress", ["deploy"]),
+      { type: "submit", actorId: ada, met: [] },
+      context(gate(["deploy"]), { acceptanceCriteria: criteria }),
+    );
+    expect(isErr(refused)).toBe(true);
+  });
+
+  it("puts the work to a person once the list has been met", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_progress", ["deploy"]),
+        { type: "submit", actorId: ada, met: criteria },
+        context(gate(["deploy"]), { acceptanceCriteria: criteria }),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_review");
+    expect(outcome.effects.some((effect) => effect.type === "request_approval")).toBe(true);
+  });
+
+  it("behaves exactly as it always did when the office asked for nothing", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_progress", ["deploy"]),
+        { type: "submit", actorId: ada },
+        context(gate(["deploy"])),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_review");
+  });
+});

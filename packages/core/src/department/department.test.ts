@@ -144,6 +144,7 @@ describe("createDepartment", () => {
       config: {},
       reviewPolicy: DEFAULT_REVIEW_POLICY,
       priority: "normal",
+      definitionOfDone: [],
       schedule: { kind: "always" },
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
@@ -310,5 +311,43 @@ describe("a department's standing priority", () => {
   it("refuses a bad priority on a change too", () => {
     const department = unwrap(createDepartment(base, [], deps));
     expect(isErr(updateDepartment(department, { priority: "asap" }, []))).toBe(true);
+  });
+});
+
+describe("a department's standing definition of done", () => {
+  it("is empty unless the department says otherwise", () => {
+    expect(unwrap(createDepartment(base, [], deps)).definitionOfDone).toEqual([]);
+  });
+
+  it("holds what everything this department does has to achieve", () => {
+    const standing = ["reviewed by somebody else", "has tests"];
+    expect(
+      unwrap(createDepartment({ ...base, definitionOfDone: standing }, [], deps)).definitionOfDone,
+    ).toEqual(standing);
+  });
+
+  it("refuses an entry that is not text", () => {
+    expect(isErr(createDepartment({ ...base, definitionOfDone: [7] as never }, [], deps))).toBe(
+      true,
+    );
+  });
+
+  it("refuses an empty entry", () => {
+    expect(isErr(createDepartment({ ...base, definitionOfDone: ["  "] }, [], deps))).toBe(true);
+  });
+
+  it("can be changed later, which is how a department raises its standard", () => {
+    const department = unwrap(createDepartment(base, [], deps));
+    const raised = unwrap(updateDepartment(department, { definitionOfDone: ["has tests"] }, []));
+    expect(raised.definitionOfDone).toEqual(["has tests"]);
+  });
+
+  it("stays as it was when a change does not mention it", () => {
+    const department = unwrap(
+      createDepartment({ ...base, definitionOfDone: ["has tests"] }, [], deps),
+    );
+    expect(unwrap(updateDepartment(department, { name: "Platform" }, [])).definitionOfDone).toEqual(
+      ["has tests"],
+    );
   });
 });

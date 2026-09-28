@@ -21,6 +21,9 @@ departments:
     position: { x: 0, y: 0 }
     size: { width: 420, height: 260 }
     reviewPolicy: { kind: manager, maxIterations: 2 }
+    definitionOfDone:
+      - the problem is stated in one sentence
+      - success is measurable
 
   - id: dept-design
     name: Design
@@ -28,6 +31,9 @@ departments:
     position: { x: 460, y: 0 }
     size: { width: 420, height: 260 }
     reviewPolicy: { kind: manager, maxIterations: 2 }
+    definitionOfDone:
+      - every state is drawn, including the empty one
+      - it works at phone width
 
   # Engineers review each other. The manager runs the department, not the diff.
   - id: dept-engineering
@@ -36,6 +42,9 @@ departments:
     position: { x: 0, y: 300 }
     size: { width: 520, height: 320 }
     reviewPolicy: { kind: peer, maxIterations: 3 }
+    definitionOfDone:
+      - the tests cover the error path
+      - nothing was left commented out
 
   # Nothing leaves this building on an agent's word: a person approves a deploy
   # and a person approves money.
@@ -45,6 +54,9 @@ departments:
     position: { x: 560, y: 300 }
     size: { width: 380, height: 220 }
     reviewPolicy: { kind: gate, gatedActions: [deploy, spend] }
+    definitionOfDone:
+      - the rollback was rehearsed
+      - the release notes are written
 
 employees:
   - id: emp-vera

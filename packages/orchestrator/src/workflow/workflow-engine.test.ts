@@ -412,3 +412,41 @@ describe("work going round in circles", () => {
     if (escalation?.type === "escalate") expect(escalation.reason).toMatch(/dept-design/);
   });
 });
+
+describe("a department with no reviewer still answers the list", () => {
+  const criteria = ["handles malformed input", "has tests for the error path"];
+  const withCriteria = (): WorkflowContext => context(direct, { acceptanceCriteria: criteria });
+
+  const submit = (met: readonly string[] | undefined, ctx = withCriteria()) =>
+    engine.handle(
+      task("in_progress"),
+      { type: "submit", actorId: ada, ...(met === undefined ? {} : { met }) },
+      ctx,
+    );
+
+  it("finishes when the submitter met the whole list", () => {
+    expect(unwrap(submit(criteria)).task.status).toBe("done");
+  });
+
+  it("refuses the submission when something was left out", () => {
+    // Otherwise the way round a definition of done is a department with nobody
+    // to check it, which is the easiest way round there could be. Refused
+    // rather than moved: the work is simply not finished, and there is no state
+    // between in progress and done for it to sit in.
+    expect(isErr(submit([criteria[0] ?? ""]))).toBe(true);
+  });
+
+  it("says what is outstanding rather than refusing blankly", () => {
+    const refused = submit([]);
+    expect(isErr(refused)).toBe(true);
+    if (isErr(refused)) {
+      expect(refused.error.map((error) => error.message).join(" ")).toContain(
+        "handles malformed input",
+      );
+    }
+  });
+
+  it("finishes as it always did when the office asked for nothing", () => {
+    expect(unwrap(submit(undefined, context(direct))).task.status).toBe("done");
+  });
+});
