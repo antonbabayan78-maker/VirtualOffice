@@ -250,3 +250,57 @@ describe("a day at Northwind Studio", () => {
     expect(result.ticks).toBeLessThan(60);
   });
 });
+
+describe("what the studio picks up first", () => {
+  /** Who the office asked first, read off the scripted provider's calls. */
+  async function firstSpeaker(crunched: string | null, tasks: readonly Task[]): Promise<string> {
+    const provider = studio();
+    const withCrunch: OfficeConfig =
+      crunched === null
+        ? config
+        : {
+            ...config,
+            departments: config.departments.map((department) =>
+              department.name === crunched ? { ...department, priority: "urgent" } : department,
+            ),
+          };
+
+    await runOffice({
+      config: withCrunch,
+      tasks,
+      provider,
+      decide: approveEverything,
+      maxTicks: 60,
+    });
+    const first = provider.calls[0];
+    if (first === undefined) throw new Error("nobody was asked to do anything");
+    return speaker(first);
+  }
+
+  const urgentInProduct = (): Task => ({
+    ...brief("task-rush", "Rush the pricing page", "Ravi"),
+    priority: "urgent",
+  });
+  const trivialInEngineering = (): Task => ({
+    ...brief("task-tidy", "Tidy the log format", "Ada"),
+    priority: "low",
+  });
+
+  it("takes the more urgent task first when no department has been prioritised", async () => {
+    expect(await firstSpeaker(null, [trivialInEngineering(), urgentInProduct()])).toBe("Ravi");
+  });
+
+  it("puts a crunched department's trivial work ahead of another's urgent work", async () => {
+    // Engineering is in crunch: everything it does outranks Product, whatever
+    // Product's tasks say about themselves.
+    expect(await firstSpeaker("Engineering", [trivialInEngineering(), urgentInProduct()])).toBe(
+      "Ada",
+    );
+  });
+
+  it("leaves the studio's own file neutral, so the template is not in crunch", () => {
+    for (const department of config.departments) {
+      expect(department.priority, department.name).toBe("normal");
+    }
+  });
+});

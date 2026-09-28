@@ -51,6 +51,7 @@ describe("createEmployee", () => {
       schedule: null,
       supervisorId: null,
       workspaceRef: null,
+      priority: "normal",
       status: "active",
       statusChangedAt: now,
       createdAt: now,
@@ -369,5 +370,34 @@ describe("transitionEmployee", () => {
     expect(isOk(transitionEmployee(e, "paused", later))).toBe(true);
     expect(e.status).toBe("active");
     expect(e.statusChangedAt).toEqual(now);
+  });
+});
+
+describe("an employee's standing priority", () => {
+  it("is normal unless the employee is given one", () => {
+    expect(unwrap(createEmployee(base, ctx, deps)).priority).toBe("normal");
+  });
+
+  it("is taken from the employee when it is given one", () => {
+    expect(unwrap(createEmployee({ ...base, priority: "low" }, ctx, deps)).priority).toBe("low");
+  });
+
+  it("refuses a priority that is not one", () => {
+    const result = createEmployee({ ...base, priority: "meh" }, ctx, deps);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) expect(result.error[0]?.path).toBe("priority");
+  });
+
+  it("can be lowered later, which is how somebody is told to yield", () => {
+    const employee = unwrap(createEmployee(base, ctx, deps));
+    expect(
+      unwrap(updateEmployee(employee, { priority: "low" }, { supervisor: null })).priority,
+    ).toBe("low");
+  });
+
+  it("stays as it was when a change does not mention it", () => {
+    const employee = unwrap(createEmployee({ ...base, priority: "high" }, ctx, deps));
+    const after = unwrap(updateEmployee(employee, { name: "Ada L" }, { supervisor: null }));
+    expect(after.priority).toBe("high");
   });
 });

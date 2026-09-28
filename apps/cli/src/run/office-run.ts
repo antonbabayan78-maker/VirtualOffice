@@ -30,7 +30,7 @@ import {
   defaultWorkflowEngine,
   llmAgentTurn,
   type Job,
-  type RunnableTask,
+  officeSnapshot,
   type SchedulerSnapshot,
   type WorkflowContext,
   type WorkflowEffect,
@@ -177,32 +177,18 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     }
   };
 
-  const snapshot = (): SchedulerSnapshot => ({
-    offices: [{ id: config.office.id, schedule: config.office.schedule }],
-    departments: config.departments.map((d) => ({
-      id: d.id,
-      officeId: d.officeId,
-      schedule: d.schedule,
-    })),
-    employees: config.employees.map((e) => ({
-      id: e.id,
-      officeId: e.officeId,
-      departmentId: e.departmentId,
-      status: e.status,
-      schedule: e.schedule ?? { kind: "always" },
-    })),
-    tasks: [...tasks.values()].map((task): RunnableTask => ({
-      id: task.id,
-      officeId: task.officeId,
-      departmentId: task.departmentId,
-      assigneeId: task.assigneeId,
-      status: task.status,
-      priority: task.priority,
-      reviewerIds: task.reviewerIds,
-      revision: task.history.length,
-    })),
-    recurring: [],
-  });
+  /**
+   * The same view the worker schedules from. Built by the shared helper rather
+   * than by hand here: two builders of the same thing drift, and the one that
+   * drifts is always the one nobody is watching.
+   */
+  const snapshot = (): SchedulerSnapshot =>
+    officeSnapshot({
+      office: config.office,
+      departments: config.departments,
+      employees: config.employees,
+      tasks: [...tasks.values()],
+    });
 
   /** What this task is waiting on a person for; empty when it is not waiting. */
   const waitingOn = (task: Task): readonly GatedAction[] => {

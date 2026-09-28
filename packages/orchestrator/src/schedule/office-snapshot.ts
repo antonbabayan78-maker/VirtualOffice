@@ -21,11 +21,14 @@ export interface OfficeSnapshotInput {
 
 export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
   return {
-    offices: [{ id: input.office.id, schedule: input.office.schedule }],
+    offices: [
+      { id: input.office.id, schedule: input.office.schedule, priority: input.office.priority },
+    ],
     departments: input.departments.map((department) => ({
       id: department.id,
       officeId: department.officeId,
       schedule: department.schedule,
+      priority: department.priority,
     })),
     employees: input.employees.map((employee) => ({
       id: employee.id,
@@ -34,6 +37,7 @@ export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
       status: employee.status,
       // No hours of their own means the department's and the office's apply.
       schedule: employee.schedule ?? { kind: "always" },
+      priority: employee.priority,
     })),
     tasks: input.tasks.map((task) => ({
       id: task.id,

@@ -472,3 +472,64 @@ describe("property: export then import is the identity", () => {
     );
   });
 });
+
+describe("standing priority in an office file", () => {
+  const YAML = `
+version: 1
+office:
+  id: office-1
+  name: Acme
+  priority: high
+departments:
+  - id: dept-eng
+    name: Engineering
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    priority: urgent
+employees:
+  - id: emp-ada
+    department: dept-eng
+    name: Ada
+    role: Engineer
+    color: "#00aa66"
+    priority: low
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+`;
+
+  it("reads a priority for the office, a department and a person", () => {
+    const config = unwrap(importOfficeYaml(YAML, deps));
+    expect(config.office.priority).toBe("high");
+    expect(at(config.departments, 0).priority).toBe("urgent");
+    expect(at(config.employees, 0).priority).toBe("low");
+  });
+
+  it("defaults each of them to normal when the file is silent", () => {
+    const plain = YAML.replace(/^ *priority: .*$/gm, "");
+    const config = unwrap(importOfficeYaml(plain, deps));
+    expect(config.office.priority).toBe("normal");
+    expect(at(config.departments, 0).priority).toBe("normal");
+    expect(at(config.employees, 0).priority).toBe("normal");
+  });
+
+  it("refuses a priority that is not one, naming the file's own key", () => {
+    const bad = YAML.replace("priority: urgent", "priority: asap");
+    const result = importOfficeYaml(bad, deps);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.some((error) => error.path.includes("priority"))).toBe(true);
+    }
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+    expect(again.office.priority).toBe("high");
+    expect(at(again.departments, 0).priority).toBe("urgent");
+    expect(at(again.employees, 0).priority).toBe("low");
+  });
+
+  it("keeps a default out of the file, so nothing gains noise by being exported", () => {
+    const plain = unwrap(importOfficeYaml(YAML.replace(/^ *priority: .*$/gm, ""), deps));
+    expect(exportOfficeYaml(plain)).not.toContain("priority");
+  });
+});

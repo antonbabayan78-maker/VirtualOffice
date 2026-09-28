@@ -143,6 +143,7 @@ describe("createDepartment", () => {
       size: DEFAULT_DEPARTMENT_SIZE,
       config: {},
       reviewPolicy: DEFAULT_REVIEW_POLICY,
+      priority: "normal",
       schedule: { kind: "always" },
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
@@ -274,5 +275,40 @@ describe("createDepartment", () => {
       expect(paths).toContain("color");
       expect(paths).toContain("position.y");
     }
+  });
+});
+
+describe("a department's standing priority", () => {
+  it("is normal unless the department says otherwise", () => {
+    expect(unwrap(createDepartment(base, [], deps)).priority).toBe("normal");
+  });
+
+  it("is taken from the department when it is given one", () => {
+    expect(unwrap(createDepartment({ ...base, priority: "urgent" }, [], deps)).priority).toBe(
+      "urgent",
+    );
+  });
+
+  it("refuses a priority that is not one, rather than quietly working at normal", () => {
+    const result = createDepartment({ ...base, priority: "asap" }, [], deps);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) expect(result.error[0]?.path).toBe("priority");
+  });
+
+  it("can be raised later, which is how a department goes into crunch", () => {
+    const department = unwrap(createDepartment(base, [], deps));
+    expect(unwrap(updateDepartment(department, { priority: "urgent" }, [])).priority).toBe(
+      "urgent",
+    );
+  });
+
+  it("stays as it was when a change does not mention it", () => {
+    const department = unwrap(createDepartment({ ...base, priority: "high" }, [], deps));
+    expect(unwrap(updateDepartment(department, { name: "Platform" }, [])).priority).toBe("high");
+  });
+
+  it("refuses a bad priority on a change too", () => {
+    const department = unwrap(createDepartment(base, [], deps));
+    expect(isErr(updateDepartment(department, { priority: "asap" }, []))).toBe(true);
   });
 });
