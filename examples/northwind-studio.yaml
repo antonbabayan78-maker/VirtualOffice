@@ -1,0 +1,125 @@
+# Northwind Studio: a small product studio that takes an idea to a release.
+#
+# Four departments, nine people, each department with someone in charge and its
+# own idea of what "reviewed" means — which is the point. A studio does not
+# review a deploy the way it reviews a wireframe.
+#
+# Work moves along the handoff connections: Product decides what to build,
+# Design draws it, Engineering builds it, Operations ships it. Escalation runs
+# back up the same spine, so a task nobody can finish reaches a person.
+version: 1
+office:
+  id: office-northwind
+  name: Northwind Studio
+  schedule: { kind: always }
+
+departments:
+  # A brief is not work until the head of product agrees it is the right work.
+  - id: dept-product
+    name: Product
+    color: "#8b5cf6"
+    position: { x: 0, y: 0 }
+    size: { width: 420, height: 260 }
+    reviewPolicy: { kind: manager, maxIterations: 2 }
+
+  - id: dept-design
+    name: Design
+    color: "#ec4899"
+    position: { x: 460, y: 0 }
+    size: { width: 420, height: 260 }
+    reviewPolicy: { kind: manager, maxIterations: 2 }
+
+  # Engineers review each other. The manager runs the department, not the diff.
+  - id: dept-engineering
+    name: Engineering
+    color: "#3b82f6"
+    position: { x: 0, y: 300 }
+    size: { width: 520, height: 320 }
+    reviewPolicy: { kind: peer, maxIterations: 3 }
+
+  # Nothing leaves this building on an agent's word: a person approves a deploy
+  # and a person approves money.
+  - id: dept-operations
+    name: Operations
+    color: "#f59e0b"
+    position: { x: 560, y: 300 }
+    size: { width: 380, height: 220 }
+    reviewPolicy: { kind: gate, gatedActions: [deploy, spend] }
+
+employees:
+  - id: emp-vera
+    department: dept-product
+    name: Vera
+    role: Head of product
+    color: "#8b5cf6"
+    llm: { provider: anthropic, model: claude-opus-5 }
+
+  - id: emp-ravi
+    department: dept-product
+    name: Ravi
+    role: Product analyst
+    color: "#8b5cf6"
+    supervisor: emp-vera
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+  - id: emp-iris
+    department: dept-design
+    name: Iris
+    role: Design lead
+    color: "#ec4899"
+    llm: { provider: anthropic, model: claude-opus-5 }
+
+  - id: emp-theo
+    department: dept-design
+    name: Theo
+    role: Product designer
+    color: "#ec4899"
+    supervisor: emp-iris
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+  - id: emp-grace
+    department: dept-engineering
+    name: Grace
+    role: Engineering manager
+    color: "#3b82f6"
+    llm: { provider: anthropic, model: claude-opus-5 }
+
+  - id: emp-ada
+    department: dept-engineering
+    name: Ada
+    role: Backend engineer
+    color: "#3b82f6"
+    supervisor: emp-grace
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+  - id: emp-linus
+    department: dept-engineering
+    name: Linus
+    role: Frontend engineer
+    color: "#3b82f6"
+    supervisor: emp-grace
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+  # Cheap and fast: a test run does not need the biggest model in the building.
+  - id: emp-kai
+    department: dept-engineering
+    name: Kai
+    role: QA engineer
+    color: "#3b82f6"
+    supervisor: emp-grace
+    llm: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+
+  - id: emp-nadia
+    department: dept-operations
+    name: Nadia
+    role: Operations manager
+    color: "#f59e0b"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+connections:
+  - { id: conn-product-design, from: dept-product, to: dept-design, kind: handoff }
+  - { id: conn-design-eng, from: dept-design, to: dept-engineering, kind: handoff }
+  - { id: conn-eng-ops, from: dept-engineering, to: dept-operations, kind: handoff }
+  - { id: conn-design-product, from: dept-design, to: dept-product, kind: escalates_to }
+  - { id: conn-eng-product, from: dept-engineering, to: dept-product, kind: escalates_to }
+  - { id: conn-ops-eng, from: dept-operations, to: dept-engineering, kind: escalates_to }

@@ -189,3 +189,130 @@ describe("runOffice", () => {
     expect(result.tasks[0]?.status).not.toBe("done");
   });
 });
+
+/** A department that will not let a deploy through without a person saying so. */
+const GATED_YAML = `
+version: 1
+office:
+  id: office-acme
+  name: Acme
+departments:
+  - id: dept-ops
+    name: Operations
+    color: "#aa3366"
+    position: { x: 0, y: 0 }
+    reviewPolicy: { kind: gate, gatedActions: [deploy] }
+employees:
+  - id: emp-nadia
+    department: dept-ops
+    name: Nadia
+    role: Operations engineer
+    color: "#aa3366"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+`;
+
+function gatedOffice() {
+  return unwrap(importOfficeYaml(GATED_YAML, deps));
+}
+
+function deployTask(): Task {
+  const config = gatedOffice();
+  const base = unwrap(
+    createTask(
+      {
+        officeId: config.office.id,
+        departmentId: config.departments[0]?.id ?? ("dept-ops" as never),
+        title: "Ship release 4.2",
+        assigneeId: config.employees[0]?.id ?? ("emp-nadia" as never),
+      },
+      { id: () => "task-deploy" as TaskId, now: () => new Date("2026-09-28T09:00:00.000Z") },
+    ),
+  );
+  // The work involves a deploy, which is what this department gates.
+  return { ...base, gatedActions: ["deploy"] };
+}
+
+describe("work that needs a person", () => {
+  it("stops and waits rather than shipping on the agent's word", async () => {
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+    });
+
+    expect(result.tasks[0]?.status).toBe("in_review");
+    expect(result.done).toBe(0);
+    expect(result.effects.some((effect) => effect.type === "request_approval")).toBe(true);
+  });
+
+  it("asks the owner about the task, and about what actually needs deciding", async () => {
+    const asked: { title: string; gates: readonly string[] }[] = [];
+    await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+      decide: (request) => {
+        asked.push({ title: request.task.title, gates: request.gates });
+        return null;
+      },
+    });
+
+    expect(asked[0]).toEqual({ title: "Ship release 4.2", gates: ["deploy"] });
+  });
+
+  it("finishes the work once the owner approves it", async () => {
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+      decide: () => ({ decision: "approved", decidedBy: "anton" }),
+    });
+
+    expect(result.tasks[0]?.status).toBe("done");
+    expect(result.done).toBe(1);
+  });
+
+  it("records who approved it, so the audit log names a person", async () => {
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+      decide: () => ({ decision: "approved", decidedBy: "anton" }),
+    });
+
+    const reasons = (result.tasks[0]?.history ?? []).map((event) => event.reason);
+    expect(reasons.some((reason) => (reason ?? "").includes("anton"))).toBe(true);
+  });
+
+  it("sends the work back when the owner says no", async () => {
+    let answers = 0;
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+      // Refused once, then allowed: the work has to come back round.
+      decide: () => {
+        answers += 1;
+        return answers === 1
+          ? { decision: "rejected", decidedBy: "anton", reason: "not on a Friday" }
+          : { decision: "approved", decidedBy: "anton" };
+      },
+    });
+
+    expect(answers).toBe(2);
+    expect(result.tasks[0]?.status).toBe("done");
+  });
+
+  it("stops asking when the owner is not answering, rather than looping", async () => {
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [deployTask()],
+      provider: agreeable(),
+      decide: () => null,
+      maxTicks: 10,
+    });
+
+    expect(result.tasks[0]?.status).toBe("in_review");
+    expect(result.ticks).toBeLessThanOrEqual(10);
+  });
+});

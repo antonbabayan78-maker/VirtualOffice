@@ -16,6 +16,7 @@
 import {
   transitionTask,
   type EmployeeId,
+  type GatedAction,
   type OfficeConfig,
   type Task,
   type TaskId,
@@ -52,7 +53,29 @@ export interface OfficeRunOptions {
   readonly now?: () => Date;
   /** Stops a run that never settles. */
   readonly maxTicks?: number;
+  /**
+   * Answers work that is waiting for a person. Without it a gated task simply
+   * waits, which is the honest headless behaviour: nobody is at the desk.
+   */
+  readonly decide?: GateDecider;
 }
+
+/** What a person is being asked to decide, and what they decided. */
+export interface GateRequest {
+  readonly task: Task;
+  /** The categories this task involves that the department gates. */
+  readonly gates: readonly GatedAction[];
+}
+
+export interface GateDecision {
+  readonly decision: "approved" | "rejected";
+  /** A person, not an employee: no agent may decide in the owner's place. */
+  readonly decidedBy: string;
+  readonly reason?: string;
+}
+
+/** Answers a waiting gate, or null to leave the work waiting. */
+export type GateDecider = (request: GateRequest) => GateDecision | null;
 
 export interface OfficeRunResult {
   readonly ticks: number;
@@ -181,6 +204,41 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     recurring: [],
   });
 
+  /** What this task is waiting on a person for; empty when it is not waiting. */
+  const waitingOn = (task: Task): readonly GatedAction[] => {
+    if (task.status !== "in_review") return [];
+    const policy = departments.get(task.departmentId)?.reviewPolicy;
+    if (policy?.kind !== "gate") return [];
+    // Recomputed rather than read back off an effect: an effect says what was
+    // asked once, not what is still outstanding after a rejection and a redo.
+    return policy.gatedActions.filter((gate) => task.gatedActions.includes(gate));
+  };
+
+  /** Puts every waiting task to the owner. True when any of them was answered. */
+  const answerGates = (): boolean => {
+    const decide = options.decide;
+    if (decide === undefined) return false;
+    let answered = false;
+    for (const task of [...tasks.values()]) {
+      const gates = waitingOn(task);
+      if (gates.length === 0) continue;
+      const decision = decide({ task, gates });
+      if (decision === null) continue;
+      dispatch(
+        task,
+        {
+          type: "gate_decided",
+          decision: decision.decision,
+          decidedBy: decision.decidedBy,
+          ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+        },
+        null,
+      );
+      answered = true;
+    }
+    return answered;
+  };
+
   const worker = new Worker({
     id: "vo-run",
     queue,
@@ -195,7 +253,10 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     ticks += 1;
     const pending = await queue.stats();
     // Quiet means nothing was queued, nothing ran, and nothing is waiting.
-    if (report.enqueued === 0 && report.processed === 0 && pending.pending === 0) break;
+    const quiet = report.enqueued === 0 && report.processed === 0 && pending.pending === 0;
+    // Quiet may only mean the office is waiting on a person. Ask, and carry on
+    // if somebody answered; an unanswered gate ends the run rather than spins.
+    if (quiet && !answerGates()) break;
   }
 
   const finished = [...tasks.values()];
