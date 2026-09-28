@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* React Flow's own styles, so every stylesheet the app uses enters through here. */
+@import "@xyflow/react/dist/style.css";
 
 /*
  * Design tokens. Every colour in the app comes from here, so a theme is one
@@ -15,6 +17,11 @@
   --color-accent: oklch(58% 0.19 264);
   --color-accent-ink: oklch(99% 0 0);
   --radius-panel: 0.75rem;
+
+  /* What an employee is doing, read off the head of the figure. */
+  --color-working: oklch(65% 0.19 145);
+  --color-waiting: oklch(72% 0.17 65);
+  --color-error: oklch(58% 0.22 27);
 }
 
 @layer base {
@@ -27,6 +34,10 @@
     --color-ink-muted: oklch(72% 0.015 265);
     --color-accent: oklch(70% 0.16 264);
     --color-accent-ink: oklch(18% 0.02 265);
+    /* Lifted for a dark canvas, where the daylight colours go muddy. */
+    --color-working: oklch(75% 0.19 145);
+    --color-waiting: oklch(80% 0.16 65);
+    --color-error: oklch(68% 0.2 27);
   }
 
   html,
@@ -44,5 +55,30 @@
       -apple-system,
       "Segoe UI",
       sans-serif;
+  }
+}
+
+/*
+ * The heartbeat of a busy office. Only the head fades, so the figure stays
+ * where it is and the eye is drawn to the colour rather than to movement.
+ */
+@keyframes vo-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.vo-pulse {
+  animation: vo-pulse 1.6s ease-in-out infinite;
+}
+
+/* Somebody who has asked for less movement still gets the colour. */
+@media (prefers-reduced-motion: reduce) {
+  .vo-pulse {
+    animation: none;
   }
 }

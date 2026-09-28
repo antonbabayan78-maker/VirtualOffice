@@ -1,0 +1,80 @@
+# The office the canvas opens with until there is an API to load a real one.
+version: 1
+office:
+  id: office-acme
+  name: Acme Robotics
+
+departments:
+  - id: dept-eng
+    name: Engineering
+    color: "#3b82f6"
+    position: { x: 0, y: 0 }
+    size: { width: 460, height: 300 }
+    reviewPolicy: { kind: manager, maxIterations: 3 }
+
+  - id: dept-design
+    name: Design
+    color: "#a855f7"
+    position: { x: 520, y: 0 }
+    size: { width: 380, height: 300 }
+    reviewPolicy: { kind: peer, maxIterations: 2 }
+
+  - id: dept-ops
+    name: Operations
+    color: "#f59e0b"
+    position: { x: 0, y: 360 }
+    size: { width: 900, height: 240 }
+    reviewPolicy: { kind: gate, gatedActions: [deploy, delete] }
+
+employees:
+  - {
+      id: emp-grace,
+      department: dept-eng,
+      name: Grace,
+      role: Engineering manager,
+      color: "#3b82f6",
+      llm: { provider: anthropic, model: claude-opus-5 },
+    }
+  - {
+      id: emp-ada,
+      department: dept-eng,
+      name: Ada,
+      role: Backend engineer,
+      color: "#3b82f6",
+      supervisor: emp-grace,
+      llm: { provider: anthropic, model: claude-sonnet-5 },
+    }
+  - {
+      id: emp-linus,
+      department: dept-eng,
+      name: Linus,
+      role: Platform engineer,
+      color: "#3b82f6",
+      supervisor: emp-grace,
+      llm: { provider: anthropic, model: claude-sonnet-5 },
+    }
+  - {
+      id: emp-charles,
+      department: dept-design,
+      name: Charles,
+      role: Product designer,
+      color: "#a855f7",
+      llm: { provider: anthropic, model: claude-sonnet-5 },
+    }
+  - {
+      id: emp-ray,
+      department: dept-design,
+      name: Ray,
+      role: Design engineer,
+      color: "#a855f7",
+      supervisor: emp-charles,
+      llm: { provider: anthropic, model: claude-sonnet-5 },
+    }
+  - {
+      id: emp-mal,
+      department: dept-ops,
+      name: Mal,
+      role: Site reliability,
+      color: "#f59e0b",
+      llm: { provider: anthropic, model: claude-sonnet-5 },
+    }
