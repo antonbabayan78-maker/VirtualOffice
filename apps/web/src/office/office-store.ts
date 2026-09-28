@@ -15,6 +15,8 @@ import {
   DEFAULT_DEPARTMENT_SIZE,
   MIN_DEPARTMENT_SIZE,
   createDepartment,
+  createEmployee,
+  err,
   isErr,
   type Department,
   type DepartmentId,
@@ -48,6 +50,13 @@ export interface AddDepartmentInput {
   readonly position: Position;
 }
 
+export interface AddEmployeeInput {
+  readonly name: string;
+  readonly role: string;
+  readonly color: string;
+  readonly departmentId: DepartmentId;
+}
+
 export interface OfficeStoreState {
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
@@ -65,6 +74,10 @@ export interface OfficeStoreState {
   moveDepartment(id: DepartmentId, position: Position): void;
   resizeDepartment(id: DepartmentId, size: Size): void;
   addDepartment(input: AddDepartmentInput): Result<Department>;
+  addEmployee(input: AddEmployeeInput): Result<Employee>;
+  /** Something the canvas should say out loud, such as why a drop was refused. */
+  readonly notice: string | null;
+  setNotice(notice: string | null): void;
   select(id: DepartmentId | null): void;
   setSnapToGrid(on: boolean): void;
 }
@@ -75,7 +88,8 @@ export const DEFAULT_GRID_SIZE = 20;
 
 export interface OfficeStoreDeps {
   readonly storage: LayoutStorage;
-  readonly id: () => DepartmentId;
+  /** Ids for anything the canvas creates: departments and people alike. */
+  readonly id: () => string;
   readonly now: () => Date;
   readonly officeId?: OfficeId;
   readonly gridSize?: number;
@@ -142,6 +156,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       departments: [],
       employees: [],
       activity: {},
+      notice: null,
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
 
@@ -181,7 +196,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           },
           // The existing departments, so the factory can refuse a duplicate name.
           departments,
-          { id: deps.id, now: deps.now },
+          { id: () => deps.id() as DepartmentId, now: deps.now },
         );
         if (isErr(created)) return created;
         const next = [...departments, created.value];
@@ -194,6 +209,32 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
 
       setActivity: (id, state) => {
         set({ activity: { ...get().activity, [id]: state } });
+      },
+
+      addEmployee: (input) => {
+        const { departments, employees } = get();
+        const department = departments.find((candidate) => candidate.id === input.departmentId);
+        if (department === undefined) {
+          return err([{ path: "departmentId", message: "that department is not in this office" }]);
+        }
+        const created = createEmployee(
+          {
+            name: input.name,
+            role: input.role,
+            color: input.color,
+            // A sensible model to start with; the employee drawer changes it.
+            llm: { provider: "anthropic", model: "claude-sonnet-5" },
+          },
+          { department: { id: department.id, officeId: department.officeId }, supervisor: null },
+          { id: () => deps.id() as EmployeeId, now: deps.now },
+        );
+        if (isErr(created)) return created;
+        set({ employees: [...employees, created.value] });
+        return created;
+      },
+
+      setNotice: (notice) => {
+        set({ notice });
       },
 
       select: (id) => {

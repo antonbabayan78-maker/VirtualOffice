@@ -51,7 +51,7 @@ function open(
   storage = memoryStorage(initial);
   store = createOfficeStore({
     storage: storage.port,
-    id: () => "dept-new" as DepartmentId,
+    id: () => "dept-new",
     now: () => new Date("2026-09-28T10:00:00Z"),
   });
   store.getState().load(departments, employees);
