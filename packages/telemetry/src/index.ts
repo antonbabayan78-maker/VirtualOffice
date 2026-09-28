@@ -4,3 +4,5 @@
  * Usage events, aggregation per LLM / employee / department / task, budgets, alerts, exporters.
  */
 export const PACKAGE_NAME = "@vo/telemetry" as const;
+
+export * from "./usage/usage.js";
