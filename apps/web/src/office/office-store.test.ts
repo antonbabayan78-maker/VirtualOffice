@@ -3,7 +3,10 @@ import {
   DEFAULT_DEPARTMENT_SIZE,
   MIN_DEPARTMENT_SIZE,
   createDepartment,
+  createEmployee,
   unwrap,
+  type Connection,
+  type ConnectionId,
   type Department,
   type DepartmentId,
   type Employee,
@@ -26,6 +29,38 @@ function department(name: string, x: number, y: number): Department {
 
 const eng = department("Engineering", 0, 0);
 const sales = department("Sales", 600, 0);
+
+const connection = (from: Department, to: Department, kind = "handoff"): Connection => ({
+  id: `conn-${from.name}-${to.name}` as ConnectionId,
+  officeId,
+  fromId: from.id,
+  toId: to.id,
+  kind: kind as Connection["kind"],
+  rules: {},
+  createdAt: new Date("2026-09-28T09:00:00Z"),
+});
+const engToSales = connection(eng, sales);
+const salesToEng = connection(sales, eng);
+
+function staff(name: string, department: Department): Employee {
+  return unwrap(
+    createEmployee(
+      {
+        name,
+        role: "Engineer",
+        color: "#00aa66",
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
+      { department: { id: department.id, officeId }, supervisor: null },
+      {
+        id: () => `emp-${name.toLowerCase()}` as EmployeeId,
+        now: () => new Date("2026-09-28T09:00:00Z"),
+      },
+    ),
+  );
+}
+const ada = staff("Ada", eng);
+const grace = staff("Grace", eng);
 
 function memoryStorage(initial: StoredLayout | null = null) {
   let saved = initial;
@@ -237,5 +272,126 @@ describe("remembering the layout", () => {
     });
     expect(store.getState().departments).toHaveLength(1);
     expect(store.getState().departments[0]?.name).toBe("Engineering");
+  });
+});
+
+describe("the connections between departments", () => {
+  it("starts with none, since an office file may have none", () => {
+    expect(store.getState().connections).toEqual([]);
+  });
+
+  it("holds what the office was loaded with", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    expect(store.getState().connections).toEqual([engToSales]);
+  });
+
+  it("draws them as arrows, one per relationship", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    expect(store.getState().links).toHaveLength(1);
+    expect(store.getState().links[0]).toMatchObject({ from: eng.id, to: sales.id, twoWay: false });
+  });
+
+  it("redraws when a connection arrives from somewhere else", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    store.getState().putConnection(salesToEng);
+    expect(store.getState().links).toHaveLength(1);
+    expect(store.getState().links[0]?.twoWay).toBe(true);
+  });
+
+  it("replaces a connection rather than listing it twice", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    store.getState().putConnection({ ...engToSales, kind: "reviews" });
+    expect(store.getState().connections).toHaveLength(1);
+    expect(store.getState().connections[0]?.kind).toBe("reviews");
+  });
+
+  it("takes an arrow away when its connection goes", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    store.getState().removeConnection(engToSales.id);
+    expect(store.getState().links).toEqual([]);
+  });
+
+  it("forgets connections to a department that is no longer there", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    store.getState().load([eng], [], [], [engToSales]);
+    // An arrow to nowhere cannot be drawn, whatever the office still holds.
+    expect(store.getState().links).toEqual([]);
+  });
+});
+
+describe("closing a department down", () => {
+  it("removes an empty one", () => {
+    store.getState().load([eng, sales], []);
+    const result = store.getState().removeDepartment(sales.id);
+    expect(result.ok).toBe(true);
+    expect(store.getState().departments.map((d) => d.id)).toEqual([eng.id]);
+  });
+
+  it("will not remove one that still has people in it", () => {
+    store.getState().load([eng, sales], [ada]);
+    const result = store.getState().removeDepartment(eng.id);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problems[0]?.message).toMatch(/1 person|people|employee/i);
+    expect(store.getState().departments).toHaveLength(2);
+  });
+
+  it("says how many people are in the way, so the message is actionable", () => {
+    store.getState().load([eng, sales], [ada, grace]);
+    const result = store.getState().removeDepartment(eng.id);
+    if (!result.ok) expect(result.problems[0]?.message).toMatch(/2/);
+  });
+
+  it("takes its connections with it, rather than leaving arrows to nowhere", () => {
+    store.getState().load([eng, sales], [], [], [engToSales]);
+    store.getState().removeDepartment(sales.id);
+    expect(store.getState().connections).toEqual([]);
+  });
+
+  it("clears the selection when the selected department goes", () => {
+    store.getState().load([eng, sales], []);
+    store.getState().select(sales.id);
+    store.getState().removeDepartment(sales.id);
+    expect(store.getState().selectedId).toBeNull();
+  });
+
+  it("refuses a department that is not there rather than pretending it worked", () => {
+    store.getState().load([eng], []);
+    expect(store.getState().removeDepartment(sales.id).ok).toBe(false);
+  });
+});
+
+describe("changes that change nothing", () => {
+  it("leaves the departments alone when a move lands where it already was", () => {
+    open([eng, sales]);
+    const before = store.getState().departments;
+    store.getState().moveDepartment(eng.id, eng.position);
+
+    // Same array, not an equal one: a new array re-renders the canvas, which
+    // re-measures, which reports another change — a loop that never settles.
+    expect(store.getState().departments).toBe(before);
+  });
+
+  it("leaves them alone when a resize reports the size they already are", () => {
+    open([eng, sales]);
+    const before = store.getState().departments;
+    store.getState().resizeDepartment(eng.id, eng.size);
+    expect(store.getState().departments).toBe(before);
+  });
+
+  it("still applies a move that actually moves something", () => {
+    open([eng, sales]);
+    store.getState().moveDepartment(eng.id, { x: 120, y: 240 });
+    expect(store.getState().departments.find((d) => d.id === eng.id)?.position).toEqual({
+      x: 120,
+      y: 240,
+    });
+  });
+
+  it("does not write the layout out again when nothing moved", () => {
+    open([eng, sales]);
+    const written = storage.saved();
+    store.getState().moveDepartment(eng.id, eng.position);
+    expect(storage.saved()).toBe(written);
   });
 });

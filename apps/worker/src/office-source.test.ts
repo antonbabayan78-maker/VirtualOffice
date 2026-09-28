@@ -41,6 +41,7 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
           departments: [department as never],
           employees: [ada as never],
           tasks: [task as never],
+          connections: [],
         },
       }),
     getDepartment: () => Promise.reject(new Error("not used here")),

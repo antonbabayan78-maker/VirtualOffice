@@ -47,6 +47,7 @@ describe("loading an office", () => {
       ),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -54,6 +55,40 @@ describe("loading an office", () => {
     if (result.ok) {
       expect(result.value.office.name).toBe("Acme");
       expect(result.value.departments[0]?.name).toBe("Engineering");
+    }
+  });
+
+  it("brings back how the departments are connected, so the canvas can draw it", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1`, () =>
+        HttpResponse.json({ id: "office-1", name: "Acme" }),
+      ),
+      http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: "conn-1",
+              officeId: "office-1",
+              fromId: "dept-eng",
+              toId: "dept-sales",
+              kind: "handoff",
+              rules: {},
+              createdAt: "2026-09-28T09:00:00.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await client().loadOffice("office-1");
+    if (result.ok) {
+      expect(result.value.connections[0]).toMatchObject({ fromId: "dept-eng", kind: "handoff" });
+      expect(result.value.connections[0]?.createdAt).toBeInstanceOf(Date);
+    } else {
+      throw new Error("expected the office to load");
     }
   });
 
@@ -67,6 +102,7 @@ describe("loading an office", () => {
       ),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -84,6 +120,7 @@ describe("loading an office", () => {
       http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
     );
 
     await client().loadOffice("office-1");

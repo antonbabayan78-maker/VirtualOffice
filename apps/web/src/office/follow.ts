@@ -96,7 +96,12 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     }
     store
       .getState()
-      .load(snapshot.value.departments, snapshot.value.employees, snapshot.value.tasks);
+      .load(
+        snapshot.value.departments,
+        snapshot.value.employees,
+        snapshot.value.tasks,
+        snapshot.value.connections,
+      );
   };
 
   return { apply, reload };

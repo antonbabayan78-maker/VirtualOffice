@@ -5,8 +5,8 @@
  * full strength for its edge and title bar, so a dozen departments stay
  * distinguishable without turning the canvas into a paint chart.
  */
-import { NodeResizer, type NodeProps, type Node } from "@xyflow/react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
+import { Handle, NodeResizer, Position, type NodeProps, type Node } from "@xyflow/react";
 import { MIN_DEPARTMENT_SIZE } from "@vo/core";
 import { describeActivity, labelActivity } from "../office/activity.js";
 import { EmployeeAvatar, type ActivityState } from "./EmployeeAvatar.js";
@@ -28,6 +28,34 @@ export type DepartmentNodeType = Node<DepartmentNodeData, "department">;
 export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>): ReactNode {
   return (
     <>
+      {/*
+        Arrows need somewhere to land, on every side: a department below another
+        should be reached from underneath, not by a line that loops around the
+        building. Each side carries both a source and a target, and the edge
+        names the pair it wants — React Flow silently drops an edge it cannot
+        anchor, so nothing is left to chance.
+      */}
+      {[Position.Top, Position.Right, Position.Bottom, Position.Left].map((side) => (
+        <Fragment key={side}>
+          <Handle
+            type="target"
+            id={`${side}-in`}
+            position={side}
+            className="!size-2 !border-border !bg-surface !opacity-0"
+          />
+          <Handle
+            type="source"
+            id={`${side}-out`}
+            position={side}
+            className="!size-2 !border-border !bg-surface !opacity-0"
+          />
+        </Fragment>
+      ))}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!size-2 !border-border !bg-surface !opacity-0"
+      />
       <NodeResizer
         isVisible={selected}
         minWidth={MIN_DEPARTMENT_SIZE.width}
