@@ -27,6 +27,9 @@ export interface OfficeSnapshot {
 
 export interface ApiClient {
   loadOffice(officeId: string): Promise<ApiResult<OfficeSnapshot>>;
+  /** One entity, which is what a live canvas fetches when told it changed. */
+  getDepartment(id: string): Promise<ApiResult<Department>>;
+  getEmployee(id: string): Promise<ApiResult<Employee>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -181,6 +184,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         },
       };
     },
+
+    getDepartment: async (id) => interpret(await call(`/departments/${id}`), reviveDepartment),
+    getEmployee: async (id) => interpret(await call(`/employees/${id}`), reviveEmployee),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),

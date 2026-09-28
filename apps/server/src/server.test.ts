@@ -243,6 +243,19 @@ describe("employees", () => {
     expect(response.json()).toMatchObject({ role: "Staff engineer" });
   });
 
+  it("gives one back on its own, which is what a live canvas refetches", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const id = (await hire(officeId, departmentId)).json<{ id: string }>().id;
+    const response = await get(`/employees/${id}`);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id, name: "Ada" });
+  });
+
+  it("says plainly when there is no such employee", async () => {
+    expect((await get("/employees/emp-nobody")).statusCode).toBe(404);
+  });
+
   it("will not make somebody their own supervisor", async () => {
     const officeId = await anOffice();
     const departmentId = await aDepartment(officeId);
@@ -431,5 +444,65 @@ describe("two people editing the same thing", () => {
       payload: { role: "Principal engineer" },
     });
     expect(response.statusCode).toBe(409);
+  });
+});
+
+describe("being called from a canvas in a browser", () => {
+  const withOrigins = async (origins: string[]) => {
+    const app = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      allowedOrigins: origins,
+    });
+    await app.ready();
+    return app;
+  };
+
+  it("lets an origin it was told about call it", async () => {
+    const app = await withOrigins(["http://localhost:5173"]);
+    const response = await app.inject({
+      method: "GET",
+      url: "/offices",
+      headers: { ...auth, origin: "http://localhost:5173" },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    await app.close();
+  });
+
+  it("does not vouch for an origin it was not told about", async () => {
+    const app = await withOrigins(["http://localhost:5173"]);
+    const response = await app.inject({
+      method: "GET",
+      url: "/offices",
+      headers: { ...auth, origin: "http://somewhere.else" },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("answers the browser's question before a save", async () => {
+    const app = await withOrigins(["http://localhost:5173"]);
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/departments/dept-eng",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "PATCH",
+        "access-control-request-headers": "authorization,x-vo-since-offset",
+      },
+    });
+    expect(response.statusCode).toBeLessThan(300);
+    expect(response.headers["access-control-allow-headers"]).toMatch(/x-vo-since-offset/);
+    await app.close();
+  });
+
+  it("says nothing about origins when none were allowed", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/offices",
+      headers: { ...auth, origin: "http://localhost:5173" },
+    });
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
