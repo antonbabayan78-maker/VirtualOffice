@@ -32,7 +32,9 @@ const snapshot = (taskCount: number, dueCount = taskCount): SchedulerSnapshot =>
     // Only the first `dueCount` are the agent's move; the rest are waiting on a review.
     status: i < dueCount ? ("assigned" as const) : ("in_review" as const),
     priority: "normal" as const,
-    lastEventAt: 1_700_000_000_000,
+    // No named reviewer: those tasks are waiting on a person, not on an agent.
+    reviewerIds: [],
+    revision: 1,
   })),
   recurring: [],
 });

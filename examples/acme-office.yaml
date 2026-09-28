@@ -1,0 +1,30 @@
+# A two-person engineering office. Ada writes, her manager reviews.
+version: 1
+office:
+  id: office-acme
+  name: Acme Robotics
+  schedule: { kind: always }
+
+departments:
+  - id: dept-eng
+    name: Engineering
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    # Work is not done until Ada's manager has approved it, up to three rounds.
+    reviewPolicy: { kind: manager, maxIterations: 3 }
+
+employees:
+  - id: emp-boss
+    department: dept-eng
+    name: Grace
+    role: Engineering manager
+    color: "#ff8800"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+
+  - id: emp-ada
+    department: dept-eng
+    name: Ada
+    role: Backend engineer
+    color: "#00aa66"
+    supervisor: emp-boss
+    llm: { provider: anthropic, model: claude-sonnet-5 }
