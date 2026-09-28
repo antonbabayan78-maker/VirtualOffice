@@ -234,6 +234,9 @@ importers:
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vo/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@xyflow/react':
         specifier: ^12.12.0
         version: 12.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

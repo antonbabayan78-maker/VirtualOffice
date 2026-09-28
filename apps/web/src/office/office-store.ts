@@ -18,12 +18,14 @@ import {
   createEmployee,
   err,
   isErr,
+  updateEmployee,
   type Department,
   type DepartmentId,
   type Employee,
   type EmployeeId,
   type OfficeId,
   type Result,
+  type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
@@ -79,6 +81,9 @@ export interface OfficeStoreState {
   readonly notice: string | null;
   setNotice(notice: string | null): void;
   select(id: DepartmentId | null): void;
+  readonly selectedEmployeeId: EmployeeId | null;
+  selectEmployee(id: EmployeeId | null): void;
+  updateEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Result<Employee>;
   setSnapToGrid(on: boolean): void;
 }
 
@@ -157,6 +162,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       employees: [],
       activity: {},
       notice: null,
+      selectedEmployeeId: null,
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
 
@@ -238,7 +244,42 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       },
 
       select: (id) => {
-        set({ selectedId: id });
+        // One thing is being configured at a time, so a department selection
+        // puts any employee selection aside and the other way round.
+        set({ selectedId: id, selectedEmployeeId: null });
+      },
+
+      selectEmployee: (id) => {
+        set({ selectedEmployeeId: id, selectedId: null });
+      },
+
+      updateEmployee: (id, changes) => {
+        const { employees } = get();
+        const employee = employees.find((candidate) => candidate.id === id);
+        if (employee === undefined) {
+          return err([{ path: "id", message: "that employee is not in this office" }]);
+        }
+        const supervisor =
+          changes.supervisorId === undefined || changes.supervisorId === null
+            ? null
+            : (employees.find((candidate) => candidate.id === changes.supervisorId) ?? null);
+        const updated = updateEmployee(employee, changes, {
+          supervisor:
+            supervisor === null
+              ? null
+              : {
+                  id: supervisor.id,
+                  officeId: supervisor.officeId,
+                  status: supervisor.status,
+                },
+        });
+        if (isErr(updated)) return updated;
+        set({
+          employees: employees.map((candidate) =>
+            candidate.id === id ? updated.value : candidate,
+          ),
+        });
+        return updated;
       },
 
       setSnapToGrid: (on) => {

@@ -208,6 +208,109 @@ export function createEmployee(
   });
 }
 
+/**
+ * What may be changed about an employee after they are hired. Absent means
+ * "leave it alone", which is different from null — null clears a field that can
+ * be empty, such as a supervisor or their own working hours.
+ */
+export interface UpdateEmployeeInput {
+  readonly name?: string;
+  readonly role?: string;
+  readonly avatar?: string | null;
+  readonly color?: string;
+  readonly llm?: unknown;
+  readonly skillIds?: readonly string[];
+  readonly toolGrants?: readonly ToolGrant[];
+  readonly schedule?: unknown;
+  readonly supervisorId?: string | null;
+  readonly workspaceRef?: string | null;
+}
+
+export interface UpdateEmployeeContext {
+  /** The supervisor being appointed, resolved by the caller. */
+  readonly supervisor: CreateEmployeeContext["supervisor"];
+}
+
+/**
+ * Applies changes to an employee, validating them exactly as hiring does.
+ *
+ * Who they are and where they work do not change here: id, office, department,
+ * when they joined, and their employment status all carry over. In particular a
+ * paused employee stays paused — editing somebody's job title is not a reason
+ * to put them back to work, which is what re-running createEmployee would do.
+ */
+export function updateEmployee(
+  employee: Employee,
+  changes: UpdateEmployeeInput,
+  ctx: UpdateEmployeeContext,
+): Result<Employee> {
+  const errors: ValidationError[] = [];
+
+  const name = changes.name === undefined ? ok(employee.name) : validateText(changes.name, "name");
+  if (!name.ok) errors.push(...name.error);
+  const role = changes.role === undefined ? ok(employee.role) : validateText(changes.role, "role");
+  if (!role.ok) errors.push(...role.error);
+  const color = changes.color === undefined ? ok(employee.color) : normalizeHexColor(changes.color);
+  if (!color.ok) errors.push(...color.error);
+
+  const llm = changes.llm === undefined ? ok(employee.llm) : parseLlmConfig(changes.llm);
+  if (!llm.ok) errors.push(...prefixErrors("llm", llm.error));
+
+  const skillIds =
+    changes.skillIds === undefined ? ok(employee.skillIds) : validateSkillIds(changes.skillIds);
+  if (!skillIds.ok) errors.push(...skillIds.error);
+  const toolGrants =
+    changes.toolGrants === undefined
+      ? ok(employee.toolGrants)
+      : validateToolGrants(changes.toolGrants);
+  if (!toolGrants.ok) errors.push(...toolGrants.error);
+
+  let schedule: Schedule | null = employee.schedule;
+  if (changes.schedule === null) schedule = null;
+  else if (changes.schedule !== undefined) {
+    const parsed = parseSchedule(changes.schedule);
+    if (parsed.ok) schedule = parsed.value;
+    else errors.push(...prefixErrors("schedule", parsed.error));
+  }
+
+  let supervisorId: EmployeeId | null = employee.supervisorId;
+  if (changes.supervisorId === null) supervisorId = null;
+  else if (changes.supervisorId !== undefined) {
+    const validated = validateSupervisor(changes.supervisorId, employee.id, {
+      department: { id: employee.departmentId, officeId: employee.officeId },
+      supervisor: ctx.supervisor,
+    });
+    if (validated.ok) supervisorId = validated.value;
+    else errors.push(...validated.error);
+  }
+
+  if (
+    errors.length > 0 ||
+    !name.ok ||
+    !role.ok ||
+    !color.ok ||
+    !llm.ok ||
+    !skillIds.ok ||
+    !toolGrants.ok
+  ) {
+    return err(errors);
+  }
+
+  return ok({
+    ...employee,
+    name: name.value,
+    role: role.value,
+    avatar: changes.avatar === undefined ? employee.avatar : changes.avatar,
+    color: color.value,
+    llm: llm.value,
+    skillIds: skillIds.value,
+    toolGrants: toolGrants.value,
+    schedule,
+    supervisorId,
+    workspaceRef: changes.workspaceRef === undefined ? employee.workspaceRef : changes.workspaceRef,
+  });
+}
+
 export function transitionEmployee(
   employee: Employee,
   to: EmployeeStatus,
