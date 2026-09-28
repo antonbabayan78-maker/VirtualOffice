@@ -23,7 +23,10 @@ https://app.notion.com/p/3e2be6acb4cf8162a89ade8a0d48085c (database "Virtual Off
 - `packages/storage` repository interfaces and database adapters.
 - `packages/telemetry` usage events, rollups, budgets.
 - `packages/notifications` notification channels.
-- `apps/server` Fastify API + WebSocket. `apps/cli` the `vo` command. `apps/web` arrives in P2.
+- `apps/server` Fastify API + WebSocket. `apps/cli` the `vo` command (`vo run office.yaml`).
+- `apps/worker` the deployable worker: leader-elected scheduler tick plus job processing.
+- `apps/web` the office canvas: Vite, React, Tailwind v4, react-router. Browser code only;
+  it uses `moduleResolution: bundler`, so imports there carry no `.js` suffix.
 - `tooling` repo-level conformance tests (workspace shape, portability lint).
 
 ## Commands
