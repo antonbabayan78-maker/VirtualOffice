@@ -66,6 +66,7 @@ const EXPECTED_PACKAGES = [
   "packages/storage",
   "packages/telemetry",
   "packages/notifications",
+  "packages/api-client",
   "apps/server",
   "apps/cli",
   "apps/worker",

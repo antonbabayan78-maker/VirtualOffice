@@ -6,22 +6,7 @@
  * accounting adds up, without spending anything. Useful before a real run, and
  * the only way to try an office with no key to hand.
  */
-import { FakeLlmProvider, createAnthropicProvider, toolCall, type LlmProvider } from "@vo/llm";
-
-/** Answers every call the run loop can make, always favourably. */
-export function rehearsalProvider(): LlmProvider {
-  return new FakeLlmProvider({
-    // The office prices its models as anthropic ones, so answer as one.
-    id: "anthropic",
-    handler: (request) => {
-      const tools = (request.tools ?? []).map((tool) => tool.name);
-      if (tools.includes("review_verdict")) {
-        return toolCall("review_verdict", { approved: true, reason: "rehearsal: approved" });
-      }
-      return toolCall("submit_work", { summary: "rehearsal: work submitted" });
-    },
-  });
-}
+import { createAnthropicProvider, rehearsalProvider, type LlmProvider } from "@vo/llm";
 
 export interface RunProviderOptions {
   readonly dryRun: boolean;

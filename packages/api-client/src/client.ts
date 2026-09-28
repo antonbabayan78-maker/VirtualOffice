@@ -32,6 +32,13 @@ export interface ApiClient {
   getDepartment(id: string): Promise<ApiResult<Department>>;
   getEmployee(id: string): Promise<ApiResult<Employee>>;
   getTask(id: string): Promise<ApiResult<Task>>;
+  /**
+   * Hands the office something that happened to a task and gets back where the
+   * task ended up. A worker moves tasks this way rather than writing to storage
+   * itself, so the office stays the only writer and everyone watching it sees
+   * the move.
+   */
+  postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -203,6 +210,12 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     getDepartment: async (id) => interpret(await call(`/departments/${id}`), reviveDepartment),
     getEmployee: async (id) => interpret(await call(`/employees/${id}`), reviveEmployee),
     getTask: async (id) => interpret(await call(`/tasks/${id}`), reviveTask),
+
+    postTaskEvent: async (taskId, event) =>
+      interpret(
+        await call(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify(event) }),
+        reviveTask,
+      ),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),

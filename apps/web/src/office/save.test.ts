@@ -6,7 +6,7 @@ import {
   type DepartmentId,
   type OfficeId,
 } from "@vo/core";
-import type { ApiClient, ApiResult } from "../api/client.js";
+import type { ApiClient, ApiResult } from "@vo/api-client";
 import { createOfficeStore, type OfficeStore } from "./office-store.js";
 
 const officeId = "office-acme" as OfficeId;
@@ -44,6 +44,7 @@ function scriptedApi(): {
       });
     },
     patchEmployee: () => Promise.reject(new Error("not used here")),
+    postTaskEvent: () => Promise.reject(new Error("not used here")),
   };
 
   return {
