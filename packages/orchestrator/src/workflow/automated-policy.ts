@@ -15,6 +15,7 @@
  * `check_reported` event, which keeps the engine pure and testable.
  */
 import type { Result, Task } from "@vo/core";
+import { escalateTask } from "../escalation/escalation.js";
 import { approveReview, rejectPolicyEvent, requestChangesOrEscalate } from "./review-common.js";
 import {
   applyTransition,
@@ -99,24 +100,18 @@ function decide(
         context,
         summary.length > 0 ? summary : `check "${checkId}" failed without output`,
       );
-    case "errored": {
-      const reason = `check "${checkId}" could not run: ${summary.length > 0 ? summary : "no output"}`;
-      return applyTransition(
+    case "errored":
+      // Not the assignee's fault, so it goes up the office rather than back.
+      return escalateTask(
         task,
-        "escalated",
+        {
+          kind: "check_error",
+          checkId,
+          detail: summary.length > 0 ? summary : "no output",
+        },
         event,
         context,
-        [
-          { type: "escalate", reason },
-          {
-            type: "notify",
-            audience: "owner",
-            message: `task "${task.title}" needs a human: ${reason}`,
-          },
-        ],
-        reason,
       );
-    }
   }
 }
 

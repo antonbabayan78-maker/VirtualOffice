@@ -14,6 +14,7 @@ import {
   type TaskStatus,
 } from "@vo/core";
 import type { CheckReport } from "./check-runner.js";
+import type { EscalationGraph, EscalationTarget } from "../escalation/escalation.js";
 
 /** A colleague the peer policy may pick as reviewer, resolved by the caller from storage. */
 export interface PeerCandidate {
@@ -33,6 +34,8 @@ export interface WorkflowContext {
   readonly peers?: readonly PeerCandidate[];
   /** Skills the work needs, used to rank peer reviewers. */
   readonly reviewSkills?: readonly string[];
+  /** Who work escalates to. Absent means everything escalates to the owner. */
+  readonly escalationGraph?: EscalationGraph;
 }
 
 export type WorkflowEvent =
@@ -78,7 +81,7 @@ export type WorkflowEffect =
       readonly audience: "supervisor" | "owner" | "assignee" | "reviewer";
       readonly message: string;
     }
-  | { readonly type: "escalate"; readonly reason: string }
+  | { readonly type: "escalate"; readonly reason: string; readonly to: EscalationTarget }
   /** Ask the caller to run a named check and dispatch a "check_reported" event. */
   | { readonly type: "run_check"; readonly checkId: string }
   /** Put the task in the owner's approvals inbox and wait for a "gate_decided" event. */

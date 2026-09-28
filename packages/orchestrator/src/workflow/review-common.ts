@@ -4,6 +4,7 @@
  * path and escalation cap are the same, so they live here once.
  */
 import type { EmployeeId, Result, Task } from "@vo/core";
+import { escalateTask } from "../escalation/escalation.js";
 import {
   applyTransition,
   workflowError,
@@ -153,21 +154,11 @@ export function requestChangesOrEscalate(
   const maxIterations = context.policy.maxIterations;
 
   if (reviewRounds(task) + 1 > maxIterations) {
-    const escalation = `escalated after ${String(maxIterations)} review rounds without approval`;
-    return applyTransition(
+    return escalateTask(
       task,
-      "escalated",
+      { kind: "review_rounds", rounds: reviewRounds(task) + 1, limit: maxIterations },
       event,
       context,
-      [
-        { type: "escalate", reason: escalation },
-        {
-          type: "notify",
-          audience: "owner",
-          message: `task "${task.title}" escalated: ${escalation}`,
-        },
-      ],
-      escalation,
     );
   }
 
