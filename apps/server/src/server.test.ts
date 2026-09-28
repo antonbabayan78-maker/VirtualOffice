@@ -459,6 +459,46 @@ describe("being called from a canvas in a browser", () => {
     return app;
   };
 
+  /** What a browser asks before it is willing to send a change. */
+  const preflight = async (method: string) => {
+    const app = await withOrigins(["http://localhost:5173"]);
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/departments/dept-1",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": method,
+        "access-control-request-headers": "authorization,content-type,x-vo-since-offset",
+      },
+    });
+    await app.close();
+    return response;
+  };
+
+  it("lets a browser send a change, not only read", async () => {
+    // Every drawer saves with PATCH. Allowed methods default to GET/HEAD/POST,
+    // so without this a browser is refused before the request is even sent —
+    // and no test that injects a request would ever notice.
+    const allowed = (await preflight("PATCH")).headers["access-control-allow-methods"];
+    expect(String(allowed)).toContain("PATCH");
+  });
+
+  it("lets a browser delete, since the canvas can close a department down", async () => {
+    const allowed = (await preflight("DELETE")).headers["access-control-allow-methods"];
+    expect(String(allowed)).toContain("DELETE");
+  });
+
+  it("still lets a browser read and create", async () => {
+    const allowed = String((await preflight("POST")).headers["access-control-allow-methods"]);
+    expect(allowed).toContain("GET");
+    expect(allowed).toContain("POST");
+  });
+
+  it("accepts the header the canvas uses to say what it has already seen", async () => {
+    const allowed = (await preflight("PATCH")).headers["access-control-allow-headers"];
+    expect(String(allowed)).toContain("x-vo-since-offset");
+  });
+
   it("lets an origin it was told about call it", async () => {
     const app = await withOrigins(["http://localhost:5173"]);
     const response = await app.inject({
@@ -593,5 +633,110 @@ describe("moving a task along", () => {
     const response = await get(`/tasks/${taskId}`);
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ id: taskId, title: "Write the parser" });
+  });
+});
+
+describe("standing priority over the wire", () => {
+  it("takes an office's priority when it is created", async () => {
+    const created = await post("/offices", { name: "Acme", priority: "high" });
+    expect(created.json<{ priority: string }>().priority).toBe("high");
+  });
+
+  it("gives an office that says nothing the ordinary priority", async () => {
+    const created = await post("/offices", { name: "Acme" });
+    expect(created.json<{ priority: string }>().priority).toBe("normal");
+  });
+
+  it("refuses an office priority that is not one", async () => {
+    const created = await post("/offices", { name: "Acme", priority: "asap" });
+    expect(created.statusCode).toBe(400);
+  });
+
+  it("changes an office's priority, which is how the organisation decides", async () => {
+    const officeId = await anOffice();
+    const updated = await patch(`/offices/${officeId}`, { priority: "urgent" });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json<{ priority: string }>().priority).toBe("urgent");
+  });
+
+  it("keeps the change when the office is read back", async () => {
+    const officeId = await anOffice();
+    await patch(`/offices/${officeId}`, { priority: "urgent" });
+    expect((await get(`/offices/${officeId}`)).json<{ priority: string }>().priority).toBe(
+      "urgent",
+    );
+  });
+
+  it("renames an office too, since it had no way to be changed at all before", async () => {
+    const officeId = await anOffice();
+    const updated = await patch(`/offices/${officeId}`, { name: "Acme Robotics" });
+    expect(updated.json<{ name: string }>().name).toBe("Acme Robotics");
+  });
+
+  it("says so when the office is not there", async () => {
+    expect((await patch("/offices/nope", { priority: "high" })).statusCode).toBe(404);
+  });
+
+  it("refuses a change it would have refused at creation", async () => {
+    const officeId = await anOffice();
+    expect((await patch(`/offices/${officeId}`, { priority: "asap" })).statusCode).toBe(400);
+  });
+
+  it("tells everyone watching that the office changed", async () => {
+    const officeId = await anOffice();
+    const before = events.since(officeId, 0).length;
+    await patch(`/offices/${officeId}`, { priority: "urgent" });
+    const published = events.since(officeId, 0).slice(before);
+    expect(published.map((event) => (event.data as { kind: string }).kind)).toContain(
+      "office.updated",
+    );
+  });
+
+  it("turns away a change made against a stale view of the office", async () => {
+    const officeId = await anOffice();
+    await patch(`/offices/${officeId}`, { name: "First" });
+    const stale = await server.inject({
+      method: "PATCH",
+      url: `/offices/${officeId}`,
+      headers: { ...auth, "x-vo-since-offset": "0" },
+      payload: { name: "Second" },
+    });
+    expect(stale.statusCode).toBe(409);
+  });
+
+  it("takes a department's priority when it is created, and changes it later", async () => {
+    const officeId = await anOffice();
+    const created = await post(`/offices/${officeId}/departments`, {
+      name: "Engineering",
+      color: "#3366ff",
+      position: { x: 0, y: 0 },
+      priority: "urgent",
+    });
+    expect(created.json<{ priority: string }>().priority).toBe("urgent");
+
+    const id = created.json<{ id: string }>().id;
+    expect(
+      (await patch(`/departments/${id}`, { priority: "low" })).json<{ priority: string }>()
+        .priority,
+    ).toBe("low");
+  });
+
+  it("takes an employee's priority when they are created, and changes it later", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const created = await post(`/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Engineer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      priority: "low",
+    });
+    expect(created.json<{ priority: string }>().priority).toBe("low");
+
+    const id = created.json<{ id: string }>().id;
+    expect(
+      (await patch(`/employees/${id}`, { priority: "high" })).json<{ priority: string }>().priority,
+    ).toBe("high");
   });
 });

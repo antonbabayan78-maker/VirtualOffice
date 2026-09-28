@@ -10,10 +10,11 @@
  * offered is one the workflow engine can actually run.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Department, GatedAction, ValidationError } from "@vo/core";
+import type { Department, GatedAction, TaskPriority, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { PriorityField } from "./PriorityField.js";
 import {
   ALL_GATED_ACTIONS,
   POLICY_DESCRIPTION,
@@ -46,6 +47,7 @@ interface Draft {
   readonly name: string;
   readonly color: string;
   readonly icon: string;
+  readonly priority: TaskPriority;
   readonly policy: PolicyDraft;
   readonly hours: HoursDraft;
 }
@@ -55,6 +57,7 @@ function draftOf(department: Department): Draft {
     name: department.name,
     color: department.color,
     icon: department.icon ?? "",
+    priority: department.priority,
     policy: policyDraftOf(department.reviewPolicy),
     hours:
       department.schedule.kind === "always"
@@ -109,6 +112,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
         name: draft.name,
         color: draft.color,
         icon: draft.icon.trim().length === 0 ? null : draft.icon.trim(),
+        priority: draft.priority,
         reviewPolicy: policyFromDraft(draft.policy),
         schedule: draft.hours.own
           ? {
@@ -174,6 +178,15 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           />
         </Field>
       </div>
+
+      <PriorityField
+        value={draft.priority}
+        onChange={(priority) => {
+          edit({ priority });
+        }}
+        note="A department's own standing. Raising it puts everything this department does ahead of other departments' work, whatever their tasks say."
+        className={inputClass}
+      />
 
       <Field label="Review policy">
         <select

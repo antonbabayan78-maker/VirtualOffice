@@ -29,6 +29,8 @@ export interface OfficeSnapshot {
 
 export interface ApiClient {
   loadOffice(officeId: string): Promise<ApiResult<OfficeSnapshot>>;
+  /** The office on its own, for when only it changed. */
+  getOffice(id: string): Promise<ApiResult<Office>>;
   /** One entity, which is what a live canvas fetches when told it changed. */
   getDepartment(id: string): Promise<ApiResult<Department>>;
   getEmployee(id: string): Promise<ApiResult<Employee>>;
@@ -40,6 +42,11 @@ export interface ApiClient {
    * the move.
    */
   postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
+  patchOffice(
+    id: string,
+    changes: Readonly<Record<string, unknown>>,
+    sinceOffset: number,
+  ): Promise<ApiResult<Office>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -62,6 +69,10 @@ export interface ApiClientOptions {
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
 const asDate = (value: unknown): Date => new Date(String(value));
+
+function reviveOffice(raw: Record<string, unknown>): Office {
+  return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Office;
+}
 
 function reviveDepartment(raw: Record<string, unknown>): Department {
   return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Department;
@@ -188,7 +199,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   return {
     loadOffice: async (officeId) => {
       const office = await call(`/offices/${officeId}`);
-      const asOffice = interpret(office, (raw) => raw as unknown as Office);
+      const asOffice = interpret(office, reviveOffice);
       if (!asOffice.ok) return asOffice;
 
       const departments = await call(`/offices/${officeId}/departments`);
@@ -215,6 +226,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       };
     },
 
+    getOffice: async (id) => interpret(await call(`/offices/${id}`), reviveOffice),
+
     getDepartment: async (id) => interpret(await call(`/departments/${id}`), reviveDepartment),
     getEmployee: async (id) => interpret(await call(`/employees/${id}`), reviveEmployee),
     getTask: async (id) => interpret(await call(`/tasks/${id}`), reviveTask),
@@ -224,6 +237,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await call(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify(event) }),
         reviveTask,
       ),
+
+    patchOffice: (id, changes, sinceOffset) =>
+      patch(`/offices/${id}`, changes, sinceOffset, reviveOffice),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),

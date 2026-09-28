@@ -54,6 +54,8 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       } satisfies ApiResult<OfficeSnapshot>),
     getDepartment: (id) =>
       Promise.resolve({ ok: true, value: { ...eng, id: id as DepartmentId, name: "Platform" } }),
+    getOffice: () => Promise.reject(new Error("not used here")),
+    patchOffice: () => Promise.reject(new Error("not used here")),
     getEmployee: (id) =>
       Promise.resolve({
         ok: true,
@@ -253,5 +255,56 @@ describe("the arrows the office says are there", () => {
     await follow(api).reload();
     expect(store.getState().links).toHaveLength(1);
     expect(store.getState().links[0]).toMatchObject({ from: eng.id, to: sales.id });
+  });
+});
+
+describe("the office itself changing", () => {
+  const acme = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" },
+    priority: "normal",
+    configVersion: 1,
+    createdAt: at,
+  } as never;
+
+  it("holds the office when it is loaded, so its priority can be shown", async () => {
+    const api = fakeApi({
+      loadOffice: () =>
+        Promise.resolve({
+          ok: true,
+          value: { office: acme, departments: [eng], employees: [], tasks: [], connections: [] },
+        }),
+    });
+    await follow(api).reload();
+    expect(store.getState().office?.name).toBe("Acme");
+  });
+
+  it("fetches the office again when it is told the office changed", async () => {
+    const api = fakeApi({
+      getOffice: () =>
+        Promise.resolve({ ok: true, value: { ...(acme as object), priority: "urgent" } as never }),
+    });
+    await follow(api).apply({
+      offset: 4,
+      officeId,
+      at: 0,
+      data: { kind: "office.updated", id: officeId },
+    });
+    expect(store.getState().office?.priority).toBe("urgent");
+  });
+
+  it("leaves the office alone when it cannot be reached", async () => {
+    store.getState().loadOffice(acme);
+    const api = fakeApi({
+      getOffice: () => Promise.resolve({ ok: false, kind: "transport", message: "unreachable" }),
+    });
+    await follow(api).apply({
+      offset: 4,
+      officeId,
+      at: 0,
+      data: { kind: "office.updated", id: officeId },
+    });
+    expect(store.getState().office?.priority).toBe("normal");
   });
 });

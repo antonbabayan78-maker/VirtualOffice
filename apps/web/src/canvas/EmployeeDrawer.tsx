@@ -11,11 +11,12 @@
  * system then rejects on save.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Employee, ValidationError } from "@vo/core";
+import type { Employee, TaskPriority, ValidationError } from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { PriorityField } from "./PriorityField.js";
 
 interface ModelRef {
   readonly provider: string;
@@ -41,6 +42,7 @@ interface Draft {
   readonly skills: string;
   readonly supervisorId: string;
   readonly workspace: string;
+  readonly priority: TaskPriority;
   readonly hours: HoursDraft;
 }
 
@@ -71,6 +73,7 @@ function draftOf(employee: Employee): Draft {
     skills: employee.skillIds.join(", "),
     supervisorId: employee.supervisorId ?? "",
     workspace: employee.workspaceRef ?? "",
+    priority: employee.priority,
     hours:
       employee.schedule === null || employee.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -130,6 +133,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         role: draft.role,
         color: draft.color,
         avatar: draft.avatar.trim().length === 0 ? null : draft.avatar.trim(),
+        priority: draft.priority,
         llm: {
           provider: draft.model.provider,
           model: draft.model.model,
@@ -287,6 +291,15 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           }}
         />
       </Field>
+
+      <PriorityField
+        value={draft.priority}
+        onChange={(priority) => {
+          edit({ priority });
+        }}
+        note="This person's own standing, within what their department and the office have already decided. Lowering it tells them to yield to their colleagues."
+        className={inputClass}
+      />
 
       <Field label="Reports to">
         <select

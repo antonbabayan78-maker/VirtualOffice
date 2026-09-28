@@ -54,6 +54,7 @@ function addByKeyboard(store: OfficeStore, kind: PaletteKind): void {
 }
 
 export function Palette({ store }: { readonly store: OfficeStore }): ReactNode {
+  const office = store((state) => state.office);
   const onDragStart = (event: DragEvent<HTMLButtonElement>, item: PaletteItem): void => {
     event.dataTransfer.setData(PALETTE_MIME, item.kind);
     event.dataTransfer.effectAllowed = "copy";
@@ -64,6 +65,24 @@ export function Palette({ store }: { readonly store: OfficeStore }): ReactNode {
       aria-label="Palette"
       className="flex w-40 shrink-0 flex-col gap-2 border-r border-border bg-surface p-3"
     >
+      {office !== null && (
+        <>
+          <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Office</h2>
+          <button
+            type="button"
+            onClick={() => {
+              store.getState().openOffice(true);
+            }}
+            className={cn(
+              "truncate rounded-panel border border-border bg-surface px-3 py-2 text-left text-sm text-ink",
+              "hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+            )}
+          >
+            {office.name}
+          </button>
+        </>
+      )}
+
       <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Add</h2>
       {PALETTE_ITEMS.map((item) => (
         <button

@@ -78,6 +78,9 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
       } else if (kind === "employee.created" || kind === "employee.updated") {
         const fetched = await api.getEmployee(id);
         if (fetched.ok) replaceEmployee(fetched.value);
+      } else if (kind === "office.updated") {
+        const fetched = await api.getOffice(id);
+        if (fetched.ok) store.getState().loadOffice(fetched.value);
       }
     } finally {
       // Moves on either way: a failed fetch is repaired by the next reconnect,
@@ -94,6 +97,7 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         .setNotice(snapshot.kind === "transport" ? snapshot.message : "could not load this office");
       return;
     }
+    store.getState().loadOffice(snapshot.value.office);
     store
       .getState()
       .load(

@@ -203,3 +203,29 @@ describe("the rest of a department", () => {
     expect(saved()?.name).toBe("Engineering");
   });
 });
+
+describe("a department's standing priority", () => {
+  it("shows what it is set to", () => {
+    expect(screen.getByLabelText(/priority/i)).toHaveValue("normal");
+  });
+
+  it("puts a department into crunch", async () => {
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(/priority/i), "urgent");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.priority).toBe("urgent");
+  });
+
+  it("offers every priority the office understands", () => {
+    const options = Array.from(
+      screen.getByLabelText(/priority/i).querySelectorAll("option"),
+      (option) => option.value,
+    );
+    expect(options).toEqual(["low", "normal", "high", "urgent"]);
+  });
+
+  it("says what setting it actually does, since it outranks the tasks below it", () => {
+    expect(screen.getByText(/ahead of|outranks|before other departments/i)).toBeTruthy();
+  });
+});

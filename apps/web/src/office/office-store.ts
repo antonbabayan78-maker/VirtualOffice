@@ -20,10 +20,13 @@ import {
   isErr,
   updateDepartment,
   updateEmployee,
+  updateOffice,
   type Connection,
   type ConnectionId,
   type Department,
   type DepartmentId,
+  type Office,
+  type UpdateOfficeInput,
   type Employee,
   type EmployeeId,
   type OfficeId,
@@ -69,6 +72,13 @@ export interface AddEmployeeInput {
 }
 
 export interface OfficeStoreState {
+  /**
+   * The office everything else belongs to, once it is known. Null on a canvas
+   * that has not been told which office it is showing.
+   */
+  readonly office: Office | null;
+  /** Whether the office's own settings panel is showing. */
+  readonly officeOpen: boolean;
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
   readonly tasks: readonly Task[];
@@ -93,6 +103,16 @@ export interface OfficeStoreState {
     tasks?: readonly Task[],
     connections?: readonly Connection[],
   ): void;
+  loadOffice(office: Office): void;
+  /**
+   * Says which office to send changes to. Until this is called a save is
+   * applied here and goes no further, which is right for a canvas with no
+   * server and wrong for one that has just found its own.
+   */
+  connect(api: ApiClient): void;
+  openOffice(open: boolean): void;
+  /** Changes the office here and then at the office, like any other save. */
+  saveOffice(changes: UpdateOfficeInput): Promise<SaveOutcome>;
   putConnection(connection: Connection): void;
   removeConnection(id: ConnectionId): void;
   /** Closes a department down. Refused while anybody still works there. */
@@ -147,16 +167,20 @@ export interface OfficeStoreDeps {
 
 const snap = (value: number, grid: number): number => Math.round(value / grid) * grid;
 
-/** Whether a change actually changed where or how big a department is. */
-function same(a: Department, b: Department): boolean {
+/**
+ * Whether a department is still where it was, and the size it was.
+ *
+ * Only moves and resizes go through the helper that asks — editing a department
+ * sets state directly — so these are the only fields worth comparing. It named
+ * others once, which invited the belief that it guarded every change, and a
+ * field left off that list would have been silently unsaveable.
+ */
+function unmoved(a: Department, b: Department): boolean {
   return (
     a.position.x === b.position.x &&
     a.position.y === b.position.y &&
     a.size.width === b.size.width &&
-    a.size.height === b.size.height &&
-    a.name === b.name &&
-    a.color === b.color &&
-    a.reviewPolicy === b.reviewPolicy
+    a.size.height === b.size.height
   );
 }
 
@@ -206,6 +230,13 @@ function applyStoredLayout(
 }
 
 export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
+  /**
+   * Who to send changes to. Mutable because the app builds its store before it
+   * has read its configuration, and a store that could never be told would make
+   * every drawer a decoration: saves applied locally, reported as successes and
+   * lost on the next reload.
+   */
+  let connected: ApiClient | undefined = deps.api;
   const gridSize = deps.gridSize ?? DEFAULT_GRID_SIZE;
 
   return create<OfficeStoreState>((set, get) => {
@@ -230,7 +261,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       // re-renders on a new one, which makes React Flow measure again, which
       // reports the same change again — a loop that never settles, and edges
       // never get drawn because the graph is never still.
-      if (same(current, changed)) return;
+      if (unmoved(current, changed)) return;
 
       const next = departments.map((department) => (department.id === id ? changed : department));
       set({ departments: next });
@@ -245,6 +276,8 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       tasks: [],
       activity: {},
       notice: null,
+      office: null,
+      officeOpen: false,
       connections: [],
       links: [],
       selectedEmployeeId: null,
@@ -263,6 +296,51 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           activity: activityFromTasks(tasks),
           settings: { snapToGrid: layout?.snapToGrid ?? get().settings.snapToGrid, gridSize },
         });
+      },
+
+      loadOffice: (office) => {
+        set({ office });
+      },
+
+      connect: (api) => {
+        connected = api;
+      },
+
+      openOffice: (open) => {
+        set({ officeOpen: open });
+      },
+
+      saveOffice: async (changes) => {
+        const before = get().office;
+        if (before === null) {
+          return { ok: false, problems: [{ path: "office", message: "no office is open" }] };
+        }
+
+        // Refused here means never sent: the office would only say the same.
+        const applied = updateOffice(before, changes);
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        set({ office: applied.value });
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.patchOffice(
+          before.id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        if (answer.ok) {
+          set({ office: answer.value });
+          return { ok: true };
+        }
+        if (answer.kind === "conflict") {
+          set({
+            office: answer.current as unknown as Office,
+            notice: "Somebody else changed this first; showing what the office now holds.",
+          });
+          return { ok: false, problems: [] };
+        }
+        set({ office: before });
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 
       putConnection: (connection) => {
@@ -420,9 +498,9 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         // Refused here means never sent: the office would only say the same.
         const applied = get().updateDepartment(id, changes);
         if (isErr(applied)) return { ok: false, problems: applied.error };
-        if (deps.api === undefined) return { ok: true };
+        if (connected === undefined) return { ok: true };
 
-        const answer = await deps.api.patchDepartment(
+        const answer = await connected.patchDepartment(
           id,
           changes as Record<string, unknown>,
           get().seenOffset,
@@ -458,9 +536,9 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
 
         const applied = get().updateEmployee(id, changes);
         if (isErr(applied)) return { ok: false, problems: applied.error };
-        if (deps.api === undefined) return { ok: true };
+        if (connected === undefined) return { ok: true };
 
-        const answer = await deps.api.patchEmployee(
+        const answer = await connected.patchEmployee(
           id,
           changes as Record<string, unknown>,
           get().seenOffset,
