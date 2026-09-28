@@ -68,6 +68,7 @@ const EXPECTED_PACKAGES = [
   "packages/notifications",
   "apps/server",
   "apps/cli",
+  "apps/worker",
 ];
 
 describe("monorepo root", () => {

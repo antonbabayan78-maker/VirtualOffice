@@ -216,6 +216,15 @@ importers:
 
   apps/server: {}
 
+  apps/worker:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@vo/orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/orchestrator
+
   packages/connectors:
     dependencies:
       '@vo/core':

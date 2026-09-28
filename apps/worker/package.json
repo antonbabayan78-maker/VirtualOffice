@@ -1,0 +1,29 @@
+{
+  "name": "@vo/worker",
+  "version": "0.0.1",
+  "private": true,
+  "description": "vo worker: leader-elected scheduler tick plus job processing.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@vo/core": "workspace:*",
+    "@vo/orchestrator": "workspace:*"
+  }
+}
