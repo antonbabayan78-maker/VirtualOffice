@@ -1,8 +1,8 @@
 {
-  "name": "@vo/worker",
+  "name": "@vo/api-client",
   "version": "0.0.1",
   "private": true,
-  "description": "vo worker: leader-elected scheduler tick plus job processing.",
+  "description": "Typed client for the office API, shared by the canvas and the worker.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -23,12 +23,9 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@vo/api-client": "workspace:*",
-    "@vo/core": "workspace:*",
-    "@vo/llm": "workspace:*",
-    "@vo/orchestrator": "workspace:*"
+    "@vo/core": "workspace:*"
   },
-  "bin": {
-    "vo-worker": "./dist/main.js"
+  "devDependencies": {
+    "msw": "^2.15.0"
   }
 }

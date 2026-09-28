@@ -1,0 +1,186 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ApiClient } from "@vo/api-client";
+import { AGENT_RUN_JOB, AGENT_REVIEW_JOB, type AgentTurn, type Job } from "@vo/orchestrator";
+import { officeJobHandler } from "./job-handler.js";
+
+const at = new Date("2026-09-28T09:00:00Z");
+
+const task = {
+  id: "task-1",
+  officeId: "office-1",
+  departmentId: "dept-eng",
+  assigneeId: "emp-ada",
+  title: "Write the parser",
+  status: "assigned",
+  priority: "normal",
+  reviewerIds: ["emp-grace"],
+  history: [{ type: "created", at }],
+};
+const ada = { id: "emp-ada", name: "Ada", officeId: "office-1", departmentId: "dept-eng" };
+
+function api(overrides: Partial<ApiClient> = {}): ApiClient {
+  return {
+    loadOffice: () => Promise.reject(new Error("not used here")),
+    getDepartment: () => Promise.reject(new Error("not used here")),
+    getEmployee: () => Promise.resolve({ ok: true, value: ada as never }),
+    getTask: () => Promise.resolve({ ok: true, value: task as never }),
+    patchDepartment: () => Promise.reject(new Error("not used here")),
+    patchEmployee: () => Promise.reject(new Error("not used here")),
+    postTaskEvent: () => Promise.resolve({ ok: true, value: task as never }),
+    ...overrides,
+  };
+}
+
+const job = (overrides: Partial<Job> = {}): Job =>
+  ({
+    id: "job-1",
+    officeId: "office-1",
+    employeeId: "emp-ada",
+    kind: AGENT_RUN_JOB,
+    payload: { taskId: "task-1", departmentId: "dept-eng" },
+    priority: 0,
+    idempotencyKey: null,
+    attempts: 1,
+    maxAttempts: 3,
+    runAt: 0,
+    enqueuedAt: 0,
+    ...overrides,
+  }) as Job;
+
+/** An agent that always decides the same thing, without asking a model. */
+const decides =
+  (...events: Record<string, unknown>[]): AgentTurn =>
+  () =>
+    Promise.resolve(events as never);
+
+describe("doing a piece of an office's work", () => {
+  it("tells the office what the agent decided", async () => {
+    const postTaskEvent = vi.fn(() => Promise.resolve({ ok: true as const, value: task as never }));
+    await officeJobHandler({
+      api: api({ postTaskEvent }),
+      agent: decides({ type: "submit", actorId: "emp-ada" }),
+    })(job());
+
+    expect(postTaskEvent).toHaveBeenCalledWith("task-1", { type: "submit", actorId: "emp-ada" });
+  });
+
+  it("reports a turn's events in the order they happened", async () => {
+    const posted: unknown[] = [];
+    const postTaskEvent = vi.fn((_id: string, event: unknown) => {
+      posted.push(event);
+      return Promise.resolve({ ok: true as const, value: task as never });
+    });
+    await officeJobHandler({
+      api: api({ postTaskEvent }),
+      agent: decides({ type: "start", actorId: "emp-ada" }, { type: "submit", actorId: "emp-ada" }),
+    })(job());
+
+    expect(posted.map((event) => (event as { type: string }).type)).toEqual(["start", "submit"]);
+  });
+
+  it("gives the agent the task and the person the job names, read from the office", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const getTask = vi.fn(() => Promise.resolve({ ok: true as const, value: task as never }));
+    const getEmployee = vi.fn(() => Promise.resolve({ ok: true as const, value: ada as never }));
+    await officeJobHandler({ api: api({ getTask, getEmployee }), agent })(job());
+
+    expect(getTask).toHaveBeenCalledWith("task-1");
+    expect(getEmployee).toHaveBeenCalledWith("emp-ada");
+    expect(agent).toHaveBeenCalledWith({ task, actor: ada, kind: AGENT_RUN_JOB });
+  });
+
+  it("tells the agent it is reviewing, not working, when that is the job", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    await officeJobHandler({ api: api(), agent })(
+      job({ kind: AGENT_REVIEW_JOB, employeeId: "emp-grace" as never }),
+    );
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ kind: AGENT_REVIEW_JOB }));
+  });
+
+  it("says nothing to the office when the agent had nothing to report", async () => {
+    const postTaskEvent = vi.fn(() => Promise.resolve({ ok: true as const, value: task as never }));
+    await officeJobHandler({ api: api({ postTaskEvent }), agent: decides() })(job());
+    expect(postTaskEvent).not.toHaveBeenCalled();
+  });
+
+  it("stops after an event the office would not take, rather than reporting what follows from it", async () => {
+    // A submit that was refused means the task never moved; anything the turn
+    // decided afterwards was decided about a task in a state it is not in.
+    const posted: unknown[] = [];
+    const postTaskEvent = vi.fn((_id: string, event: unknown) => {
+      posted.push(event);
+      return Promise.resolve({
+        ok: false as const,
+        kind: "validation" as const,
+        errors: [{ path: "type", message: "a task in done cannot be started" }],
+      });
+    });
+    await officeJobHandler({
+      api: api({ postTaskEvent }),
+      agent: decides({ type: "start", actorId: "emp-ada" }, { type: "submit", actorId: "emp-ada" }),
+      onProblem: () => undefined,
+    })(job());
+
+    expect(posted).toHaveLength(1);
+  });
+
+  it("lets a job whose office it could not reach come round again", async () => {
+    const handle = officeJobHandler({
+      api: api({
+        getTask: () => Promise.resolve({ ok: false, kind: "transport", message: "refused" }),
+      }),
+      agent: decides({ type: "submit", actorId: "emp-ada" }),
+    });
+    await expect(handle(job())).rejects.toThrow(/refused/);
+  });
+
+  it("lets a report the office could not take come round again", async () => {
+    const handle = officeJobHandler({
+      api: api({
+        postTaskEvent: () =>
+          Promise.resolve({ ok: false, kind: "transport", message: "connection reset" }),
+      }),
+      agent: decides({ type: "submit", actorId: "emp-ada" }),
+    });
+    await expect(handle(job())).rejects.toThrow(/connection reset/);
+  });
+
+  it("does not keep retrying an event the office refused, since it will refuse it again", async () => {
+    const problems: string[] = [];
+    const handle = officeJobHandler({
+      api: api({
+        postTaskEvent: () =>
+          Promise.resolve({
+            ok: false,
+            kind: "validation",
+            errors: [{ path: "type", message: "a task in done cannot be submitted" }],
+          }),
+      }),
+      agent: decides({ type: "submit", actorId: "emp-ada" }),
+      onProblem: (message) => problems.push(message),
+    });
+
+    await expect(handle(job())).resolves.toBeUndefined();
+    expect(problems[0]).toMatch(/cannot be submitted/);
+  });
+
+  it("refuses a job that names no task rather than guessing which one", async () => {
+    const handle = officeJobHandler({ api: api(), agent: decides() });
+    await expect(handle(job({ payload: {} }))).rejects.toThrow(/taskId/);
+  });
+
+  it("refuses a job with nobody to do it rather than acting as a nameless employee", async () => {
+    const handle = officeJobHandler({ api: api(), agent: decides() });
+    await expect(handle(job({ employeeId: null }))).rejects.toThrow(/employee/i);
+  });
+
+  it("leaves a job it was not built for alone, and says it saw it", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const problems: string[] = [];
+    await officeJobHandler({ api: api(), agent, onProblem: (m) => problems.push(m) })(
+      job({ kind: "nightly_report" }),
+    );
+    expect(agent).not.toHaveBeenCalled();
+    expect(problems[0]).toMatch(/nightly_report/);
+  });
+});

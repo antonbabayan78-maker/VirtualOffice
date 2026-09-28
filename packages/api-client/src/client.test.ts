@@ -1,9 +1,6 @@
-// @vitest-environment node
-//
-// The client touches no DOM, and jsdom's AbortController is not the one Node's
-// fetch accepts — a signal made in jsdom is refused as "not an AbortSignal".
-// In a browser both are native and match; here the honest fix is to test this
-// where it actually runs rather than to work around the mismatch.
+// This package runs in node, which is also where its AbortController and fetch
+// agree with each other. Under jsdom they do not: a signal made there is
+// refused as "not an AbortSignal", though in a browser both are native.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { http, HttpResponse, delay } from "msw";
 import { setupServer } from "msw/node";
@@ -186,6 +183,76 @@ describe("saving a change", () => {
   it("reports a network that is simply not there", async () => {
     server.use(http.patch(`${BASE}/departments/dept-eng`, () => HttpResponse.error()));
     const result = await client().patchDepartment("dept-eng", { name: "Platform" }, 7);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("transport");
+  });
+});
+
+describe("telling the office what an agent did", () => {
+  const task = {
+    id: "task-1",
+    officeId: "office-1",
+    departmentId: "dept-eng",
+    assigneeId: "emp-ada",
+    title: "Write the parser",
+    status: "in_review",
+    priority: "normal",
+    reviewerIds: ["emp-grace"],
+    approvals: [],
+    stage: null,
+    gatedActions: [],
+    history: [{ type: "submitted", at: "2026-09-28T09:00:00.000Z" }],
+  };
+
+  it("hands the event over and brings back where the task got to", async () => {
+    server.use(http.post(`${BASE}/tasks/task-1/events`, () => HttpResponse.json(task)));
+
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.status).toBe("in_review");
+  });
+
+  it("sends the event as the body, since that is what the office reads", async () => {
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/tasks/task-1/events`, async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json(task);
+      }),
+    );
+
+    await client().postTaskEvent("task-1", { type: "approve", actorId: "emp-grace" });
+    expect(sent).toEqual({ type: "approve", actorId: "emp-grace" });
+  });
+
+  it("turns the task's history back into dates", async () => {
+    server.use(http.post(`${BASE}/tasks/task-1/events`, () => HttpResponse.json(task)));
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+    if (result.ok) expect(result.value.history[0]?.at).toBeInstanceOf(Date);
+  });
+
+  it("says an event the office refused was refused, rather than swallowing it", async () => {
+    server.use(
+      http.post(`${BASE}/tasks/task-1/events`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "type", message: "a task in done cannot be submitted" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.message).toMatch(/cannot be submitted/);
+    } else {
+      throw new Error("expected the office to refuse the event");
+    }
+  });
+
+  it("reports an office it could not reach, so a worker can retry", async () => {
+    server.use(http.post(`${BASE}/tasks/task-1/events`, () => HttpResponse.error()));
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.kind).toBe("transport");
   });

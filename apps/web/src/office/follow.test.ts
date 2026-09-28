@@ -9,7 +9,7 @@ import {
   type EmployeeId,
   type OfficeId,
 } from "@vo/core";
-import type { ApiClient, ApiResult, OfficeSnapshot } from "../api/client.js";
+import type { ApiClient, ApiResult, OfficeSnapshot } from "@vo/api-client";
 import { createOfficeStore, type OfficeStore } from "./office-store.js";
 import { followOffice } from "./follow.js";
 
@@ -70,6 +70,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
         } as never,
       }),
     patchDepartment: () => Promise.reject(new Error("not used here")),
+    postTaskEvent: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     ...overrides,
   };

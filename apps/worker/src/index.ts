@@ -85,3 +85,8 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<WorkerL
 
   return { ticks, processed, enqueued, failedTicks };
 }
+
+export * from "./config.js";
+export * from "./office-source.js";
+export * from "./job-handler.js";
+export * from "./office-worker.js";

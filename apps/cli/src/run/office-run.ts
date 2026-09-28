@@ -20,19 +20,14 @@ import {
   type Task,
   type TaskId,
 } from "@vo/core";
-import {
-  defaultModelRegistry,
-  type LlmProvider,
-  type ModelRegistry,
-  type ToolDefinition,
-} from "@vo/llm";
+import { defaultModelRegistry, type LlmProvider, type ModelRegistry } from "@vo/llm";
 import {
   AGENT_REVIEW_JOB,
   AGENT_RUN_JOB,
   InProcessJobQueue,
   Worker,
   defaultWorkflowEngine,
-  runAgent,
+  llmAgentTurn,
   type Job,
   type RunnableTask,
   type SchedulerSnapshot,
@@ -47,28 +42,6 @@ import {
   type UsageEvent,
   type UsageSink,
 } from "@vo/telemetry";
-
-/** What an employee calls when the work is done. */
-const SUBMIT_TOOL: ToolDefinition = {
-  name: "submit_work",
-  description: "Hand the finished work over for review.",
-  inputSchema: {
-    type: "object",
-    properties: { summary: { type: "string" } },
-    required: ["summary"],
-  },
-};
-
-/** What a reviewer calls to decide. */
-const REVIEW_TOOL: ToolDefinition = {
-  name: "review_verdict",
-  description: "Approve the work, or send it back with a reason.",
-  inputSchema: {
-    type: "object",
-    properties: { approved: { type: "boolean" }, reason: { type: "string" } },
-    required: ["approved"],
-  },
-};
 
 export interface OfficeRunOptions {
   readonly config: OfficeConfig;
@@ -154,85 +127,30 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     return outcome.value.task;
   };
 
-  const askAgent = async (
-    employeeId: EmployeeId,
-    task: Task,
-    instruction: string,
-    resultTool: ToolDefinition,
-  ): Promise<Readonly<Record<string, unknown>> | undefined> => {
-    const employee = employees.get(employeeId);
-    if (employee === undefined) return undefined;
-    const metered = meterProvider(options.provider, {
-      recorder,
-      attribution: {
-        officeId: task.officeId,
-        departmentId: task.departmentId,
-        employeeId,
-        taskId: task.id,
-      },
-    });
-
-    const result = await runAgent({
-      provider: metered,
-      model: employee.llm.model,
-      system: {
-        stable: [`You are ${employee.name}, ${employee.role}.`],
-        dynamic: [`Task: ${task.title}`],
-      },
-      messages: [{ role: "user", content: [{ type: "text", text: instruction }] }],
-      tools: [],
-      resultTool,
-      executeTool: () => Promise.resolve({ content: "" }),
-    });
-    return result.structuredResult;
-  };
+  /**
+   * The same turn the worker takes, so `vo run` and a deployed worker cannot
+   * end up with two different ideas of what an employee does when its name
+   * comes up. Metering is wrapped in here because attribution is per turn.
+   */
+  const turn = llmAgentTurn({
+    provider: options.provider,
+    wrapProvider: (provider, attribution) => meterProvider(provider, { recorder, attribution }),
+  });
 
   const handle = async (job: Job): Promise<void> => {
+    if (job.kind !== AGENT_RUN_JOB && job.kind !== AGENT_REVIEW_JOB) return;
+
     const taskId = job.payload["taskId"] as TaskId | undefined;
     const task = taskId === undefined ? undefined : tasks.get(taskId);
     if (task === undefined || job.employeeId === null) return;
+    const actor = employees.get(job.employeeId);
+    if (actor === undefined) return;
 
-    if (job.kind === AGENT_RUN_JOB) {
-      // Starting is a transition of its own, so the canvas can see work begin.
-      const started =
-        task.status === "assigned"
-          ? dispatch(task, { type: "start", actorId: job.employeeId }, job.employeeId)
-          : task;
-      const verdict = await askAgent(
-        job.employeeId,
-        started,
-        `Do the work described and call ${SUBMIT_TOOL.name} when it is finished.`,
-        SUBMIT_TOOL,
-      );
-      if (verdict === undefined) return;
-      const summary =
-        typeof verdict["summary"] === "string" ? verdict["summary"] : "work submitted";
-      dispatch(
-        tasks.get(started.id) ?? started,
-        { type: "submit", actorId: job.employeeId, artifacts: [summary] },
-        job.employeeId,
-      );
-      return;
-    }
-
-    if (job.kind === AGENT_REVIEW_JOB) {
-      const verdict = await askAgent(
-        job.employeeId,
-        task,
-        `Review the work and call ${REVIEW_TOOL.name} with your decision.`,
-        REVIEW_TOOL,
-      );
-      if (verdict === undefined) return;
-      const approved = verdict["approved"] === true;
-      const reason = typeof verdict["reason"] === "string" ? verdict["reason"] : "changes needed";
-      const current = tasks.get(task.id) ?? task;
-      dispatch(
-        current,
-        approved
-          ? { type: "approve", actorId: job.employeeId }
-          : { type: "request_changes", actorId: job.employeeId, reason },
-        job.employeeId,
-      );
+    let current = task;
+    for (const event of await turn({ task: current, actor, kind: job.kind })) {
+      // Each event is applied to where the last one left the task; a refused
+      // one leaves it untouched and the next is judged against that.
+      current = dispatch(current, event, job.employeeId);
     }
   };
 

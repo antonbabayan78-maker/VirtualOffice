@@ -32,7 +32,7 @@ import {
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
-import type { ApiClient } from "../api/client.js";
+import type { ApiClient } from "@vo/api-client";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
 import { activityFromTasks } from "./activity.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";

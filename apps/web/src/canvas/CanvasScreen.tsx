@@ -12,7 +12,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { isErr } from "@vo/core";
-import { createApiClient } from "../api/client.js";
+import { createApiClient } from "@vo/api-client";
 import { readApiConfig } from "../api/config.js";
 import { openOfficeStream } from "../api/stream.js";
 import { followOffice } from "../office/follow.js";

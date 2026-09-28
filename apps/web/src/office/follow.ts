@@ -12,7 +12,7 @@
  * and the next reconnect repairs it anyway.
  */
 import type { Department, Employee, EmployeeId, OfficeId } from "@vo/core";
-import type { ApiClient } from "../api/client.js";
+import type { ApiClient } from "@vo/api-client";
 import type { OfficeStore } from "./office-store.js";
 
 export interface OfficeStreamEvent {

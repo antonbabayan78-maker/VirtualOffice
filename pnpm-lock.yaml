@@ -257,6 +257,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@vo/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -324,12 +327,28 @@ importers:
 
   apps/worker:
     dependencies:
+      '@vo/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vo/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@vo/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+
+  packages/api-client:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      msw:
+        specifier: ^2.15.0
+        version: 2.15.0(@types/node@24.13.6)(typescript@5.9.3)
 
   packages/connectors:
     dependencies:
