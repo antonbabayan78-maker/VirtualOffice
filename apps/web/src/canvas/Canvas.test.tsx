@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
@@ -226,5 +226,60 @@ describe("closing a department down", () => {
 
     expect(screen.queryByRole("menuitem", { name: /delete/i })).toBeNull();
     expect(store.getState().departments).toHaveLength(3);
+  });
+});
+
+describe("pointing at somebody", () => {
+  it("says nothing until they are pointed at", () => {
+    openCanvas();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("says what they are for, what they are on, and what it costs", async () => {
+    const user = userEvent.setup();
+    openCanvas();
+    await user.hover(screen.getByRole("button", { name: /Configure Ada/ }));
+
+    const tip = screen.getByRole("tooltip");
+    expect(within(tip).getByText("Engineer")).toBeTruthy();
+    expect(within(tip).getByText("Engineering")).toBeTruthy();
+    expect(within(tip).getByText("claude-sonnet-5")).toBeTruthy();
+  });
+
+  it("names the task they are on rather than merely saying they are busy", async () => {
+    const user = userEvent.setup();
+    const store = openCanvas();
+    store.getState().putTask({
+      id: "task-1",
+      officeId,
+      departmentId: eng.id,
+      title: "Rewrite the query planner",
+      status: "in_progress",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+      history: [],
+    } as never);
+    await user.hover(screen.getByRole("button", { name: /Configure Ada/ }));
+
+    expect(within(screen.getByRole("tooltip")).getByText(/Rewrite the query planner/)).toBeTruthy();
+  });
+
+  it("stops saying it when the pointer moves away", async () => {
+    const user = userEvent.setup();
+    openCanvas();
+    const figure = screen.getByRole("button", { name: /Configure Ada/ });
+    await user.hover(figure);
+    await user.unhover(figure);
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("says the same thing to somebody using a keyboard", () => {
+    openCanvas();
+    // Focused rather than tabbed to: what matters is that focus alone shows it,
+    // not where the figure happens to sit in the canvas's tab order.
+    fireEvent.focus(screen.getByRole("button", { name: /Configure Ada/ }));
+
+    expect(screen.queryByRole("tooltip")).not.toBeNull();
   });
 });

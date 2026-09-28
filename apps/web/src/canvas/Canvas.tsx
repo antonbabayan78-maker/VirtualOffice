@@ -25,6 +25,7 @@ import { dropItem, type PaletteKind } from "./drop.js";
 import { DepartmentNode, type DepartmentNodeType } from "./DepartmentNode.js";
 import { DepartmentMenu, type DepartmentMenuTarget } from "./DepartmentMenu.js";
 import { edgesFrom } from "./edges.js";
+import { summariseEmployee } from "../office/employee-summary.js";
 
 const NODE_TYPES = { department: DepartmentNode };
 
@@ -39,6 +40,7 @@ function CanvasSurface({
   const departments = store((state) => state.departments);
   const employees = store((state) => state.employees);
   const activity = store((state) => state.activity);
+  const tasks = store((state) => state.tasks);
   const settings = store((state) => state.settings);
   const selectedId = store((state) => state.selectedId);
   const links = store((state) => state.links);
@@ -73,13 +75,19 @@ function CanvasSurface({
               id: employee.id,
               name: employee.name,
               activity: activity[employee.id] ?? ("idle" as const),
+              summary: summariseEmployee(employee, {
+                department,
+                employees,
+                tasks,
+                activity: activity[employee.id] ?? "idle",
+              }),
             })),
           onSelectEmployee: (id: string) => {
             store.getState().selectEmployee(id as EmployeeId);
           },
         },
       })),
-    [departments, employees, activity, selectedId, store],
+    [departments, employees, tasks, activity, selectedId, store],
   );
 
   const onNodesChange = useCallback(

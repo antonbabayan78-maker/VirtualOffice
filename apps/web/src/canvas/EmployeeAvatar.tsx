@@ -1,11 +1,14 @@
 /**
  * An employee on the canvas.
  *
- * The head carries what the person is doing right now: green at work, orange
- * waiting on something, red when it has gone wrong, and the office's own ink
- * when there is nothing to report. The three that matter fade in and out, so a
- * busy office is legible from across the room and a still figure means a still
- * employee.
+ * The whole figure carries what the person is doing right now: green at work,
+ * orange waiting on something, red when it has gone wrong, and the office's own
+ * ink when there is nothing to report. The three that matter fade in and out,
+ * so a busy office is legible from across the room and a still figure means a
+ * still employee.
+ *
+ * The whole figure rather than the head alone, because at canvas scale a head
+ * is a few pixels — an office of eighty should be readable without leaning in.
  *
  * Idle is ink rather than a literal black: in daylight the ink token is very
  * nearly black, and on a dark canvas a black figure would be invisible.
@@ -21,7 +24,7 @@ import {
 export const ACTIVITY_STATES = ["working", "waiting", "error", "idle"] as const;
 export type ActivityState = (typeof ACTIVITY_STATES)[number];
 
-const HEAD_COLOR: Record<ActivityState, string> = {
+const STATE_COLOR: Record<ActivityState, string> = {
   working: "var(--color-working)",
   waiting: "var(--color-waiting)",
   error: "var(--color-error)",
@@ -58,12 +61,18 @@ export function EmployeeAvatar({
       aria-label={`${name}: ${DESCRIPTION[state]}`}
       className={cn("overflow-visible", className)}
     >
-      <path d={EMPLOYEE_BODY_PATH} data-part="body" fill="var(--color-ink)" />
+      <path
+        d={EMPLOYEE_BODY_PATH}
+        data-part="body"
+        data-animated={animated ? "true" : "false"}
+        fill={STATE_COLOR[state]}
+        className={animated ? "vo-pulse" : undefined}
+      />
       <path
         d={EMPLOYEE_HEAD_PATH}
         data-part="head"
         data-animated={animated ? "true" : "false"}
-        fill={HEAD_COLOR[state]}
+        fill={STATE_COLOR[state]}
         className={animated ? "vo-pulse" : undefined}
       />
     </svg>
