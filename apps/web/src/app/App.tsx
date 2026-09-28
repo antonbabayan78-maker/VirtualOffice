@@ -9,6 +9,7 @@ import { Button } from "../ui/button.js";
 import { cn } from "../ui/cn.js";
 import { useTheme } from "../ui/theme.js";
 import { Placeholder, ROUTES } from "./routes.js";
+import { CanvasScreen } from "../canvas/CanvasScreen.js";
 
 function ThemeToggle(): ReactNode {
   const { resolved, toggle } = useTheme();
@@ -53,7 +54,11 @@ export function App(): ReactNode {
       <main className="min-h-0 flex-1 overflow-auto">
         <Routes>
           {ROUTES.map((route) => (
-            <Route key={route.path} path={route.path} element={<Placeholder route={route} />} />
+            <Route
+              key={route.path}
+              path={route.path}
+              element={route.path === "/" ? <CanvasScreen /> : <Placeholder route={route} />}
+            />
           ))}
           <Route
             path="*"

@@ -28,11 +28,12 @@ describe("the shell", () => {
 
   it("opens on the canvas", () => {
     mount();
-    expect(screen.getByRole("heading", { name: "Office canvas" })).toBeInTheDocument();
+    // The canvas itself, not a page about the canvas.
+    expect(screen.getByRole("checkbox", { name: /snap to grid/i })).toBeInTheDocument();
   });
 
   it("shows each section at its own address", () => {
-    for (const route of ROUTES) {
+    for (const route of ROUTES.filter((r) => r.path !== "/")) {
       const view = mount(route.path);
       expect(screen.getByRole("heading", { name: route.title })).toBeInTheDocument();
       view.unmount();
@@ -53,6 +54,9 @@ describe("the shell", () => {
     mount();
     await user.click(screen.getByRole("link", { name: "Usage" }));
     expect(screen.getByRole("heading", { name: "Usage" })).toBeInTheDocument();
+    // And back to the canvas.
+    await user.click(screen.getByRole("link", { name: "Canvas" }));
+    expect(screen.getByRole("checkbox", { name: /snap to grid/i })).toBeInTheDocument();
   });
 
   it("says so plainly for an address that is not part of the office", () => {
