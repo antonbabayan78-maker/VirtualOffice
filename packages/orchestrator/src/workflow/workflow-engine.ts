@@ -12,6 +12,7 @@
 import type { Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
 import { handoffEffects } from "./handoff.js";
+import { outstandingFor } from "./review-common.js";
 import { GATE_POLICY_HANDLER } from "./gate-policy.js";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
 import { PEER_POLICY_HANDLER } from "./peer-policy.js";
@@ -51,6 +52,18 @@ export const DIRECT_POLICY_HANDLER: PolicyHandler = {
       event.artifacts === undefined || event.artifacts.length === 0
         ? task
         : { ...task, artifacts: [...task.artifacts, ...event.artifacts] };
+
+    // Nobody reviews here, so the person submitting answers the list. Without
+    // this, the way round a definition of done is a department with nobody to
+    // check it — the easiest way round there could be.
+    //
+    // Refused rather than moved: the work simply is not finished, and there is
+    // no state between in progress and done for it to sit in. The refusal says
+    // what is outstanding, which is what whoever is doing the work needs.
+    const outstanding = outstandingFor(withArtifacts, event, context);
+    if (outstanding.length > 0) {
+      return workflowError("met", `not done yet: ${outstanding.join("; ")}`);
+    }
     return applyTransition(withArtifacts, "done", event, context);
   },
 };

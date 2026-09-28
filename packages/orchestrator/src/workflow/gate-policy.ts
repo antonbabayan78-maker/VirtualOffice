@@ -20,7 +20,7 @@
  * separate concern from reviewing finished work, and belongs to the run loop.
  */
 import type { GatedAction, Result, Task } from "@vo/core";
-import { rejectPolicyEvent } from "./review-common.js";
+import { outstandingFor, rejectPolicyEvent } from "./review-common.js";
 import {
   applyTransition,
   workflowError,
@@ -51,6 +51,13 @@ function submitThroughGate(
   context: WorkflowContext,
   gates: readonly GatedAction[],
 ): Result<WorkflowOutcome> {
+  // Checked before anybody is asked: there is no point putting work in front of
+  // a person when the office can already see it is not finished.
+  const outstanding = outstandingFor(task, event, context);
+  if (outstanding.length > 0) {
+    return workflowError("met", `not done yet: ${outstanding.join("; ")}`);
+  }
+
   const staged: Task = {
     ...task,
     reviewerIds: [],

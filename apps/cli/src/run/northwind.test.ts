@@ -79,13 +79,27 @@ const about = (request: CompletionRequest): string =>
  * A studio that works like one: the first scoping is sent back, everything else
  * passes, and nothing is approved that was not asked about.
  */
+/** What the office told this agent the work has to achieve. */
+const criteriaAsked = (request: CompletionRequest): readonly string[] => {
+  const said = systemText(request.system);
+  const at = said.indexOf("This work is done when:");
+  if (at === -1) return [];
+  return (said.slice(at + "This work is done when:".length).split("\n")[0] ?? "")
+    .split("|")
+    .map((criterion) => criterion.trim())
+    .filter((criterion) => criterion.length > 0);
+};
+
 function studio(): FakeLlmProvider {
   let scopeReviews = 0;
   return new FakeLlmProvider({
     id: "anthropic",
     handler: (request) => {
       if (!isReview(request)) {
-        return toolCall("submit_work", { summary: `${speaker(request)}: ${about(request)}` });
+        return toolCall("submit_work", {
+          summary: `${speaker(request)}: ${about(request)}`,
+          met: criteriaAsked(request),
+        });
       }
       if (about(request) === "Scope the 4.2 release") {
         scopeReviews += 1;
@@ -96,7 +110,7 @@ function studio(): FakeLlmProvider {
           });
         }
       }
-      return toolCall("review_verdict", { approved: true });
+      return toolCall("review_verdict", { approved: true, met: criteriaAsked(request) });
     },
   });
 }
@@ -401,3 +415,57 @@ function name(departmentId: string): string {
     config.departments.find((department) => department.id === departmentId)?.name ?? departmentId
   );
 }
+
+describe("the studio's own definition of done", () => {
+  it("is stated in the file, so the office ships with a standard", () => {
+    for (const department of config.departments) {
+      expect(department.definitionOfDone.length, department.name).toBeGreaterThan(0);
+    }
+  });
+
+  /** A studio whose reviewers never mention one particular criterion. */
+  function forgetful(missing: string): FakeLlmProvider {
+    return new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        const asked = criteriaAsked(request);
+        const met = asked.filter((criterion) => criterion !== missing);
+        return isReview(request)
+          ? toolCall("review_verdict", { approved: true, met })
+          : toolCall("submit_work", { summary: `${speaker(request)} did it`, met });
+      },
+    });
+  }
+
+  const oneBrief = (provider: FakeLlmProvider) =>
+    runOffice({
+      config,
+      tasks: [brief("task-scope", "Scope the 4.2 release", "Ravi")],
+      provider,
+      decide: approveEverything,
+      maxTicks: 30,
+    });
+
+  it("does not finish work that leaves a criterion unmet, however cheerful the reviewer", async () => {
+    const result = await oneBrief(forgetful("success is measurable"));
+    expect(result.tasks.some((task) => task.status === "done")).toBe(false);
+  });
+
+  it("says which criterion was outstanding, so the next round is actionable", async () => {
+    const result = await oneBrief(forgetful("success is measurable"));
+    const reasons = result.tasks
+      .flatMap((task) => task.history.map((event) => event.reason ?? ""))
+      .join(" ");
+    expect(reasons).toContain("success is measurable");
+  });
+
+  it("escalates rather than going round forever", async () => {
+    const result = await oneBrief(forgetful("success is measurable"));
+    expect(result.tasks.some((task) => task.status === "escalated")).toBe(true);
+  });
+
+  it("finishes once the list is actually met", async () => {
+    const result = await oneBrief(studio());
+    expect(result.tasks.every((task) => task.status === "done")).toBe(true);
+  });
+});

@@ -48,6 +48,7 @@ interface Draft {
   readonly color: string;
   readonly icon: string;
   readonly priority: TaskPriority;
+  readonly definitionOfDone: readonly string[];
   readonly policy: PolicyDraft;
   readonly hours: HoursDraft;
 }
@@ -58,6 +59,7 @@ function draftOf(department: Department): Draft {
     color: department.color,
     icon: department.icon ?? "",
     priority: department.priority,
+    definitionOfDone: department.definitionOfDone,
     policy: policyDraftOf(department.reviewPolicy),
     hours:
       department.schedule.kind === "always"
@@ -84,6 +86,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
   const [draft, setDraft] = useState<Draft | null>(null);
   const [problems, setProblems] = useState<readonly ValidationError[]>([]);
   const [newStage, setNewStage] = useState("");
+  const [newExpectation, setNewExpectation] = useState("");
 
   useEffect(() => {
     setDraft(department === null ? null : draftOf(department));
@@ -113,6 +116,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
         color: draft.color,
         icon: draft.icon.trim().length === 0 ? null : draft.icon.trim(),
         priority: draft.priority,
+        definitionOfDone: draft.definitionOfDone,
         reviewPolicy: policyFromDraft(draft.policy),
         schedule: draft.hours.own
           ? {
@@ -389,6 +393,61 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           </div>
         </div>
       )}
+
+      <div className="flex flex-col gap-2 rounded-panel border border-border p-2">
+        <p className="text-xs font-medium text-ink">Done means</p>
+        <p className="text-[11px] text-ink-muted">
+          What everything this department makes has to achieve. A reviewer answers this list, and
+          work that leaves any of it unmet goes back rather than finishing.
+        </p>
+        {draft.definitionOfDone.length === 0 ? (
+          <p className="text-xs text-ink-muted">Nothing yet — a reviewer decides for itself.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {draft.definitionOfDone.map((expectation) => (
+              <li key={expectation} className="flex items-center gap-2 text-xs text-ink">
+                {expectation}
+                <button
+                  type="button"
+                  aria-label={`Remove ${expectation}`}
+                  className="ml-auto text-ink-muted hover:text-ink"
+                  onClick={() => {
+                    edit({
+                      definitionOfDone: draft.definitionOfDone.filter(
+                        (candidate) => candidate !== expectation,
+                      ),
+                    });
+                  }}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-end gap-2">
+          <Field label="New expectation">
+            <input
+              className={inputClass}
+              placeholder="the tests cover the error path"
+              value={newExpectation}
+              onChange={(event) => {
+                setNewExpectation(event.target.value);
+              }}
+            />
+          </Field>
+          <Button
+            aria-label="Add expectation"
+            disabled={newExpectation.trim().length === 0}
+            onClick={() => {
+              edit({ definitionOfDone: [...draft.definitionOfDone, newExpectation.trim()] });
+              setNewExpectation("");
+            }}
+          >
+            Add
+          </Button>
+        </div>
+      </div>
 
       <div className="mt-auto flex gap-2 pt-2">
         <Button variant="primary" onClick={save}>

@@ -40,6 +40,12 @@ export interface Department {
    * department is put into crunch without anyone editing every task.
    */
   readonly priority: TaskPriority;
+  /**
+   * What everything this department produces has to achieve. A task states its
+   * own only when its work needs something beyond this, and a reviewer answers
+   * the combined list rather than its own idea of the job.
+   */
+  readonly definitionOfDone: readonly string[];
   /** When this department works; the office's hours gate it too. */
   readonly schedule: Schedule;
   readonly createdAt: Date;
@@ -57,6 +63,7 @@ export interface CreateDepartmentInput {
   readonly reviewPolicy?: unknown;
   /** Defaults to normal. Loose on the way in, narrow on the entity. */
   readonly priority?: string;
+  readonly definitionOfDone?: readonly string[];
   readonly schedule?: unknown;
 }
 
@@ -151,6 +158,7 @@ export interface UpdateDepartmentInput {
   readonly reviewPolicy?: unknown;
   readonly schedule?: unknown;
   readonly priority?: string;
+  readonly definitionOfDone?: readonly string[];
 }
 
 /**
@@ -159,6 +167,14 @@ export interface UpdateDepartmentInput {
  * over; a department keeping its own name is not a duplicate of itself, which
  * re-running createDepartment against the office would have called one.
  */
+/** Each entry has to be a piece of text somebody could actually check. */
+function validateDefinitionOfDone(entries: readonly string[]): ValidationError[] {
+  if (entries.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
+    return [{ path: "definitionOfDone", message: "must each be text" }];
+  }
+  return [];
+}
+
 export function updateDepartment(
   department: Department,
   changes: UpdateDepartmentInput,
@@ -200,6 +216,9 @@ export function updateDepartment(
     changes.schedule === undefined ? ok(department.schedule) : parseSchedule(changes.schedule);
   if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
 
+  const definitionOfDone = changes.definitionOfDone ?? department.definitionOfDone;
+  errors.push(...validateDefinitionOfDone(definitionOfDone));
+
   const priority = changes.priority ?? department.priority;
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -225,6 +244,7 @@ export function updateDepartment(
     reviewPolicy: reviewPolicy.value,
     schedule: schedule.value,
     priority,
+    definitionOfDone: [...definitionOfDone],
   });
 }
 
@@ -263,6 +283,9 @@ export function createDepartment(
   const schedule = parseSchedule(input.schedule ?? { kind: "always" });
   if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
 
+  const definitionOfDone = input.definitionOfDone ?? [];
+  errors.push(...validateDefinitionOfDone(definitionOfDone));
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -291,6 +314,7 @@ export function createDepartment(
     reviewPolicy: reviewPolicy.value,
     schedule: schedule.value,
     priority,
+    definitionOfDone: [...definitionOfDone],
     createdAt: deps.now(),
   });
 }

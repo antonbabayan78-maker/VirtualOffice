@@ -40,6 +40,13 @@ export interface WorkflowContext {
   readonly peers?: readonly PeerCandidate[];
   /** Skills the work needs, used to rank peer reviewers. */
   readonly reviewSkills?: readonly string[];
+  /**
+   * What this work has to achieve, already resolved from the task's own list or
+   * its department's standing one. Read from here rather than reached for, the
+   * same way the review policy is, so the engine never has to know what a
+   * department is.
+   */
+  readonly acceptanceCriteria?: readonly string[];
   /** Who work escalates to. Absent means everything escalates to the owner. */
   readonly escalationGraph?: EscalationGraph;
 }
@@ -50,8 +57,19 @@ export type WorkflowEvent =
       readonly type: "submit";
       readonly actorId: EmployeeId;
       readonly artifacts?: readonly string[];
+      /**
+       * The acceptance criteria this work claims to have met. Only a department
+       * with no reviewer acts on it — everywhere else the reviewer answers the
+       * list, not the person who did the work.
+       */
+      readonly met?: readonly string[];
     }
-  | { readonly type: "approve"; readonly actorId: EmployeeId; readonly note?: string }
+  | {
+      readonly type: "approve";
+      readonly actorId: EmployeeId;
+      /** Which criteria the reviewer verified. Anything unlisted is not met. */
+      readonly met?: readonly string[];
+    }
   | { readonly type: "request_changes"; readonly actorId: EmployeeId; readonly reason: string }
   | { readonly type: "block"; readonly reason: string; readonly actorId?: EmployeeId }
   | { readonly type: "unblock"; readonly actorId?: EmployeeId }

@@ -4,6 +4,7 @@
  * path and escalation cap are the same, so they live here once.
  */
 import type { EmployeeId, Result, Task } from "@vo/core";
+import { acceptanceCriteriaFor, unmetCriteria } from "./acceptance.js";
 import { escalateTask } from "../escalation/escalation.js";
 import {
   applyTransition,
@@ -118,6 +119,34 @@ export function tallyApproval(
   return { ok: true, value: { reached: false, task: staged, gathered: approvals.length } };
 }
 
+/**
+ * What this work still owes, given what the approval claimed.
+ *
+ * Empty for an office that has defined no criteria, which is why none of this
+ * changes how such an office behaves.
+ */
+export function outstandingFor(
+  task: Task,
+  event: WorkflowEvent,
+  context: WorkflowContext,
+): readonly string[] {
+  const criteria = acceptanceCriteriaFor(task.acceptanceCriteria, context.acceptanceCriteria ?? []);
+  return unmetCriteria(criteria, claimedIn(event));
+}
+
+/** What this event says was met. A check answers through its report. */
+function claimedIn(event: WorkflowEvent): readonly string[] {
+  switch (event.type) {
+    case "check_reported":
+      return event.report.met ?? [];
+    case "submit":
+    case "approve":
+      return event.met ?? [];
+    default:
+      return [];
+  }
+}
+
 export function approveReview(
   task: Task,
   event: WorkflowEvent,
@@ -125,6 +154,20 @@ export function approveReview(
 ): Result<WorkflowOutcome> {
   const denied = assertReviewer(task, event, "approve");
   if (denied) return denied;
+
+  // An approval that leaves something on the list is not an approval. The work
+  // goes back naming what is outstanding, which is also what the next round
+  // needs to be told.
+  const outstanding = outstandingFor(task, event, context);
+  if (outstanding.length > 0) {
+    return requestChangesOrEscalate(
+      task,
+      event,
+      context,
+      `not done yet: ${outstanding.join("; ")}`,
+    );
+  }
+
   const approved = applyTransition(task, "approved", event, context);
   if (!approved.ok) return approved;
   return applyTransition(approved.value.task, "done", event, context, [

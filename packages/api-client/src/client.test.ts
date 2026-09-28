@@ -355,3 +355,43 @@ describe("changing the office itself", () => {
     if (!result.ok) expect(result.kind).toBe("validation");
   });
 });
+
+describe("fields an older office does not send", () => {
+  it("gives a task the empty lists it is typed as having", async () => {
+    // The client casts JSON to a Task; an office that predates a field would
+    // otherwise hand back something that lies about its own shape.
+    server.use(
+      http.get(`${BASE}/tasks/task-1`, () =>
+        HttpResponse.json({ id: "task-1", title: "Old", history: [] }),
+      ),
+    );
+    const result = await client().getTask("task-1");
+    if (result.ok) {
+      expect(result.value.acceptanceCriteria).toEqual([]);
+      expect(result.value.route).toEqual([]);
+      expect(result.value.artifacts).toEqual([]);
+    } else {
+      throw new Error("expected the task to load");
+    }
+  });
+
+  it("gives a department the empty definition of done it is typed as having", async () => {
+    server.use(
+      http.get(`${BASE}/departments/dept-eng`, () =>
+        HttpResponse.json({ id: "dept-eng", name: "Engineering" }),
+      ),
+    );
+    const result = await client().getDepartment("dept-eng");
+    if (result.ok) expect(result.value.definitionOfDone).toEqual([]);
+  });
+
+  it("leaves what the office did send alone", async () => {
+    server.use(
+      http.get(`${BASE}/departments/dept-eng`, () =>
+        HttpResponse.json({ id: "dept-eng", definitionOfDone: ["has tests"] }),
+      ),
+    );
+    const result = await client().getDepartment("dept-eng");
+    if (result.ok) expect(result.value.definitionOfDone).toEqual(["has tests"]);
+  });
+});

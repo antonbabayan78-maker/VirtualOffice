@@ -17,6 +17,12 @@ export interface CheckReport {
   readonly outcome: CheckOutcome;
   /** Test or script output: what makes a change request actionable. */
   readonly output: string;
+  /**
+   * Which acceptance criteria this check can vouch for. A green suite is not
+   * the same as the list being met, so a check that cannot speak to a criterion
+   * leaves it out rather than being read as having verified it.
+   */
+  readonly met?: readonly string[];
 }
 
 export interface CheckRunner {

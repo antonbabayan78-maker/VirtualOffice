@@ -201,3 +201,43 @@ describe("automated policy: registration", () => {
     }
   });
 });
+
+describe("a check answering the definition of done", () => {
+  const criteria = ["the suite is green", "coverage did not drop"];
+  const withCriteria = () => context(automated(), { acceptanceCriteria: criteria });
+
+  it("finishes the work when the check reported the whole list", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review"),
+        { type: "check_reported", report: { ...report("passed", "ok"), met: criteria } },
+        withCriteria(),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("sends the work back when the check passed but answered only part of it", () => {
+    // A green suite is not the same as the list being met, and a check that
+    // cannot speak to a criterion should not be read as having checked it.
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review"),
+        { type: "check_reported", report: { ...report("passed", "ok"), met: [criteria[0] ?? ""] } },
+        withCriteria(),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_progress");
+  });
+
+  it("finishes as it always did when the office asked for nothing", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review"),
+        { type: "check_reported", report: report("passed", "ok") },
+        context(),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+});

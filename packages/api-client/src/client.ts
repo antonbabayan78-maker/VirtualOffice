@@ -74,8 +74,22 @@ function reviveOffice(raw: Record<string, unknown>): Office {
   return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Office;
 }
 
+/**
+ * Lists an entity is typed as always having.
+ *
+ * An office that predates a field simply does not send it, and this is the
+ * boundary where untrusted JSON becomes a typed entity — so it is the place to
+ * make the type's promise true, rather than defending against it everywhere
+ * downstream.
+ */
+const listOr = (raw: unknown): readonly string[] => (Array.isArray(raw) ? (raw as string[]) : []);
+
 function reviveDepartment(raw: Record<string, unknown>): Department {
-  return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Department;
+  return {
+    ...raw,
+    definitionOfDone: listOr(raw["definitionOfDone"]),
+    createdAt: asDate(raw["createdAt"]),
+  } as unknown as Department;
 }
 
 function reviveTask(raw: Record<string, unknown>): Task {
@@ -84,6 +98,9 @@ function reviveTask(raw: Record<string, unknown>): Task {
     : [];
   return {
     ...raw,
+    acceptanceCriteria: listOr(raw["acceptanceCriteria"]),
+    route: listOr(raw["route"]),
+    artifacts: listOr(raw["artifacts"]),
     history: history.map((event) => ({ ...event, at: asDate(event["at"]) })),
   } as unknown as Task;
 }

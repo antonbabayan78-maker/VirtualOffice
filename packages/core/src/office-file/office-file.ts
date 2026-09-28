@@ -82,6 +82,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         config: d.config,
         reviewPolicy: d.reviewPolicy,
         schedule: d.schedule,
+        definitionOfDone: d.definitionOfDone.length > 0 ? d.definitionOfDone : null,
         priority: d.priority === "normal" ? null : d.priority,
         createdAt: d.createdAt.toISOString(),
       }),
@@ -353,6 +354,9 @@ export function importOfficeYaml(
         ...("reviewPolicy" in d ? { reviewPolicy: d["reviewPolicy"] } : {}),
         ...("schedule" in d ? { schedule: d["schedule"] } : {}),
         ...("priority" in d ? { priority: d["priority"] as string } : {}),
+        ...("definitionOfDone" in d
+          ? { definitionOfDone: d["definitionOfDone"] as readonly string[] }
+          : {}),
       },
       departments,
       { id: () => id as DepartmentId, now: () => created },

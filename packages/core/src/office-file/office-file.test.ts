@@ -533,3 +533,51 @@ employees:
     expect(exportOfficeYaml(plain)).not.toContain("priority");
   });
 });
+
+describe("a department's definition of done in an office file", () => {
+  const YAML = `
+version: 1
+office:
+  id: office-1
+  name: Acme
+departments:
+  - id: dept-eng
+    name: Engineering
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    definitionOfDone:
+      - the tests cover the error path
+      - nothing was left commented out
+`;
+
+  it("reads what the department expects of everything it makes", () => {
+    const config = unwrap(importOfficeYaml(YAML, deps));
+    expect(at(config.departments, 0).definitionOfDone).toEqual([
+      "the tests cover the error path",
+      "nothing was left commented out",
+    ]);
+  });
+
+  it("expects nothing when the file says nothing", () => {
+    const silent = YAML.replace(/ *definitionOfDone:[\s\S]*$/, "");
+    expect(at(unwrap(importOfficeYaml(silent, deps)).departments, 0).definitionOfDone).toEqual([]);
+  });
+
+  it("refuses an entry that is not text, rather than dropping it", () => {
+    const bad = YAML.replace("- nothing was left commented out", "- { not: text }");
+    expect(isErr(importOfficeYaml(bad, deps))).toBe(true);
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+    expect(at(again.departments, 0).definitionOfDone).toEqual(
+      at(once.departments, 0).definitionOfDone,
+    );
+  });
+
+  it("keeps an empty list out of the file, so nothing gains noise", () => {
+    const silent = unwrap(importOfficeYaml(YAML.replace(/ *definitionOfDone:[\s\S]*$/, ""), deps));
+    expect(exportOfficeYaml(silent)).not.toContain("definitionOfDone");
+  });
+});
