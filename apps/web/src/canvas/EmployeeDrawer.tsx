@@ -15,7 +15,7 @@ import { isErr, type Employee, type ValidationError } from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
-import { cn } from "../ui/cn.js";
+import { Field, Problems, inputClass } from "../ui/field.js";
 
 interface ModelRef {
   readonly provider: string;
@@ -83,26 +83,6 @@ function draftOf(employee: Employee): Draft {
           },
   };
 }
-
-function Field({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <label className="flex flex-col gap-1 text-xs text-ink-muted">
-      {label}
-      {children}
-    </label>
-  );
-}
-
-const inputClass = cn(
-  "rounded-lg border border-border bg-surface px-2 py-1.5 text-sm text-ink",
-  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
-);
 
 export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): ReactNode {
   const selectedEmployeeId = store((state) => state.selectedEmployeeId);
@@ -187,18 +167,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         <p className="text-xs text-ink-muted">{department?.name ?? "No department"}</p>
       </header>
 
-      {problems.length > 0 && (
-        <ul
-          role="alert"
-          className="rounded-panel border border-border bg-surface-muted p-2 text-xs"
-        >
-          {problems.map((problem) => (
-            <li key={`${problem.path}:${problem.message}`}>
-              <span className="font-medium">{problem.path}</span>: {problem.message}
-            </li>
-          ))}
-        </ul>
-      )}
+      <Problems problems={problems} />
 
       <Field label="Name">
         <input

@@ -4,6 +4,7 @@ import { isErr, isOk, unwrap } from "../shared/result.js";
 import { DEFAULT_REVIEW_POLICY } from "./review-policy.js";
 import {
   createDepartment,
+  updateDepartment,
   DEFAULT_DEPARTMENT_SIZE,
   normalizeHexColor,
   type Department,
@@ -27,6 +28,104 @@ describe("normalizeHexColor", () => {
     for (const bad of ["3b82f6", "#3b82f", "#3b82f6ff", "#ggg", "blue", 42, null]) {
       expect(isErr(normalizeHexColor(bad)), String(bad)).toBe(true);
     }
+  });
+});
+
+describe("updateDepartment", () => {
+  const made = (name: string, id: string): Department =>
+    unwrap(
+      createDepartment({ ...base, name }, [], {
+        id: () => id as DepartmentId,
+        now: () => new Date("2026-09-01T00:00:00Z"),
+      }),
+    );
+
+  it("changes what it was asked to change", () => {
+    const after = unwrap(updateDepartment(made("Engineering", "d1"), { name: "Platform" }, []));
+    expect(after.name).toBe("Platform");
+  });
+
+  it("leaves everything else as it was", () => {
+    const before = made("Engineering", "d1");
+    const after = unwrap(updateDepartment(before, { name: "Platform" }, []));
+    expect({ ...after, name: before.name }).toEqual(before);
+  });
+
+  it("keeps its identity and when it was created", () => {
+    const before = made("Engineering", "d1");
+    const after = unwrap(updateDepartment(before, { color: "#123456" }, []));
+    expect(after.id).toBe(before.id);
+    expect(after.createdAt).toEqual(before.createdAt);
+    expect(after.officeId).toBe(before.officeId);
+  });
+
+  it("does not mind a department keeping its own name", () => {
+    const eng = made("Engineering", "d1");
+    expect(isOk(updateDepartment(eng, { color: "#123456" }, [eng]))).toBe(true);
+    expect(isOk(updateDepartment(eng, { name: "Engineering" }, [eng]))).toBe(true);
+  });
+
+  it("refuses a name another department already has", () => {
+    const eng = made("Engineering", "d1");
+    const sales = made("Sales", "d2");
+    const r = updateDepartment(eng, { name: "Sales" }, [eng, sales]);
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.error[0]?.path).toBe("name");
+  });
+
+  it("refuses a colour that is not one", () => {
+    expect(isErr(updateDepartment(made("Engineering", "d1"), { color: "nope" }, []))).toBe(true);
+  });
+
+  it("takes a different review policy", () => {
+    const after = unwrap(
+      updateDepartment(
+        made("Engineering", "d1"),
+        { reviewPolicy: { kind: "quorum", required: 2 } },
+        [],
+      ),
+    );
+    expect(after.reviewPolicy).toEqual({ kind: "quorum", required: 2, maxIterations: 3 });
+  });
+
+  it("refuses a review policy the engine could not run", () => {
+    const r = updateDepartment(made("Engineering", "d1"), { reviewPolicy: { kind: "quorum" } }, []);
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.error.map((e) => e.path).join()).toMatch(/required/);
+  });
+
+  it("sets and clears an icon", () => {
+    const withIcon = unwrap(updateDepartment(made("Engineering", "d1"), { icon: "wrench" }, []));
+    expect(withIcon.icon).toBe("wrench");
+    expect(unwrap(updateDepartment(withIcon, { icon: null }, [])).icon).toBeNull();
+  });
+
+  it("takes its own working hours, and gives them back", () => {
+    const nights = unwrap(
+      updateDepartment(
+        made("Engineering", "d1"),
+        {
+          schedule: {
+            kind: "windows",
+            timezone: "UTC",
+            windows: [{ days: ["mon"], start: "22:00", end: "06:00" }],
+          },
+        },
+        [],
+      ),
+    );
+    expect(nights.schedule).toMatchObject({ kind: "windows" });
+    expect(unwrap(updateDepartment(nights, { schedule: { kind: "always" } }, [])).schedule).toEqual(
+      {
+        kind: "always",
+      },
+    );
+  });
+
+  it("reports every problem at once", () => {
+    const r = updateDepartment(made("Engineering", "d1"), { name: "", color: "nope" }, []);
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.error.length).toBeGreaterThan(1);
   });
 });
 

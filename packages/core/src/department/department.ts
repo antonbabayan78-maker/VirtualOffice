@@ -130,6 +130,81 @@ function validateSize(v: unknown): ValidationError[] {
   return errors;
 }
 
+/**
+ * What may be changed about a department after it exists. Absent leaves a field
+ * alone; null clears one that is allowed to be empty, such as its icon.
+ */
+export interface UpdateDepartmentInput {
+  readonly name?: string;
+  readonly color?: string;
+  readonly icon?: string | null;
+  readonly config?: Record<string, unknown>;
+  readonly reviewPolicy?: unknown;
+  readonly schedule?: unknown;
+}
+
+/**
+ * Applies changes to a department, validating them exactly as creating one
+ * does. Its identity, its place on the canvas and when it was created carry
+ * over; a department keeping its own name is not a duplicate of itself, which
+ * re-running createDepartment against the office would have called one.
+ */
+export function updateDepartment(
+  department: Department,
+  changes: UpdateDepartmentInput,
+  existing: readonly { readonly id: string; readonly name: string }[],
+): Result<Department> {
+  const errors: ValidationError[] = [];
+
+  const others = existing.filter((candidate) => candidate.id !== department.id);
+  const name =
+    changes.name === undefined ? ok(department.name) : validateName(changes.name, others);
+  if (!name.ok) errors.push(...name.error);
+
+  const color =
+    changes.color === undefined ? ok(department.color) : normalizeHexColor(changes.color);
+  if (!color.ok) errors.push(...color.error);
+
+  let icon: string | null = department.icon;
+  if (changes.icon === null) icon = null;
+  else if (changes.icon !== undefined) {
+    const trimmed = changes.icon.trim();
+    if (trimmed.length === 0 || trimmed.length > DEPARTMENT_ICON_MAX_LENGTH) {
+      errors.push({
+        path: "icon",
+        message: `must be 1-${String(DEPARTMENT_ICON_MAX_LENGTH)} characters`,
+      });
+    } else icon = trimmed;
+  }
+
+  const config = changes.config ?? department.config;
+  if (!isRecord(config)) errors.push({ path: "config", message: "must be an object" });
+
+  const reviewPolicy =
+    changes.reviewPolicy === undefined
+      ? ok(department.reviewPolicy)
+      : parseReviewPolicy(changes.reviewPolicy);
+  if (!reviewPolicy.ok) errors.push(...prefixErrors("reviewPolicy", reviewPolicy.error));
+
+  const schedule =
+    changes.schedule === undefined ? ok(department.schedule) : parseSchedule(changes.schedule);
+  if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
+
+  if (errors.length > 0 || !name.ok || !color.ok || !reviewPolicy.ok || !schedule.ok) {
+    return err(errors);
+  }
+
+  return ok({
+    ...department,
+    name: name.value,
+    color: color.value,
+    icon,
+    config: { ...config },
+    reviewPolicy: reviewPolicy.value,
+    schedule: schedule.value,
+  });
+}
+
 export function createDepartment(
   input: CreateDepartmentInput,
   existing: readonly { readonly name: string }[],
