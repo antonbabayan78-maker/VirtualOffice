@@ -11,6 +11,7 @@ import { normalizeHexColor, type DepartmentId } from "../department/department.j
 import type { OfficeId } from "../office/office.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
+import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseLlmConfig, type LlmConfig } from "./llm-config.js";
 
 declare const employeeIdBrand: unique symbol;
@@ -33,6 +34,12 @@ export interface Employee {
   readonly schedule: Schedule | null;
   /** Who controls this employee's work. null means the office owner. */
   readonly supervisorId: EmployeeId | null;
+  /**
+   * This person's standing priority, outranked by their department's and the
+   * office's. Lowering it is how somebody is told to yield to their colleagues
+   * without touching any of their tasks.
+   */
+  readonly priority: TaskPriority;
   /** Where the work is stored (connector reference). null means the department default. */
   readonly workspaceRef: string | null;
   readonly status: EmployeeStatus;
@@ -50,6 +57,8 @@ export interface CreateEmployeeInput {
   readonly toolGrants?: readonly ToolGrant[];
   readonly schedule?: unknown;
   readonly supervisorId?: string;
+  /** Defaults to normal. Loose on the way in, narrow on the entity. */
+  readonly priority?: string;
   readonly workspaceRef?: string;
 }
 
@@ -174,6 +183,11 @@ export function createEmployee(
   const supervisorId = validateSupervisor(input.supervisorId, id, ctx);
   if (!supervisorId.ok) errors.push(...supervisorId.error);
 
+  const priority = input.priority ?? "normal";
+  if (!isPriority(priority)) {
+    errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
+  }
+
   if (
     errors.length > 0 ||
     !name.ok ||
@@ -182,7 +196,8 @@ export function createEmployee(
     !llm.ok ||
     !skillIds.ok ||
     !toolGrants.ok ||
-    !supervisorId.ok
+    !supervisorId.ok ||
+    !isPriority(priority)
   ) {
     return err(errors);
   }
@@ -202,6 +217,7 @@ export function createEmployee(
     schedule,
     supervisorId: supervisorId.value,
     workspaceRef: input.workspaceRef ?? null,
+    priority,
     status: "active",
     statusChangedAt: now,
     createdAt: now,
@@ -224,6 +240,7 @@ export interface UpdateEmployeeInput {
   readonly schedule?: unknown;
   readonly supervisorId?: string | null;
   readonly workspaceRef?: string | null;
+  readonly priority?: string;
 }
 
 export interface UpdateEmployeeContext {
@@ -284,6 +301,11 @@ export function updateEmployee(
     else errors.push(...validated.error);
   }
 
+  const priority = changes.priority ?? employee.priority;
+  if (!isPriority(priority)) {
+    errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
+  }
+
   if (
     errors.length > 0 ||
     !name.ok ||
@@ -291,7 +313,8 @@ export function updateEmployee(
     !color.ok ||
     !llm.ok ||
     !skillIds.ok ||
-    !toolGrants.ok
+    !toolGrants.ok ||
+    !isPriority(priority)
   ) {
     return err(errors);
   }
@@ -308,6 +331,7 @@ export function updateEmployee(
     schedule,
     supervisorId,
     workspaceRef: changes.workspaceRef === undefined ? employee.workspaceRef : changes.workspaceRef,
+    priority,
   });
 }
 

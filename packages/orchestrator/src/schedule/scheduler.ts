@@ -29,16 +29,20 @@ import {
 } from "@vo/core";
 import type { JobQueue, JobSpec } from "../queue/types.js";
 import { nextCronRun, parseCron } from "./cron.js";
+import { orderingKey } from "./priority.js";
 
 export interface ScheduledOffice {
   readonly id: OfficeId;
   readonly schedule: Schedule;
+  /** Absent means normal: a level that has set nothing must not sink its work. */
+  readonly priority?: TaskPriority;
 }
 
 export interface ScheduledDepartment {
   readonly id: DepartmentId;
   readonly officeId: OfficeId;
   readonly schedule: Schedule;
+  readonly priority?: TaskPriority;
 }
 
 export interface ScheduledEmployee {
@@ -47,6 +51,7 @@ export interface ScheduledEmployee {
   readonly departmentId: DepartmentId;
   readonly status: EmployeeStatus;
   readonly schedule: Schedule;
+  readonly priority?: TaskPriority;
 }
 
 export interface RunnableTask {
@@ -77,7 +82,8 @@ export interface RecurringJob {
   readonly timezone?: string;
   readonly kind: string;
   readonly payload?: Readonly<Record<string, unknown>>;
-  readonly priority?: number;
+  /** The definition's own standing, ranked alongside every other kind of work. */
+  readonly priority?: TaskPriority;
   /** When this last fired; null for a definition that never has. */
   readonly lastRunAt: number | null;
 }
@@ -119,12 +125,25 @@ export interface DueWork {
 /** Statuses where the next move belongs to the agent. */
 const AGENT_TURN: readonly TaskStatus[] = ["assigned", "in_progress"];
 
-const JOB_PRIORITY: Readonly<Record<TaskPriority, number>> = {
-  low: 0,
-  normal: 10,
-  high: 20,
-  urgent: 30,
-};
+/**
+ * What a job is worth, as one number the queue can sort by: the office's
+ * standing priority, then the department's, then the employee's, then the
+ * task's own. A level that has set nothing counts as normal, so an office that
+ * has configured none of this orders its work exactly as it always did.
+ */
+function jobPriority(
+  task: RunnableTask,
+  office: ScheduledOffice | undefined,
+  department: ScheduledDepartment | undefined,
+  employee: ScheduledEmployee | undefined,
+): number {
+  return orderingKey({
+    office: office?.priority ?? "normal",
+    department: department?.priority ?? "normal",
+    employee: employee?.priority ?? "normal",
+    task: task.priority,
+  });
+}
 
 export const AGENT_RUN_JOB = "agent_run";
 /** A review is due work too: it is the reviewer's move, not the author's. */
@@ -195,7 +214,15 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
           employeeId: reviewerId,
           kind: AGENT_REVIEW_JOB,
           payload: { taskId: task.id, departmentId: task.departmentId },
-          priority: JOB_PRIORITY[task.priority],
+          // The work belongs to the task's department, so that is the standing
+          // priority that applies — but it is the reviewer's own turn, so it is
+          // their standing priority, not the author's.
+          priority: jobPriority(
+            task,
+            offices.get(task.officeId),
+            departments.get(task.departmentId),
+            reviewer,
+          ),
           idempotencyKey: `${AGENT_REVIEW_JOB}:${task.id}:${String(task.revision)}`,
         });
         queued = true;
@@ -231,7 +258,12 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
       employeeId: task.assigneeId,
       kind: AGENT_RUN_JOB,
       payload: { taskId: task.id, departmentId: task.departmentId },
-      priority: JOB_PRIORITY[task.priority],
+      priority: jobPriority(
+        task,
+        offices.get(task.officeId),
+        departments.get(task.departmentId),
+        employee,
+      ),
       // Keyed by the task's last change, so ticking twice queues one run, and a
       // task that moves on genuinely earns another.
       idempotencyKey: `${AGENT_RUN_JOB}:${task.id}:${String(task.revision)}`,
@@ -294,7 +326,14 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
       ...(recurring.employeeId === undefined ? {} : { employeeId: recurring.employeeId }),
       kind: recurring.kind,
       payload: { ...recurring.payload, recurringId: recurring.id, dueAt: dueAt.getTime() },
-      priority: recurring.priority ?? 0,
+      // Ranked by the same four levels as anything else. On a raw number of its
+      // own, recurring work would sit below every ordinary task forever.
+      priority: orderingKey({
+        office: office?.priority ?? "normal",
+        department: department?.priority ?? "normal",
+        employee: employee?.priority ?? "normal",
+        task: recurring.priority ?? "normal",
+      }),
       // One job per occurrence however many ticks see it.
       idempotencyKey: `recurring:${recurring.id}:${String(dueAt.getTime())}`,
     });

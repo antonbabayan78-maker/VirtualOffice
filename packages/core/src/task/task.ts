@@ -50,6 +50,20 @@ export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = ["done", "cancelled
 export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+/**
+ * A priority as a number, lowest first.
+ *
+ * Declared here so everything that orders work agrees what "higher" means. It
+ * starts at zero and stays below ten because a scheduler packs several of these
+ * into the digits of one number; a fifth priority is fine, an eleventh is not.
+ */
+export const PRIORITY_RANK: Readonly<Record<TaskPriority, number>> = {
+  low: 0,
+  normal: 1,
+  high: 2,
+  urgent: 3,
+};
+
 export interface TaskEvent {
   readonly at: Date;
   readonly from: TaskStatus | null;
@@ -128,7 +142,7 @@ export interface TransitionOptions {
 export const TASK_TITLE_MAX_LENGTH = 200;
 export const TASK_BRIEF_MAX_LENGTH = 20_000;
 
-function isPriority(v: unknown): v is TaskPriority {
+export function isPriority(v: unknown): v is TaskPriority {
   return typeof v === "string" && (TASK_PRIORITIES as readonly string[]).includes(v);
 }
 

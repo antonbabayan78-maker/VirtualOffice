@@ -55,7 +55,9 @@ describe("turning an office into something the scheduler can read", () => {
   });
 
   it("carries the office's hours, which gate everything else", () => {
-    expect(snapshot.offices).toEqual([{ id: officeId, schedule: office.schedule }]);
+    expect(snapshot.offices).toEqual([
+      { id: officeId, schedule: office.schedule, priority: "normal" },
+    ]);
   });
 
   it("carries each department with its own hours", () => {
@@ -85,5 +87,37 @@ describe("turning an office into something the scheduler can read", () => {
 
   it("has no recurring work unless it was given some", () => {
     expect(snapshot.recurring).toEqual([]);
+  });
+});
+
+describe("carrying the standing priorities through", () => {
+  it("carries the office's, so the organisation's decision reaches the queue", () => {
+    const snapshot = officeSnapshot({
+      office: { ...office, priority: "high" },
+      departments: [eng],
+      employees: [ada],
+      tasks: [task],
+    });
+    expect(snapshot.offices[0]?.priority).toBe("high");
+  });
+
+  it("carries each department's", () => {
+    const snapshot = officeSnapshot({
+      office,
+      departments: [{ ...eng, priority: "urgent" }],
+      employees: [ada],
+      tasks: [task],
+    });
+    expect(snapshot.departments[0]?.priority).toBe("urgent");
+  });
+
+  it("carries each employee's", () => {
+    const snapshot = officeSnapshot({
+      office,
+      departments: [eng],
+      employees: [{ ...ada, priority: "low" }],
+      tasks: [task],
+    });
+    expect(snapshot.employees[0]?.priority).toBe("low");
   });
 });

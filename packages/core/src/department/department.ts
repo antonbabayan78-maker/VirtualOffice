@@ -4,6 +4,7 @@
  */
 import type { OfficeId } from "../office/office.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
+import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
@@ -33,6 +34,12 @@ export interface Department {
   /** Free-form department configuration, interpreted by plugins and the UI. */
   readonly config: Readonly<Record<string, unknown>>;
   readonly reviewPolicy: ReviewPolicy;
+  /**
+   * The department's standing priority. It outranks anything its people or
+   * their tasks ask for, and is outranked by the office's — which is how a
+   * department is put into crunch without anyone editing every task.
+   */
+  readonly priority: TaskPriority;
   /** When this department works; the office's hours gate it too. */
   readonly schedule: Schedule;
   readonly createdAt: Date;
@@ -48,6 +55,8 @@ export interface CreateDepartmentInput {
   readonly config?: Record<string, unknown>;
   /** Unvalidated; defaults to manager review. */
   readonly reviewPolicy?: unknown;
+  /** Defaults to normal. Loose on the way in, narrow on the entity. */
+  readonly priority?: string;
   readonly schedule?: unknown;
 }
 
@@ -141,6 +150,7 @@ export interface UpdateDepartmentInput {
   readonly config?: Record<string, unknown>;
   readonly reviewPolicy?: unknown;
   readonly schedule?: unknown;
+  readonly priority?: string;
 }
 
 /**
@@ -190,7 +200,19 @@ export function updateDepartment(
     changes.schedule === undefined ? ok(department.schedule) : parseSchedule(changes.schedule);
   if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
 
-  if (errors.length > 0 || !name.ok || !color.ok || !reviewPolicy.ok || !schedule.ok) {
+  const priority = changes.priority ?? department.priority;
+  if (!isPriority(priority)) {
+    errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
+  }
+
+  if (
+    errors.length > 0 ||
+    !name.ok ||
+    !color.ok ||
+    !reviewPolicy.ok ||
+    !schedule.ok ||
+    !isPriority(priority)
+  ) {
     return err(errors);
   }
 
@@ -202,6 +224,7 @@ export function updateDepartment(
     config: { ...config },
     reviewPolicy: reviewPolicy.value,
     schedule: schedule.value,
+    priority,
   });
 }
 
@@ -240,7 +263,19 @@ export function createDepartment(
   const schedule = parseSchedule(input.schedule ?? { kind: "always" });
   if (!schedule.ok) errors.push(...prefixErrors("schedule", schedule.error));
 
-  if (errors.length > 0 || !name.ok || !color.ok || !reviewPolicy.ok || !schedule.ok) {
+  const priority = input.priority ?? "normal";
+  if (!isPriority(priority)) {
+    errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
+  }
+
+  if (
+    errors.length > 0 ||
+    !name.ok ||
+    !color.ok ||
+    !reviewPolicy.ok ||
+    !schedule.ok ||
+    !isPriority(priority)
+  ) {
     return err(errors);
   }
 
@@ -255,6 +290,7 @@ export function createDepartment(
     config: { ...config },
     reviewPolicy: reviewPolicy.value,
     schedule: schedule.value,
+    priority,
     createdAt: deps.now(),
   });
 }

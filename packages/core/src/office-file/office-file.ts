@@ -61,13 +61,16 @@ export function exportOfficeYaml(config: OfficeConfig): string {
   const o = config.office;
   const file = {
     version: OFFICE_FILE_VERSION,
-    office: {
+    office: omitNull({
       id: o.id,
       name: o.name,
       schedule: o.schedule,
+      // A default is not worth writing down: it would appear on every entity in
+      // every file and say nothing.
+      priority: o.priority === "normal" ? null : o.priority,
       configVersion: o.configVersion,
       createdAt: o.createdAt.toISOString(),
-    },
+    }),
     departments: byId(config.departments).map((d) =>
       omitNull({
         id: d.id,
@@ -79,6 +82,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         config: d.config,
         reviewPolicy: d.reviewPolicy,
         schedule: d.schedule,
+        priority: d.priority === "normal" ? null : d.priority,
         createdAt: d.createdAt.toISOString(),
       }),
     ),
@@ -101,6 +105,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         schedule: e.schedule,
         supervisor: e.supervisorId,
         workspace: e.workspaceRef,
+        priority: e.priority === "normal" ? null : e.priority,
         status: e.status,
         statusChangedAt: e.statusChangedAt.toISOString(),
         createdAt: e.createdAt.toISOString(),
@@ -310,6 +315,7 @@ export function importOfficeYaml(
       {
         name: rawOffice["name"] as string,
         ...("schedule" in rawOffice ? { schedule: rawOffice["schedule"] } : {}),
+        ...("priority" in rawOffice ? { priority: rawOffice["priority"] as string } : {}),
       },
       { id: () => officeId, now: () => officeCreated },
     );
@@ -346,6 +352,7 @@ export function importOfficeYaml(
         ...(isRecord(d["config"]) ? { config: d["config"] } : {}),
         ...("reviewPolicy" in d ? { reviewPolicy: d["reviewPolicy"] } : {}),
         ...("schedule" in d ? { schedule: d["schedule"] } : {}),
+        ...("priority" in d ? { priority: d["priority"] as string } : {}),
       },
       departments,
       { id: () => id as DepartmentId, now: () => created },
@@ -427,6 +434,7 @@ export function importOfficeYaml(
         ...(Array.isArray(e["skills"]) ? { skillIds: e["skills"] as string[] } : {}),
         toolGrants,
         ...("schedule" in e ? { schedule: e["schedule"] } : {}),
+        ...("priority" in e ? { priority: e["priority"] as string } : {}),
         ...(supervisorId === undefined ? {} : { supervisorId }),
         ...(typeof e["workspace"] === "string" ? { workspaceRef: e["workspace"] } : {}),
       },

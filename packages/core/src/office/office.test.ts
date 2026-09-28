@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isErr, isOk, unwrap } from "../shared/result.js";
-import { createOffice, type OfficeId } from "./office.js";
+import { createOffice, updateOffice, type OfficeId } from "./office.js";
 
 const deps = {
   id: () => "office-1" as OfficeId,
@@ -16,6 +16,7 @@ describe("createOffice", () => {
       id: "office-1",
       name: "Acme Studio",
       schedule: { kind: "always" },
+      priority: "normal",
       configVersion: 1,
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
@@ -77,5 +78,64 @@ describe("createOffice", () => {
       expect(paths).toContain("name");
       expect(paths).toContain("schedule.kind");
     }
+  });
+});
+
+describe("an office's standing priority", () => {
+  it("is normal unless the office says otherwise", () => {
+    expect(unwrap(createOffice({ name: "Acme" }, deps)).priority).toBe("normal");
+  });
+
+  it("is taken from the office when it is given one", () => {
+    expect(unwrap(createOffice({ name: "Acme", priority: "urgent" }, deps)).priority).toBe(
+      "urgent",
+    );
+  });
+
+  it("refuses a priority that is not one, rather than quietly working at normal", () => {
+    const result = createOffice({ name: "Acme", priority: "critical" }, deps);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) expect(result.error[0]?.path).toBe("priority");
+  });
+});
+
+describe("changing an office", () => {
+  const office = () => unwrap(createOffice({ name: "Acme" }, deps));
+
+  it("renames it", () => {
+    expect(unwrap(updateOffice(office(), { name: "Acme Robotics" })).name).toBe("Acme Robotics");
+  });
+
+  it("raises its standing priority", () => {
+    expect(unwrap(updateOffice(office(), { priority: "high" })).priority).toBe("high");
+  });
+
+  it("leaves alone what the change does not mention", () => {
+    const before = office();
+    const after = unwrap(updateOffice(before, { priority: "high" }));
+    expect(after.name).toBe(before.name);
+    expect(after.schedule).toEqual(before.schedule);
+  });
+
+  it("keeps the office the same office", () => {
+    const before = office();
+    const after = unwrap(updateOffice(before, { name: "Renamed" }));
+    expect(after.id).toBe(before.id);
+    expect(after.createdAt).toEqual(before.createdAt);
+    // The store owns the version; an edit here must not invent one.
+    expect(after.configVersion).toBe(before.configVersion);
+  });
+
+  it("refuses a name it would have refused at creation", () => {
+    expect(isErr(updateOffice(office(), { name: "  " }))).toBe(true);
+  });
+
+  it("refuses a priority that is not one", () => {
+    expect(isErr(updateOffice(office(), { priority: "whenever" }))).toBe(true);
+  });
+
+  it("changes its hours", () => {
+    const after = unwrap(updateOffice(office(), { schedule: { kind: "always" } }));
+    expect(after.schedule).toEqual({ kind: "always" });
   });
 });

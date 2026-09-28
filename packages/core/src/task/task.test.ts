@@ -6,7 +6,10 @@ import { isErr, isOk, unwrap } from "../shared/result.js";
 import {
   canTransition,
   createTask,
+  isPriority,
+  PRIORITY_RANK,
   type CreateTaskInput,
+  TASK_PRIORITIES,
   TASK_STATUSES,
   TASK_TRANSITIONS,
   TERMINAL_TASK_STATUSES,
@@ -315,5 +318,32 @@ describe("transitionTask", () => {
     unwrap(transitionTask(task, "in_progress", { at: t1, actorId: ada }));
     expect(task.status).toBe("assigned");
     expect(task.history).toHaveLength(1);
+  });
+});
+
+describe("ranking one priority against another", () => {
+  it("ranks them in the order they are declared, lowest first", () => {
+    const ranks = TASK_PRIORITIES.map((priority) => PRIORITY_RANK[priority]);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+  });
+
+  it("gives every priority a rank of its own", () => {
+    expect(new Set(Object.values(PRIORITY_RANK)).size).toBe(TASK_PRIORITIES.length);
+  });
+
+  it("starts at zero, so a rank can be packed into a positional key", () => {
+    expect(Math.min(...Object.values(PRIORITY_RANK))).toBe(0);
+  });
+
+  it("leaves room for no more than ten levels, which is what packing assumes", () => {
+    expect(Math.max(...Object.values(PRIORITY_RANK))).toBeLessThan(10);
+  });
+
+  it("recognises a priority, and refuses anything else", () => {
+    expect(isPriority("urgent")).toBe(true);
+    expect(isPriority("URGENT")).toBe(false);
+    expect(isPriority("")).toBe(false);
+    expect(isPriority(3)).toBe(false);
+    expect(isPriority(undefined)).toBe(false);
   });
 });

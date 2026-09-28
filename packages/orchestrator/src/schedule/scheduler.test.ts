@@ -341,3 +341,158 @@ describe("enqueueDueWork", () => {
     expect((await queue.stats()).pending).toBe(1);
   });
 });
+
+describe("ordering work by the level that decided it", () => {
+  const keyOf = (snap: SchedulerSnapshot): number =>
+    computeDueWork(snap, duringHours).jobs[0]?.priority ?? -1;
+
+  it("gives every job the same key when no level has an opinion", () => {
+    const a = keyOf(snapshot({ tasks: [task()] }));
+    const b = keyOf(snapshot({ tasks: [task({ id: "task-2" as TaskId })] }));
+    expect(a).toBe(b);
+  });
+
+  it("carries the department's standing priority into the queue", () => {
+    const crunched = keyOf(
+      snapshot({
+        departments: [{ id: dept, officeId: office, schedule: ALWAYS, priority: "urgent" }],
+        tasks: [task({ priority: "low" })],
+      }),
+    );
+    const ordinary = keyOf(snapshot({ tasks: [task({ priority: "urgent" })] }));
+
+    // A crunched department's least important work still outranks an urgent
+    // task belonging to a department nobody has prioritised.
+    expect(crunched).toBeGreaterThan(ordinary);
+  });
+
+  it("carries the office's standing priority, which outranks a department's", () => {
+    const fromTheTop = keyOf(
+      snapshot({
+        offices: [{ id: office, schedule: ALWAYS, priority: "high" }],
+        tasks: [task({ priority: "low" })],
+      }),
+    );
+    const fromTheDepartment = keyOf(
+      snapshot({
+        departments: [{ id: dept, officeId: office, schedule: ALWAYS, priority: "urgent" }],
+        tasks: [task({ priority: "urgent" })],
+      }),
+    );
+    expect(fromTheTop).toBeGreaterThan(fromTheDepartment);
+  });
+
+  it("carries the employee's own standing priority", () => {
+    const yielding = keyOf(
+      snapshot({
+        employees: [
+          {
+            id: ada,
+            officeId: office,
+            departmentId: dept,
+            status: "active",
+            schedule: ALWAYS,
+            priority: "low",
+          },
+        ],
+        tasks: [task()],
+      }),
+    );
+    expect(yielding).toBeLessThan(keyOf(snapshot({ tasks: [task()] })));
+  });
+
+  it("treats a level that has set nothing as ordinary, rather than as nothing", () => {
+    // Snapshots built before there were levels leave the field out entirely.
+    // Absent has to mean normal, or every one of them sinks to the bottom.
+    const silent = keyOf(
+      snapshot({ offices: [{ id: office, schedule: ALWAYS }], tasks: [task()] }),
+    );
+    const explicit = keyOf(
+      snapshot({
+        offices: [{ id: office, schedule: ALWAYS, priority: "normal" }],
+        tasks: [task()],
+      }),
+    );
+    expect(silent).toBe(explicit);
+  });
+
+  it("ranks a review by the task's department and the reviewer's own standing", () => {
+    const reviewer = "emp-grace" as EmployeeId;
+    const withReviewer = (priority: TaskPriority): number =>
+      computeDueWork(
+        snapshot({
+          departments: [{ id: dept, officeId: office, schedule: ALWAYS, priority: "high" }],
+          employees: [
+            { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+            {
+              id: reviewer,
+              officeId: office,
+              departmentId: dept,
+              status: "active",
+              schedule: ALWAYS,
+              priority,
+            },
+          ],
+          tasks: [task({ status: "in_review", reviewerIds: [reviewer] })],
+        }),
+        duringHours,
+      ).jobs[0]?.priority ?? -1;
+
+    expect(withReviewer("high")).toBeGreaterThan(withReviewer("low"));
+  });
+});
+
+describe("recurring work takes its place in the same order", () => {
+  const dueDigest = (overrides: Partial<RecurringJob> = {}): number =>
+    computeDueWork(
+      snapshot({
+        recurring: [
+          {
+            id: "digest",
+            officeId: office,
+            departmentId: dept,
+            employeeId: ada,
+            cron: "0 9 * * *",
+            kind: "daily_digest",
+            lastRunAt: null,
+            ...overrides,
+          },
+        ],
+      }),
+      new Date("2026-09-28T09:00:00.000Z"),
+    ).jobs[0]?.priority ?? -1;
+
+  it("ranks a recurring job by the same levels as everything else", () => {
+    // Not zero: on a raw number it would sink below every ordinary task.
+    expect(dueDigest()).toBe(
+      computeDueWork(snapshot({ tasks: [task()] }), duringHours).jobs[0]?.priority,
+    );
+  });
+
+  it("lets a recurring definition ask for a priority of its own", () => {
+    expect(dueDigest({ priority: "urgent" })).toBeGreaterThan(dueDigest({ priority: "low" }));
+  });
+
+  it("is outranked by the department it belongs to, like any other work", () => {
+    const crunched = computeDueWork(
+      snapshot({
+        departments: [{ id: dept, officeId: office, schedule: ALWAYS, priority: "urgent" }],
+        recurring: [
+          {
+            id: "digest",
+            officeId: office,
+            departmentId: dept,
+            employeeId: ada,
+            cron: "0 9 * * *",
+            kind: "daily_digest",
+            lastRunAt: null,
+            priority: "low",
+          },
+        ],
+      }),
+      new Date("2026-09-28T09:00:00.000Z"),
+    ).jobs[0]?.priority;
+
+    expect(crunched).toBeGreaterThan(dueDigest({ priority: "urgent" }));
+  });
+});
