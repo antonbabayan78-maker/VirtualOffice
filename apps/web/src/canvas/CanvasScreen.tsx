@@ -20,6 +20,7 @@ import { officeStore } from "../office/store.js";
 import { loadSampleOffice } from "../office/sample-office.js";
 import { Canvas } from "./Canvas.js";
 import { DepartmentDrawer } from "./DepartmentDrawer.js";
+import { ConnectionDrawer } from "./ConnectionDrawer.js";
 import { OfficeDrawer } from "./OfficeDrawer.js";
 import { EmployeeDrawer } from "./EmployeeDrawer.js";
 import { Palette } from "./Palette.js";
@@ -83,6 +84,7 @@ export function CanvasScreen(): ReactNode {
         <Canvas store={officeStore} />
       </div>
       <OfficeDrawer store={officeStore} />
+      <ConnectionDrawer store={officeStore} />
       <DepartmentDrawer store={officeStore} />
       <EmployeeDrawer store={officeStore} />
     </div>

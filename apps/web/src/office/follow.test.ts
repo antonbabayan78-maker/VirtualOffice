@@ -72,6 +72,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
           history: [],
         } as never,
       }),
+    patchConnection: () => Promise.reject(new Error("not used here")),
     patchDepartment: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
@@ -307,5 +308,72 @@ describe("the office itself changing", () => {
       data: { kind: "office.updated", id: officeId },
     });
     expect(store.getState().office?.priority).toBe("normal");
+  });
+});
+
+describe("arrows changing under you", () => {
+  const sales = { ...eng, id: "dept-sales" as DepartmentId, name: "Sales" };
+  const arrow = {
+    id: "conn-1",
+    officeId,
+    fromId: eng.id,
+    toId: sales.id,
+    kind: "handoff",
+    enabled: true,
+    rules: {},
+    createdAt: at,
+  } as never;
+
+  const loaded = (connections: readonly unknown[]) =>
+    fakeApi({
+      loadOffice: () =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            office: { id: officeId } as never,
+            departments: [eng, sales],
+            employees: [],
+            tasks: [],
+            connections: connections as never,
+          },
+        }),
+    });
+
+  it("draws an arrow somebody else added, without a reload", async () => {
+    const api = loaded([]);
+    await follow(api).reload();
+    expect(store.getState().links).toEqual([]);
+
+    await follow(loaded([arrow])).apply({
+      offset: 5,
+      officeId,
+      at: 0,
+      data: { kind: "connection.created", id: "conn-1" },
+    });
+    expect(store.getState().links).toHaveLength(1);
+  });
+
+  it("stops drawing one somebody else switched off", async () => {
+    await follow(loaded([arrow])).reload();
+    expect(store.getState().links[0]?.enabled).toBe(true);
+
+    await follow(loaded([{ ...(arrow as object), enabled: false }])).apply({
+      offset: 6,
+      officeId,
+      at: 0,
+      data: { kind: "connection.updated", id: "conn-1" },
+    });
+    expect(store.getState().links[0]?.enabled).toBe(false);
+  });
+
+  it("takes away one somebody else removed", async () => {
+    await follow(loaded([arrow])).reload();
+    await follow(loaded([])).apply({
+      offset: 7,
+      officeId,
+      at: 0,
+      data: { kind: "connection.deleted", id: "conn-1" },
+    });
+    expect(store.getState().links).toEqual([]);
   });
 });

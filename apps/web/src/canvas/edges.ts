@@ -48,6 +48,19 @@ function sides(from: Box | undefined, to: Box | undefined): { source: string; ta
     : { source: "top-out", target: "bottom-in" };
 }
 
+/**
+ * The connection a click on this arrow means.
+ *
+ * An arrow may stand for two connections, one each way; the drawer opens on the
+ * one the canvas drew it from, which is the one whose direction is shown.
+ */
+export function connectionBehind(
+  links: readonly DepartmentLink[],
+  edgeId: string,
+): DepartmentLink["connectionIds"][number] | null {
+  return links.find((link) => link.id === edgeId)?.connectionIds[0] ?? null;
+}
+
 export function edgesFrom(
   links: readonly DepartmentLink[],
   boxes: Readonly<Record<string, Box>>,
@@ -60,12 +73,16 @@ export function edgesFrom(
       target: link.to,
       sourceHandle: handles.source,
       targetHandle: handles.target,
-      label: link.label,
+      // Said in words as well as drawn: a dashed line alone is something the
+      // reader has to guess the meaning of.
+      label: link.enabled ? link.label : `${link.label} (off)`,
       markerEnd: HEAD,
       // Two heads is how the canvas says the work goes both ways; two arrows
       // between the same pair would say it illegibly.
       ...(link.twoWay ? { markerStart: HEAD } : {}),
-      style: { stroke: "var(--color-ink-muted)" },
+      style: link.enabled
+        ? { stroke: "var(--color-ink-muted)" }
+        : { stroke: "var(--color-ink-muted)", strokeDasharray: "6 4", opacity: 0.45 },
       labelStyle: { fill: "var(--color-ink-muted)", fontSize: 11 },
       labelBgStyle: { fill: "var(--color-surface)" },
       labelBgPadding: [4, 2] as [number, number],

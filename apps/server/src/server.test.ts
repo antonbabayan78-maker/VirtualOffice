@@ -1157,3 +1157,84 @@ describe("a department noticing another over the wire", () => {
     expect(made.statusCode).toBe(400);
   });
 });
+
+describe("changing an arrow without redrawing it", () => {
+  async function anArrow() {
+    const officeId = await anOffice();
+    const from = await aDepartment(officeId, "Operations");
+    const to = await aDepartment(officeId, "Engineering");
+    const made = await post(`/offices/${officeId}/connections`, {
+      fromId: from,
+      toId: to,
+      kind: "watches",
+      rules: { for: ["work_went_wrong"] },
+    });
+    return { officeId, id: made.json<{ id: string }>().id };
+  }
+
+  it("switches one off, keeping the arrow and its id", async () => {
+    const arrow = await anArrow();
+    const updated = await patch(`/connections/${arrow.id}`, { enabled: false });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json<{ enabled: boolean; id: string }>()).toMatchObject({
+      enabled: false,
+      id: arrow.id,
+    });
+  });
+
+  it("points it at something else", async () => {
+    const arrow = await anArrow();
+    const updated = await patch(`/connections/${arrow.id}`, {
+      rules: { for: ["work_finished"] },
+    });
+    expect(updated.json<{ rules: unknown }>().rules).toEqual({ for: ["work_finished"] });
+  });
+
+  it("refuses to point it at a moment nobody has heard of", async () => {
+    const arrow = await anArrow();
+    expect(
+      (await patch(`/connections/${arrow.id}`, { rules: { for: ["never"] } })).statusCode,
+    ).toBe(400);
+  });
+
+  it("leaves alone what the change does not mention", async () => {
+    const arrow = await anArrow();
+    const updated = await patch(`/connections/${arrow.id}`, { enabled: false });
+    expect(updated.json<{ rules: unknown }>().rules).toEqual({ for: ["work_went_wrong"] });
+  });
+
+  it("says so when the arrow is not there", async () => {
+    expect((await patch("/connections/nope", { enabled: false })).statusCode).toBe(404);
+  });
+
+  it("tells everyone watching that the arrow changed", async () => {
+    const arrow = await anArrow();
+    const before = events.since(arrow.officeId, 0).length;
+    await patch(`/connections/${arrow.id}`, { enabled: false });
+
+    const published = events.since(arrow.officeId, 0).slice(before);
+    expect(published.map((event) => (event.data as { kind: string }).kind)).toContain(
+      "connection.updated",
+    );
+  });
+
+  it("turns away a change made against a stale view", async () => {
+    const arrow = await anArrow();
+    await patch(`/connections/${arrow.id}`, { enabled: false });
+    const stale = await server.inject({
+      method: "PATCH",
+      url: `/connections/${arrow.id}`,
+      headers: { ...auth, "x-vo-since-offset": "0" },
+      payload: { enabled: true },
+    });
+    expect(stale.statusCode).toBe(409);
+  });
+
+  it("stops raising work once it is switched off", async () => {
+    const arrow = await anArrow();
+    await patch(`/connections/${arrow.id}`, { enabled: false });
+    const office = await get(`/offices/${arrow.officeId}/connections`);
+    expect(office.json<{ items: { enabled: boolean }[] }>().items[0]?.enabled).toBe(false);
+  });
+});

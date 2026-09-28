@@ -284,3 +284,13 @@ describe("pointing at somebody", () => {
     expect(screen.queryByRole("tooltip")).not.toBeNull();
   });
 });
+
+describe("choosing an arrow", () => {
+  // React Flow draws its arrows as SVG paths measured from the DOM, which jsdom
+  // has none of; which connection a click opens is tested in edges.test.ts,
+  // where it is a function rather than a rendered line.
+  it("opens nothing until one is chosen", () => {
+    const store = openCanvas([link(eng, sales)]);
+    expect(store.getState().selectedConnectionId).toBeNull();
+  });
+});

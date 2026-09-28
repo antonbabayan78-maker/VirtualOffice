@@ -47,6 +47,11 @@ export interface ApiClient {
     changes: Readonly<Record<string, unknown>>,
     sinceOffset: number,
   ): Promise<ApiResult<Office>>;
+  patchConnection(
+    id: string,
+    changes: Readonly<Record<string, unknown>>,
+    sinceOffset: number,
+  ): Promise<ApiResult<Connection>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -106,7 +111,13 @@ function reviveTask(raw: Record<string, unknown>): Task {
 }
 
 function reviveConnection(raw: Record<string, unknown>): Connection {
-  return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Connection;
+  return {
+    ...raw,
+    // An office that predates the switch does not send it, and an arrow that
+    // says nothing about being off is on.
+    enabled: raw["enabled"] !== false,
+    createdAt: asDate(raw["createdAt"]),
+  } as unknown as Connection;
 }
 
 function reviveEmployee(raw: Record<string, unknown>): Employee {
@@ -257,6 +268,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     patchOffice: (id, changes, sinceOffset) =>
       patch(`/offices/${id}`, changes, sinceOffset, reviveOffice),
+
+    patchConnection: (id, changes, sinceOffset) =>
+      patch(`/connections/${id}`, changes, sinceOffset, reviveConnection),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),
