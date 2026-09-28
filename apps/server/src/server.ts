@@ -32,7 +32,12 @@ import {
   type TaskId,
   type ValidationError,
 } from "@vo/core";
-import { defaultWorkflowEngine, type WorkflowContext, type WorkflowEvent } from "@vo/orchestrator";
+import {
+  defaultWorkflowEngine,
+  performHandoff,
+  type WorkflowContext,
+  type WorkflowEvent,
+} from "@vo/orchestrator";
 import type { RelationalStore } from "@vo/storage";
 import { bearerToken, type TokenVerifier } from "./auth.js";
 import { OfficeEventLog } from "./events.js";
@@ -539,6 +544,39 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       id,
       status: outcome.value.task.status,
     });
+
+    // Work crossing into another department is the one effect this office
+    // carries out. The engine says where the work goes and who should take it;
+    // creating it is the store's business, and this is the store.
+    for (const effect of outcome.value.effects) {
+      if (effect.type !== "hand_off") continue;
+      const receiving = colleagues.items.filter(
+        (employee) => employee.departmentId === effect.toDepartmentId,
+      );
+      const placed = performHandoff(
+        effect,
+        task.officeId,
+        receiving.map((employee) => ({
+          id: employee.id,
+          status: employee.status,
+          skillIds: employee.skillIds,
+          openTasks: load[employee.id] ?? 0,
+        })),
+        { id: () => newId() as TaskId, now },
+      );
+      if (isErr(placed)) {
+        // A handoff the office would not accept is said out loud rather than
+        // dropped: somebody has wired two departments together wrongly.
+        app.log.warn(
+          { effect: effect.connectionId, errors: placed.error },
+          "could not hand work on",
+        );
+        continue;
+      }
+      await store.tasks.put(placed.value.task);
+      events.publish(task.officeId, { kind: "task.created", id: placed.value.task.id });
+    }
+
     return outcome.value.task;
   });
 

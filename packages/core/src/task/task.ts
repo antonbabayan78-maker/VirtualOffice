@@ -126,6 +126,12 @@ export interface Task {
   readonly dependsOn: readonly TaskId[];
   /** References to produced artifacts (workspace paths, commit ids, document ids). */
   readonly artifacts: readonly string[];
+  /**
+   * The departments this work has already passed through, oldest first. Empty
+   * for work that started where it is. A handoff appends to it, which is how
+   * work that keeps coming back around can be recognised as going in circles.
+   */
+  readonly route: readonly DepartmentId[];
   readonly tokenBudget: number | null;
   readonly deadline: Date | null;
   readonly history: readonly TaskEvent[];
@@ -141,6 +147,10 @@ export interface CreateTaskInput {
   readonly priority?: string;
   readonly assigneeId?: EmployeeId;
   readonly reviewerIds?: readonly EmployeeId[];
+  /** Where this work has already been, when it was handed on from somewhere. */
+  readonly route?: readonly DepartmentId[];
+  /** What it is continuing from; a handoff carries the work, not just a title. */
+  readonly artifacts?: readonly string[];
   readonly gatedActions?: readonly GatedAction[];
   readonly dependsOn?: readonly string[];
   readonly tokenBudget?: number;
@@ -223,6 +233,16 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     errors.push({ path: "dependsOn", message: "a task cannot depend on itself" });
   errors.push(...uniqueIds(dependsOn, "dependsOn", "dependency"));
 
+  const route = input.route ?? [];
+  if (route.some((id) => typeof id !== "string" || id.length === 0)) {
+    errors.push({ path: "route", message: "must each be a department id" });
+  }
+
+  const artifacts = input.artifacts ?? [];
+  if (artifacts.some((artifact) => typeof artifact !== "string")) {
+    errors.push({ path: "artifacts", message: "must each be text" });
+  }
+
   const tokenBudget = input.tokenBudget ?? null;
   if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
     errors.push({ path: "tokenBudget", message: "must be a positive integer" });
@@ -251,7 +271,8 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     stage: null,
     gatedActions: [...gatedActions],
     dependsOn: [...dependsOn] as TaskId[],
-    artifacts: [],
+    artifacts: [...artifacts],
+    route: [...route],
     tokenBudget,
     deadline,
     history: [{ at: now, from: null, to: status, actorId: null, reason: null }],

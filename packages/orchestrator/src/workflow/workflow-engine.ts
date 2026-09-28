@@ -11,6 +11,7 @@
  */
 import type { Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
+import { handoffEffects } from "./handoff.js";
 import { GATE_POLICY_HANDLER } from "./gate-policy.js";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
 import { PEER_POLICY_HANDLER } from "./peer-policy.js";
@@ -70,6 +71,28 @@ export class WorkflowEngine {
   }
 
   handle(task: Task, event: WorkflowEvent, context: WorkflowContext): Result<WorkflowOutcome> {
+    const outcome = this.decide(task, event, context);
+    if (!outcome.ok) return outcome;
+
+    // Finishing here is where work elsewhere begins. Appended once, in the one
+    // place every event and every policy returns through, rather than at each
+    // of the five transitions that can reach done — applyTransition replaces
+    // effects rather than accumulating them, so five call sites would be five
+    // chances to get it wrong and a sixth waiting for the next policy added.
+    if (task.status === "done" || outcome.value.task.status !== "done") return outcome;
+    const handoffs = handoffEffects(outcome.value.task, context);
+    if (handoffs.length === 0) return outcome;
+    return {
+      ok: true,
+      value: { task: outcome.value.task, effects: [...outcome.value.effects, ...handoffs] },
+    };
+  }
+
+  private decide(
+    task: Task,
+    event: WorkflowEvent,
+    context: WorkflowContext,
+  ): Result<WorkflowOutcome> {
     switch (event.type) {
       case "start":
         return applyTransition(task, "in_progress", event, context);

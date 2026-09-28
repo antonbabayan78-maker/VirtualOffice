@@ -269,3 +269,61 @@ describe("validateConnectionGraph", () => {
     expect(errors.some((e) => e.message.includes("cycle"))).toBe(true);
   });
 });
+
+describe("what a handoff says about who picks the work up", () => {
+  const handoff = (rules: unknown) =>
+    createConnection(
+      { officeId, fromId: A, toId: B, kind: "handoff", rules: rules as never },
+      { departments, existing: [] },
+      deps,
+    );
+
+  it("needs nothing said at all", () => {
+    expect(isOk(handoff(undefined))).toBe(true);
+  });
+
+  it("takes a named person", () => {
+    const made = unwrap(handoff({ assign: { named: "emp-ada" } }));
+    expect(made.rules).toEqual({ assign: { named: "emp-ada" } });
+  });
+
+  it("takes a skill to match on", () => {
+    expect(isOk(handoff({ assign: { skill: "visual-design" } }))).toBe(true);
+  });
+
+  it("refuses an assignment that says nothing usable", () => {
+    const result = handoff({ assign: {} });
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) expect(result.error[0]?.path).toMatch(/rules\.assign/);
+  });
+
+  it("refuses an assignment that asks for two things at once", () => {
+    // Named or by skill, not both: the two would have to be ranked against each
+    // other, and nothing in the office says which should win.
+    expect(isErr(handoff({ assign: { named: "emp-ada", skill: "visual" } }))).toBe(true);
+  });
+
+  it("refuses a named person that is not an id", () => {
+    expect(isErr(handoff({ assign: { named: 7 } }))).toBe(true);
+  });
+
+  it("refuses an assignment that is not an object", () => {
+    expect(isErr(handoff({ assign: "emp-ada" }))).toBe(true);
+  });
+
+  it("says which rule was wrong, not merely that something was", () => {
+    const result = handoff({ assign: { skill: 42 } });
+    if (isErr(result)) expect(result.error[0]?.path).toBe("rules.assign.skill");
+  });
+
+  it("leaves other kinds of connection alone", () => {
+    // Only a handoff interprets these; a collaboration carrying the same key is
+    // somebody else's business, not something to refuse.
+    const other = createConnection(
+      { officeId, fromId: A, toId: B, kind: "collaborates", rules: { assign: {} } },
+      { departments, existing: [] },
+      deps,
+    );
+    expect(isOk(other)).toBe(true);
+  });
+});
