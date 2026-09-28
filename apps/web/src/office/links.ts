@@ -33,6 +33,8 @@ export interface DepartmentLink {
   readonly to: string;
   readonly kind: ConnectionKind;
   readonly twoWay: boolean;
+  /** False when every connection behind this arrow is switched off. */
+  readonly enabled: boolean;
   readonly label: string;
   /** Every connection this arrow stands for, so either end can be edited. */
   readonly connectionIds: readonly ConnectionId[];
@@ -70,6 +72,8 @@ export function linksFrom(connections: readonly Connection[]): readonly Departme
         to: first.toId,
         kind: first.kind,
         twoWay,
+        // An arrow drawn from several connections is in force if any is.
+        enabled: group.some((one) => one.enabled),
         label: LINK_LABELS[first.kind],
         connectionIds: group.map((one) => one.id),
       },

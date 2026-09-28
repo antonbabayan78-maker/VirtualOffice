@@ -395,3 +395,71 @@ describe("fields an older office does not send", () => {
     if (result.ok) expect(result.value.definitionOfDone).toEqual(["has tests"]);
   });
 });
+
+describe("changing an arrow", () => {
+  const arrow = {
+    id: "conn-1",
+    officeId: "office-1",
+    fromId: "dept-ops",
+    toId: "dept-eng",
+    kind: "watches",
+    enabled: true,
+    rules: { for: ["work_went_wrong"] },
+    createdAt: "2026-09-29T09:00:00.000Z",
+  };
+
+  it("sends a change, and says where the arrow ended up", async () => {
+    server.use(
+      http.patch(`${BASE}/connections/conn-1`, () =>
+        HttpResponse.json({ ...arrow, enabled: false }),
+      ),
+    );
+    const result = await client().patchConnection("conn-1", { enabled: false }, 4);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.enabled).toBe(false);
+      expect(result.value.createdAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it("says what it has seen, so the office can spot a stale change", async () => {
+    let seen: string | null = null;
+    server.use(
+      http.patch(`${BASE}/connections/conn-1`, ({ request }) => {
+        seen = request.headers.get("x-vo-since-offset");
+        return HttpResponse.json(arrow);
+      }),
+    );
+    await client().patchConnection("conn-1", { enabled: false }, 9);
+    expect(seen).toBe("9");
+  });
+
+  it("reports a change the office refused", async () => {
+    server.use(
+      http.patch(`${BASE}/connections/conn-1`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "rules.for", message: "no such moment" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+    const result = await client().patchConnection("conn-1", { rules: { for: ["never"] } }, 0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("validation");
+  });
+
+  it("gives an arrow the switch it is typed as having", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1`, () => HttpResponse.json({ id: "office-1", name: "A" })),
+      http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () =>
+        // An office that predates the switch simply does not send it.
+        HttpResponse.json({ items: [{ id: "conn-1", kind: "handoff", rules: {} }] }),
+      ),
+    );
+    const result = await client().loadOffice("office-1");
+    if (result.ok) expect(result.value.connections[0]?.enabled).toBe(true);
+  });
+});

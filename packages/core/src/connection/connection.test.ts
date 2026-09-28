@@ -6,6 +6,7 @@ import {
   CONNECTION_KINDS,
   createConnection,
   hasPath,
+  updateConnection,
   validateConnectionGraph,
   type Connection,
   type ConnectionId,
@@ -413,5 +414,49 @@ describe("one department watching another", () => {
       deps,
     );
     expect(isOk(other)).toBe(true);
+  });
+});
+
+describe("changing an arrow that is already drawn", () => {
+  const drawn = () =>
+    unwrap(
+      createConnection(
+        { officeId, fromId: A, toId: B, kind: "watches", rules: { for: ["work_finished"] } },
+        { departments, existing: [] },
+        deps,
+      ),
+    );
+
+  it("switches it off", () => {
+    expect(unwrap(updateConnection(drawn(), { enabled: false })).enabled).toBe(false);
+  });
+
+  it("points it somewhere else", () => {
+    const pointed = unwrap(updateConnection(drawn(), { rules: { for: ["work_went_wrong"] } }));
+    expect(pointed.rules).toEqual({ for: ["work_went_wrong"] });
+  });
+
+  it("keeps it the same arrow, between the same two departments", () => {
+    const before = drawn();
+    const after = unwrap(updateConnection(before, { enabled: false }));
+    expect(after.id).toBe(before.id);
+    expect(after.fromId).toBe(before.fromId);
+    expect(after.toId).toBe(before.toId);
+    expect(after.kind).toBe(before.kind);
+    expect(after.createdAt).toEqual(before.createdAt);
+  });
+
+  it("leaves alone what the change does not mention", () => {
+    expect(unwrap(updateConnection(drawn(), { enabled: false })).rules).toEqual({
+      for: ["work_finished"],
+    });
+  });
+
+  it("refuses rules it would have refused when the arrow was drawn", () => {
+    expect(isErr(updateConnection(drawn(), { rules: { for: ["never"] } }))).toBe(true);
+  });
+
+  it("refuses a switch that is not plainly on or off", () => {
+    expect(isErr(updateConnection(drawn(), { enabled: "yes" as never }))).toBe(true);
   });
 });
