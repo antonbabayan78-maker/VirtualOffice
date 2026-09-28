@@ -18,6 +18,7 @@ import {
   createDepartment,
   createEmployee,
   createOffice,
+  openTaskCounts,
   updateOffice,
   createTask,
   isErr,
@@ -499,6 +500,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const department = await store.departments.get(task.departmentId);
     const assignee = task.assigneeId === null ? null : await store.employees.get(task.assigneeId);
     const colleagues = await store.employees.list({ where: { officeId: task.officeId } });
+    // What everyone is already holding, so a policy that picks the least loaded
+    // reviewer has something to pick on. Told zero for everybody, it falls to
+    // its tie-break and hands every review to the same person.
+    const load = openTaskCounts(
+      (await store.tasks.list({ where: { officeId: task.officeId } })).items,
+    );
 
     const context: WorkflowContext = {
       policy: department?.reviewPolicy ?? { kind: "direct" },
@@ -510,7 +517,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           id: employee.id,
           status: employee.status,
           skillIds: employee.skillIds,
-          openTasks: 0,
+          openTasks: load[employee.id] ?? 0,
         })),
       escalationGraph: {
         employees: colleagues.items.map((employee) => ({

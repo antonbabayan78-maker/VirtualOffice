@@ -14,6 +14,7 @@
  * run is meant to be reproducible from an office file and a brief.
  */
 import {
+  openTaskCounts,
   transitionTask,
   type EmployeeId,
   type GatedAction,
@@ -127,13 +128,21 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     const department = departments.get(task.departmentId);
     const employee = employeeId === null ? undefined : employees.get(employeeId);
     const assignee = task.assigneeId === null ? undefined : employees.get(task.assigneeId);
+    // Recomputed per call rather than kept: tasks move throughout a run, and a
+    // stale count would send work to somebody who has since filled up.
+    const load = openTaskCounts([...tasks.values()]);
     return {
       policy: department?.reviewPolicy ?? { kind: "direct" },
       now: now(),
       supervisorId: assignee?.supervisorId ?? employee?.supervisorId ?? null,
       peers: config.employees
         .filter((e) => e.departmentId === task.departmentId)
-        .map((e) => ({ id: e.id, status: e.status, skillIds: e.skillIds, openTasks: 0 })),
+        .map((e) => ({
+          id: e.id,
+          status: e.status,
+          skillIds: e.skillIds,
+          openTasks: load[e.id] ?? 0,
+        })),
       escalationGraph,
     };
   };

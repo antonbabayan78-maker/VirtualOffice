@@ -7,6 +7,7 @@ import {
   canTransition,
   createTask,
   isPriority,
+  openTaskCounts,
   PRIORITY_RANK,
   type CreateTaskInput,
   TASK_PRIORITIES,
@@ -345,5 +346,50 @@ describe("ranking one priority against another", () => {
     expect(isPriority("")).toBe(false);
     expect(isPriority(3)).toBe(false);
     expect(isPriority(undefined)).toBe(false);
+  });
+});
+
+describe("what is still on somebody's desk", () => {
+  const withStatus = (id: string, assigneeId: string | null, status: TaskStatus): Task =>
+    ({ id, assigneeId, status }) as Task;
+
+  it("counts work that has not finished", () => {
+    const counts = openTaskCounts([
+      withStatus("t1", "emp-ada", "in_progress"),
+      withStatus("t2", "emp-ada", "assigned"),
+    ]);
+    expect(counts["emp-ada"]).toBe(2);
+  });
+
+  it("does not count work that is over", () => {
+    for (const status of TERMINAL_TASK_STATUSES) {
+      expect(openTaskCounts([withStatus("t1", "emp-ada", status)])["emp-ada"] ?? 0, status).toBe(0);
+    }
+  });
+
+  it("counts work that is stuck, since a blocked task is still theirs", () => {
+    // Blocked is not finished: the person still owes an answer on it, and a
+    // reviewer chosen because they look free would be chosen wrongly.
+    expect(openTaskCounts([withStatus("t1", "emp-ada", "blocked")])["emp-ada"]).toBe(1);
+  });
+
+  it("counts work waiting on a review as still open for its author", () => {
+    expect(openTaskCounts([withStatus("t1", "emp-ada", "in_review")])["emp-ada"]).toBe(1);
+  });
+
+  it("ignores work nobody is holding", () => {
+    expect(openTaskCounts([withStatus("t1", null, "backlog")])).toEqual({});
+  });
+
+  it("keeps each person's count to themselves", () => {
+    const counts = openTaskCounts([
+      withStatus("t1", "emp-ada", "in_progress"),
+      withStatus("t2", "emp-grace", "assigned"),
+    ]);
+    expect(counts).toEqual({ "emp-ada": 1, "emp-grace": 1 });
+  });
+
+  it("says nothing about somebody with nothing on", () => {
+    expect(openTaskCounts([])["emp-ada"]).toBeUndefined();
   });
 });
