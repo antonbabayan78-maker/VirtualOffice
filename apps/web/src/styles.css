@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. Every colour in the app comes from here, so a theme is one
+ * place to change and dark mode is a redefinition rather than a second set of
+ * class names scattered through the components.
+ */
+@theme {
+  --color-canvas: oklch(97% 0.005 250);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-muted: oklch(96% 0.005 250);
+  --color-border: oklch(90% 0.008 250);
+  --color-ink: oklch(23% 0.02 260);
+  --color-ink-muted: oklch(52% 0.02 260);
+  --color-accent: oklch(58% 0.19 264);
+  --color-accent-ink: oklch(99% 0 0);
+  --radius-panel: 0.75rem;
+}
+
+@layer base {
+  .dark {
+    --color-canvas: oklch(19% 0.015 265);
+    --color-surface: oklch(23% 0.018 265);
+    --color-surface-muted: oklch(27% 0.02 265);
+    --color-border: oklch(33% 0.02 265);
+    --color-ink: oklch(96% 0.005 265);
+    --color-ink-muted: oklch(72% 0.015 265);
+    --color-accent: oklch(70% 0.16 264);
+    --color-accent-ink: oklch(18% 0.02 265);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      sans-serif;
+  }
+}
