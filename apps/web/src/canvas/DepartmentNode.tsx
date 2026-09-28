@@ -5,10 +5,12 @@
  * full strength for its edge and title bar, so a dozen departments stay
  * distinguishable without turning the canvas into a paint chart.
  */
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { Handle, NodeResizer, Position, type NodeProps, type Node } from "@xyflow/react";
 import { MIN_DEPARTMENT_SIZE } from "@vo/core";
 import { describeActivity, labelActivity } from "../office/activity.js";
+import type { EmployeeSummary } from "../office/employee-summary.js";
+import { EmployeeTooltip, type TooltipAnchor } from "./EmployeeTooltip.js";
 import { EmployeeAvatar, type ActivityState } from "./EmployeeAvatar.js";
 
 export interface DepartmentNodeData extends Record<string, unknown> {
@@ -18,6 +20,8 @@ export interface DepartmentNodeData extends Record<string, unknown> {
     readonly id: string;
     readonly name: string;
     readonly activity: ActivityState;
+    /** Everything worth saying about them when somebody points at them. */
+    readonly summary: EmployeeSummary;
   }[];
   /** Opens the drawer for one of the people in this room. */
   readonly onSelectEmployee: (id: string) => void;
@@ -86,38 +90,86 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
 
         <ul className="flex flex-wrap content-start gap-4 p-4">
           {data.employees.map((employee) => (
-            <li key={employee.id}>
-              <button
-                type="button"
-                // nodrag keeps a click from being read as a drag of the room.
-                className="nodrag flex w-16 cursor-pointer flex-col items-center gap-1 rounded-lg p-1 hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
-                aria-label={`Configure ${employee.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  data.onSelectEmployee(employee.id);
-                }}
-              >
-                <EmployeeAvatar name={employee.name} state={employee.activity} size={44} />
-                <span className="w-full truncate text-center text-[11px] text-ink-muted">
-                  {employee.name}
-                </span>
-                {employee.activity !== "idle" && (
-                  <span
-                    // The colour says it at a glance; the chip says it for
-                    // anyone who cannot rely on colour, and when several
-                    // figures are pulsing at once.
-                    className="rounded-full px-1.5 py-0.5 text-[9px] font-medium text-white"
-                    style={{ backgroundColor: `var(--color-${employee.activity})` }}
-                    title={describeActivity(employee.activity)}
-                  >
-                    {labelActivity(employee.activity)}
-                  </span>
-                )}
-              </button>
-            </li>
+            <EmployeeFigure
+              key={employee.id}
+              employee={employee}
+              onSelect={data.onSelectEmployee}
+            />
           ))}
         </ul>
       </div>
     </>
+  );
+}
+
+/**
+ * One person in a room.
+ *
+ * The tooltip is mounted only while it is wanted. Kept in the DOM permanently
+ * and hidden with CSS, every figure would announce its whole summary to a
+ * screen reader, and the canvas would read as a wall of text.
+ */
+function EmployeeFigure({
+  employee,
+  onSelect,
+}: {
+  readonly employee: DepartmentNodeData["employees"][number];
+  readonly onSelect: (id: string) => void;
+}): ReactNode {
+  const [anchor, setAnchor] = useState<TooltipAnchor | null>(null);
+
+  /** Where to put the tooltip: just above the figure, centred on it. */
+  const show = (element: HTMLElement | null): void => {
+    const box = element?.getBoundingClientRect();
+    setAnchor(
+      box === undefined
+        ? { left: 0, top: 0 }
+        : { left: box.left + box.width / 2, top: box.top - 6 },
+    );
+  };
+  const hide = (): void => {
+    setAnchor(null);
+  };
+
+  return (
+    <li
+      className="relative"
+      onPointerEnter={(event) => {
+        show(event.currentTarget);
+      }}
+      onPointerLeave={hide}
+    >
+      <button
+        type="button"
+        // nodrag keeps a click from being read as a drag of the room.
+        className="nodrag flex w-16 cursor-pointer flex-col items-center gap-1 rounded-lg p-1 hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+        aria-label={`Configure ${employee.name}`}
+        onFocus={(event) => {
+          show(event.currentTarget);
+        }}
+        onBlur={hide}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(employee.id);
+        }}
+      >
+        <EmployeeAvatar name={employee.name} state={employee.activity} size={44} />
+        <span className="w-full truncate text-center text-[11px] text-ink-muted">
+          {employee.name}
+        </span>
+        {employee.activity !== "idle" && (
+          <span
+            // The colour says it at a glance; the chip says it for anyone who
+            // cannot rely on colour, and when several figures pulse at once.
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-medium text-white"
+            style={{ backgroundColor: `var(--color-${employee.activity})` }}
+            title={describeActivity(employee.activity)}
+          >
+            {labelActivity(employee.activity)}
+          </span>
+        )}
+      </button>
+      {anchor !== null && <EmployeeTooltip summary={employee.summary} anchor={anchor} />}
+    </li>
   );
 }

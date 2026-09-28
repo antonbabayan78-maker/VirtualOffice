@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ACTIVITY_STATES, EmployeeAvatar, type ActivityState } from "./EmployeeAvatar.js";
 
+const body = (): SVGPathElement => {
+  const path = document.querySelector<SVGPathElement>("[data-part='body']");
+  if (path === null) throw new Error("the figure has no body");
+  return path;
+};
+
 const head = (): SVGPathElement => {
   const path = document.querySelector<SVGPathElement>("[data-part='head']");
   if (path === null) throw new Error("the figure has no head");
@@ -52,10 +58,32 @@ describe("EmployeeAvatar", () => {
     expect(head().dataset["animated"]).toBe("false");
   });
 
-  it("keeps the body in the office's ink so the figure reads in either theme", () => {
+  it("colours the whole figure, not only the head", () => {
+    // A head alone is a few pixels; a whole figure is legible across a canvas
+    // holding eighty of them.
     render(<EmployeeAvatar name="Ada" state="working" />);
-    const body = document.querySelector("[data-part='body']");
-    expect(body?.getAttribute("fill")).toMatch(/ink/);
+    expect(body().getAttribute("fill")).toMatch(/working/);
+    expect(head().getAttribute("fill")).toMatch(/working/);
+  });
+
+  it("gives the body a different colour for every state too", () => {
+    const fills = new Set<string>();
+    for (const state of ACTIVITY_STATES) {
+      const view = render(<EmployeeAvatar name="Ada" state={state} />);
+      fills.add(body().getAttribute("fill") ?? "");
+      view.unmount();
+    }
+    expect(fills.size).toBe(ACTIVITY_STATES.length);
+  });
+
+  it("leaves an idle figure the office's own ink, which is black in daylight", () => {
+    render(<EmployeeAvatar name="Ada" state="idle" />);
+    expect(body().getAttribute("fill")).toMatch(/ink/);
+  });
+
+  it("pulses the whole figure, so the movement is not a flickering dot", () => {
+    render(<EmployeeAvatar name="Ada" state="working" />);
+    expect(body().dataset["animated"]).toBe("true");
   });
 
   it("can be sized", () => {
