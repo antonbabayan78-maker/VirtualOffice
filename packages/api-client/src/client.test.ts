@@ -294,3 +294,64 @@ describe("telling the office what an agent did", () => {
     if (!result.ok) expect(result.kind).toBe("transport");
   });
 });
+
+describe("changing the office itself", () => {
+  const office = {
+    id: "office-1",
+    name: "Acme",
+    schedule: { kind: "always" },
+    priority: "normal",
+    configVersion: 1,
+    createdAt: "2026-09-28T09:00:00.000Z",
+  };
+
+  it("brings one back on its own", async () => {
+    server.use(http.get(`${BASE}/offices/office-1`, () => HttpResponse.json(office)));
+    const result = await client().getOffice("office-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.name).toBe("Acme");
+  });
+
+  it("turns its date back into a date", async () => {
+    server.use(http.get(`${BASE}/offices/office-1`, () => HttpResponse.json(office)));
+    const result = await client().getOffice("office-1");
+    if (result.ok) expect(result.value.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("sends a change, and says where the office ended up", async () => {
+    server.use(
+      http.patch(`${BASE}/offices/office-1`, () =>
+        HttpResponse.json({ ...office, priority: "urgent" }),
+      ),
+    );
+    const result = await client().patchOffice("office-1", { priority: "urgent" }, 3);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.priority).toBe("urgent");
+  });
+
+  it("says what it has seen, so the office can spot a stale change", async () => {
+    let seen: string | null = null;
+    server.use(
+      http.patch(`${BASE}/offices/office-1`, ({ request }) => {
+        seen = request.headers.get("x-vo-since-offset");
+        return HttpResponse.json(office);
+      }),
+    );
+    await client().patchOffice("office-1", { name: "Acme Robotics" }, 7);
+    expect(seen).toBe("7");
+  });
+
+  it("reports a change the office refused", async () => {
+    server.use(
+      http.patch(`${BASE}/offices/office-1`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "priority", message: "must be one of…" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+    const result = await client().patchOffice("office-1", { priority: "asap" }, 0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("validation");
+  });
+});

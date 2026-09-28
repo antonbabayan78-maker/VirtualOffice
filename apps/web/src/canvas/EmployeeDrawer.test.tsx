@@ -217,3 +217,17 @@ describe("the employee drawer", () => {
     expect(store.getState().selectedEmployeeId).toBeNull();
   });
 });
+
+describe("an employee's standing priority", () => {
+  it("shows what it is set to", () => {
+    expect(screen.getByLabelText(/priority/i)).toHaveValue("normal");
+  });
+
+  it("tells somebody to yield to their colleagues", async () => {
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(/priority/i), "low");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(store.getState().employees.find((e) => e.id === ada.id)?.priority).toBe("low");
+  });
+});

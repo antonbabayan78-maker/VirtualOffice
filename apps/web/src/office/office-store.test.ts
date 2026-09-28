@@ -395,3 +395,125 @@ describe("changes that change nothing", () => {
     expect(storage.saved()).toBe(written);
   });
 });
+
+describe("the office itself", () => {
+  const acme = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  it("is unknown until the office is loaded", () => {
+    open([eng]);
+    expect(store.getState().office).toBeNull();
+  });
+
+  it("is held once it is loaded", () => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    expect(store.getState().office?.name).toBe("Acme");
+  });
+
+  it("takes a change, so the organisation can set its own priority", async () => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    const result = await store.getState().saveOffice({ priority: "urgent" });
+
+    expect(result.ok).toBe(true);
+    expect(store.getState().office?.priority).toBe("urgent");
+  });
+
+  it("refuses a change the office model would refuse, without asking the server", async () => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    const result = await store.getState().saveOffice({ priority: "asap" });
+
+    expect(result.ok).toBe(false);
+    expect(store.getState().office?.priority).toBe("normal");
+  });
+
+  it("says so when there is no office to change", async () => {
+    open([eng]);
+    expect((await store.getState().saveOffice({ priority: "high" })).ok).toBe(false);
+  });
+});
+
+describe("changes that change nothing, revisited", () => {
+  it("still lets an edit through that only touches a field the move guard ignores", () => {
+    open([eng, sales]);
+    const result = store.getState().updateDepartment(eng.id, { priority: "urgent" });
+    expect(result.ok).toBe(true);
+    expect(store.getState().departments.find((d) => d.id === eng.id)?.priority).toBe("urgent");
+  });
+});
+
+describe("being told where the office actually lives", () => {
+  const acme = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  /** Records what was sent, so a save that never leaves the browser is visible. */
+  function spyApi() {
+    const sent: { what: string; changes: Record<string, unknown> }[] = [];
+    return {
+      sent,
+      api: {
+        patchDepartment: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "department", changes });
+          return Promise.resolve({ ok: true as const, value: { ...eng, ...changes } as never });
+        },
+        patchEmployee: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "employee", changes });
+          return Promise.resolve({ ok: true as const, value: { ...ada, ...changes } as never });
+        },
+        patchOffice: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "office", changes });
+          return Promise.resolve({ ok: true as const, value: { ...acme, ...changes } as never });
+        },
+      } as never,
+    };
+  }
+
+  it("keeps a save in the browser until it is told who to send it to", async () => {
+    open([eng, sales]);
+    const result = await store.getState().saveDepartment(eng.id, { priority: "urgent" });
+    // Locally applied and honestly reported, but nobody was told.
+    expect(result.ok).toBe(true);
+  });
+
+  it("sends a department change once it has been connected", async () => {
+    open([eng, sales]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+    await store.getState().saveDepartment(eng.id, { priority: "urgent" });
+
+    expect(spy.sent).toEqual([{ what: "department", changes: { priority: "urgent" } }]);
+  });
+
+  it("sends an employee change too", async () => {
+    open([eng, sales], [ada]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+    await store.getState().saveEmployee(ada.id, { priority: "low" });
+
+    expect(spy.sent[0]?.what).toBe("employee");
+  });
+
+  it("sends an office change too", async () => {
+    open([eng, sales]);
+    store.getState().loadOffice(acme);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+    await store.getState().saveOffice({ priority: "high" });
+
+    expect(spy.sent[0]?.what).toBe("office");
+  });
+});

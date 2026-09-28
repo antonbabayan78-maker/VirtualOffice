@@ -18,6 +18,7 @@ import {
   createDepartment,
   createEmployee,
   createOffice,
+  updateOffice,
   createTask,
   isErr,
   updateDepartment,
@@ -135,6 +136,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         done(null, origin === undefined || allowed.has(origin));
       },
       credentials: true,
+      // Named rather than left to default: the default is GET, HEAD and POST,
+      // which refuses every save the canvas makes before it is even sent.
+      methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
       allowedHeaders: ["authorization", "content-type", "x-vo-since-offset"],
     });
   }
@@ -216,11 +220,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   app.get("/offices", async () => ({ items: (await store.offices.list()).items }));
 
   app.post("/offices", async (request, reply) => {
-    const body = request.body as { name?: string; schedule?: unknown };
+    const body = request.body as { name?: string; schedule?: unknown; priority?: string };
     const office = createOffice(
       {
         name: body.name ?? "",
         ...(body.schedule === undefined ? {} : { schedule: body.schedule }),
+        ...(body.priority === undefined ? {} : { priority: body.priority }),
       },
       { id: () => newId() as OfficeId, now },
     );
@@ -228,6 +233,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.offices.put(office.value);
     events.publish(office.value.id, { kind: "office.created", id: office.value.id });
     return reply.code(201).send(office.value);
+  });
+
+  app.patch("/offices/:officeId", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    const office = await store.offices.get(officeId);
+    if (office === null) return missing(reply, "office");
+
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(office.id, officeId, since)) {
+      return reply
+        .code(409)
+        .send({ error: "this office changed since you loaded it", current: office });
+    }
+
+    const updated = updateOffice(office, request.body as Record<string, never>);
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.offices.put(updated.value);
+    events.publish(office.id, { kind: "office.updated", id: officeId });
+    return updated.value;
   });
 
   app.get("/offices/:officeId", async (request, reply) => {
@@ -270,6 +294,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(icon === undefined ? {} : { icon }),
           ...(body["reviewPolicy"] === undefined ? {} : { reviewPolicy: body["reviewPolicy"] }),
           ...(body["schedule"] === undefined ? {} : { schedule: body["schedule"] }),
+          ...(body["priority"] === undefined ? {} : { priority: body["priority"] as string }),
         },
         existing.items,
         { id: () => newId() as DepartmentId, now },
@@ -358,6 +383,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(supervisorId === undefined ? {} : { supervisorId }),
           ...(body["skills"] === undefined ? {} : { skillIds: body["skills"] as string[] }),
           ...(body["schedule"] === undefined ? {} : { schedule: body["schedule"] }),
+          ...(body["priority"] === undefined ? {} : { priority: body["priority"] as string }),
         },
         {
           department: { id: department.id, officeId: department.officeId },

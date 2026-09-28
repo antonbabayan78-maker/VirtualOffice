@@ -21,9 +21,11 @@ const ada = { id: "emp-ada", name: "Ada", officeId: "office-1", departmentId: "d
 function api(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     loadOffice: () => Promise.reject(new Error("not used here")),
+    getOffice: () => Promise.reject(new Error("not used here")),
     getDepartment: () => Promise.reject(new Error("not used here")),
     getEmployee: () => Promise.resolve({ ok: true, value: ada as never }),
     getTask: () => Promise.resolve({ ok: true, value: task as never }),
+    patchOffice: () => Promise.reject(new Error("not used here")),
     patchDepartment: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.resolve({ ok: true, value: task as never }),

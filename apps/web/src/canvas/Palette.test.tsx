@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
@@ -95,5 +95,42 @@ describe("adding without a mouse", () => {
     expect(store.getState().employees.length + store.getState().departments.length).toBeGreaterThan(
       1,
     );
+  });
+});
+
+describe("reaching the office's own settings", () => {
+  it("offers the office when one is open", () => {
+    act(() => {
+      store.getState().loadOffice({
+        id: officeId,
+        name: "Acme Robotics",
+        schedule: { kind: "always" },
+        priority: "normal",
+        configVersion: 1,
+        createdAt: at,
+      });
+    });
+    expect(screen.getByRole("button", { name: /acme robotics/i })).toBeTruthy();
+  });
+
+  it("offers nothing to configure when no office is open", () => {
+    expect(screen.queryByRole("button", { name: /office settings/i })).toBeNull();
+  });
+
+  it("opens the office panel when pressed", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      store.getState().loadOffice({
+        id: officeId,
+        name: "Acme Robotics",
+        schedule: { kind: "always" },
+        priority: "normal",
+        configVersion: 1,
+        createdAt: at,
+      });
+    });
+    await user.click(screen.getByRole("button", { name: /acme robotics/i }));
+
+    expect(store.getState().officeOpen).toBe(true);
   });
 });

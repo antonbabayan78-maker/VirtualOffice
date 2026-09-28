@@ -20,6 +20,7 @@ import { officeStore } from "../office/store.js";
 import { loadSampleOffice } from "../office/sample-office.js";
 import { Canvas } from "./Canvas.js";
 import { DepartmentDrawer } from "./DepartmentDrawer.js";
+import { OfficeDrawer } from "./OfficeDrawer.js";
 import { EmployeeDrawer } from "./EmployeeDrawer.js";
 import { Palette } from "./Palette.js";
 
@@ -42,6 +43,8 @@ export function CanvasScreen(): ReactNode {
     }
 
     const api = createApiClient({ baseUrl: config.baseUrl, token: config.token });
+    // Until the store knows this, every drawer save stops in the browser.
+    officeStore.getState().connect(api);
     const follower = followOffice({ store: officeStore, api, officeId: config.officeId });
 
     void follower.reload();
@@ -79,6 +82,7 @@ export function CanvasScreen(): ReactNode {
       <div className="min-w-0 flex-1">
         <Canvas store={officeStore} />
       </div>
+      <OfficeDrawer store={officeStore} />
       <DepartmentDrawer store={officeStore} />
       <EmployeeDrawer store={officeStore} />
     </div>
