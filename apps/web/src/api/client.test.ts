@@ -49,6 +49,7 @@ describe("loading an office", () => {
         HttpResponse.json({ items: [department] }),
       ),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -68,6 +69,7 @@ describe("loading an office", () => {
         HttpResponse.json({ items: [department] }),
       ),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -84,6 +86,7 @@ describe("loading an office", () => {
       }),
       http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
     );
 
     await client().loadOffice("office-1");

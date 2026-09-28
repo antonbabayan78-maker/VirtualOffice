@@ -84,11 +84,42 @@ describe("the canvas", () => {
     expect(screen.getAllByText("1 person")).toHaveLength(2);
   });
 
-  it("shows what everyone is doing, and keeps up when that changes", async () => {
+  it("shows what everyone is doing, and keeps up when a task moves", async () => {
     const store = openCanvas();
     expect(screen.getByRole("img", { name: "Ada: idle" })).toBeInTheDocument();
-    store.getState().setActivity("emp-ada" as EmployeeId, "working");
+
+    // A task of Ada's starts moving: the canvas should show it without asking.
+    store.getState().putTask({
+      id: "task-1",
+      status: "in_progress",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+    } as never);
     expect(await screen.findByRole("img", { name: "Ada: working" })).toBeInTheDocument();
+  });
+
+  it("puts a chip on somebody who is busy, and none on somebody who is not", async () => {
+    const store = openCanvas();
+    expect(screen.queryByText(/working/)).toBeNull();
+
+    store.getState().putTask({
+      id: "task-1",
+      status: "in_progress",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+    } as never);
+    expect(await screen.findByText("working")).toBeInTheDocument();
+  });
+
+  it("says what a waiting employee is waiting for", async () => {
+    const store = openCanvas();
+    store.getState().putTask({
+      id: "task-1",
+      status: "in_review",
+      assigneeId: "emp-ada",
+      reviewerIds: [],
+    } as never);
+    expect(await screen.findByText(/waiting/)).toBeInTheDocument();
   });
 
   it("offers the grid, and remembers that it was asked for", async () => {

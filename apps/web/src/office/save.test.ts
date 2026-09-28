@@ -36,6 +36,7 @@ function scriptedApi(): {
     loadOffice: () => Promise.reject(new Error("not used here")),
     getDepartment: () => Promise.reject(new Error("not used here")),
     getEmployee: () => Promise.reject(new Error("not used here")),
+    getTask: () => Promise.reject(new Error("not used here")),
     patchDepartment: (id, changes, sinceOffset) => {
       calls.push({ id, changes, sinceOffset });
       return new Promise((resolve) => {

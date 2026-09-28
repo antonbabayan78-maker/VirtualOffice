@@ -11,7 +11,7 @@
  * the edge. A Date that is secretly a string survives right up until something
  * compares or formats it.
  */
-import type { Department, Employee, Office, ValidationError } from "@vo/core";
+import type { Department, Employee, Office, Task, ValidationError } from "@vo/core";
 
 export type ApiResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -23,6 +23,7 @@ export interface OfficeSnapshot {
   readonly office: Office;
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
+  readonly tasks: readonly Task[];
 }
 
 export interface ApiClient {
@@ -30,6 +31,7 @@ export interface ApiClient {
   /** One entity, which is what a live canvas fetches when told it changed. */
   getDepartment(id: string): Promise<ApiResult<Department>>;
   getEmployee(id: string): Promise<ApiResult<Employee>>;
+  getTask(id: string): Promise<ApiResult<Task>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -55,6 +57,16 @@ const asDate = (value: unknown): Date => new Date(String(value));
 
 function reviveDepartment(raw: Record<string, unknown>): Department {
   return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Department;
+}
+
+function reviveTask(raw: Record<string, unknown>): Task {
+  const history = Array.isArray(raw["history"])
+    ? (raw["history"] as Record<string, unknown>[])
+    : [];
+  return {
+    ...raw,
+    history: history.map((event) => ({ ...event, at: asDate(event["at"]) })),
+  } as unknown as Task;
 }
 
 function reviveEmployee(raw: Record<string, unknown>): Employee {
@@ -169,8 +181,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
       const departments = await call(`/offices/${officeId}/departments`);
       const employees = await call(`/offices/${officeId}/employees`);
+      const tasks = await call(`/offices/${officeId}/tasks`);
       if (!departments.ok) return { ok: false, kind: "transport", message: departments.message };
       if (!employees.ok) return { ok: false, kind: "transport", message: employees.message };
+      if (!tasks.ok) return { ok: false, kind: "transport", message: tasks.message };
 
       const items = (response: { body: unknown }): Record<string, unknown>[] =>
         (response.body as { items?: Record<string, unknown>[] } | null)?.items ?? [];
@@ -181,12 +195,14 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           office: asOffice.value,
           departments: items(departments).map(reviveDepartment),
           employees: items(employees).map(reviveEmployee),
+          tasks: items(tasks).map(reviveTask),
         },
       };
     },
 
     getDepartment: async (id) => interpret(await call(`/departments/${id}`), reviveDepartment),
     getEmployee: async (id) => interpret(await call(`/employees/${id}`), reviveEmployee),
+    getTask: async (id) => interpret(await call(`/tasks/${id}`), reviveTask),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),

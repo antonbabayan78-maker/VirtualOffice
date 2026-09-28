@@ -8,6 +8,7 @@
 import { NodeResizer, type NodeProps, type Node } from "@xyflow/react";
 import type { ReactNode } from "react";
 import { MIN_DEPARTMENT_SIZE } from "@vo/core";
+import { describeActivity, labelActivity } from "../office/activity.js";
 import { EmployeeAvatar, type ActivityState } from "./EmployeeAvatar.js";
 
 export interface DepartmentNodeData extends Record<string, unknown> {
@@ -72,6 +73,18 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
                 <span className="w-full truncate text-center text-[11px] text-ink-muted">
                   {employee.name}
                 </span>
+                {employee.activity !== "idle" && (
+                  <span
+                    // The colour says it at a glance; the chip says it for
+                    // anyone who cannot rely on colour, and when several
+                    // figures are pulsing at once.
+                    className="rounded-full px-1.5 py-0.5 text-[9px] font-medium text-white"
+                    style={{ backgroundColor: `var(--color-${employee.activity})` }}
+                    title={describeActivity(employee.activity)}
+                  >
+                    {labelActivity(employee.activity)}
+                  </span>
+                )}
               </button>
             </li>
           ))}
