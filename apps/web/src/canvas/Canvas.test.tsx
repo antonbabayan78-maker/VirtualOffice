@@ -48,7 +48,7 @@ const employee = (id: string, name: string, departmentId: string): Employee =>
 function openCanvas(): OfficeStore {
   const store = createOfficeStore({
     storage: { readLayout: () => null, writeLayout: () => undefined },
-    id: () => "dept-new" as DepartmentId,
+    id: () => "dept-new",
     now: () => at,
   });
   store
@@ -115,7 +115,7 @@ describe("the canvas", () => {
   it("says so when the office is empty rather than showing a blank page", () => {
     const store = createOfficeStore({
       storage: { readLayout: () => null, writeLayout: () => undefined },
-      id: () => "dept-new" as DepartmentId,
+      id: () => "dept-new",
       now: () => at,
     });
     render(<Canvas store={store} />);

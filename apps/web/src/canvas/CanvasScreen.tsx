@@ -9,6 +9,7 @@ import { isErr } from "@vo/core";
 import { officeStore } from "../office/store.js";
 import { loadSampleOffice } from "../office/sample-office.js";
 import { Canvas } from "./Canvas.js";
+import { Palette } from "./Palette.js";
 
 export function CanvasScreen(): ReactNode {
   const [problem, setProblem] = useState<string | null>(null);
@@ -32,5 +33,12 @@ export function CanvasScreen(): ReactNode {
     );
   }
 
-  return <Canvas store={officeStore} />;
+  return (
+    <div className="flex h-full">
+      <Palette store={officeStore} />
+      <div className="min-w-0 flex-1">
+        <Canvas store={officeStore} />
+      </div>
+    </div>
+  );
 }

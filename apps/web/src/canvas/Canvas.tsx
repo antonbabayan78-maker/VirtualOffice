@@ -14,16 +14,20 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type NodeChange,
 } from "@xyflow/react";
 import type { DepartmentId } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { ActivityLegend } from "./ActivityLegend.js";
+import { PALETTE_MIME } from "./Palette.js";
+import { dropItem, type PaletteKind } from "./drop.js";
 import { DepartmentNode, type DepartmentNodeType } from "./DepartmentNode.js";
 
 const NODE_TYPES = { department: DepartmentNode };
 
 function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
+  const flow = useReactFlow();
   const departments = store((state) => state.departments);
   const employees = store((state) => state.employees);
   const activity = store((state) => state.activity);
@@ -70,6 +74,20 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
     [store],
   );
 
+  const onDrop = (event: {
+    preventDefault: () => void;
+    dataTransfer: DataTransfer;
+    clientX: number;
+    clientY: number;
+  }): void => {
+    event.preventDefault();
+    const kind = event.dataTransfer.getData(PALETTE_MIME);
+    if (kind !== "person" && kind !== "department") return;
+    // The pointer is in screen space; the office is in canvas space.
+    const point = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    dropItem(store, kind satisfies PaletteKind, point);
+  };
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -82,6 +100,12 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
       fitView
       proOptions={{ hideAttribution: false }}
       className="bg-canvas"
+      onDrop={onDrop}
+      onDragOver={(event) => {
+        // Without this the browser refuses the drop and nothing lands.
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
     >
       <Background variant={BackgroundVariant.Dots} gap={settings.gridSize} size={1} />
       <Controls />
@@ -98,6 +122,7 @@ function CanvasSurface({ store }: { readonly store: OfficeStore }): ReactNode {
 export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
   const departments = store((state) => state.departments);
   const settings = store((state) => state.settings);
+  const notice = store((state) => state.notice);
   // Actions are called through getState rather than selected: selecting a
   // method hands its reference around, separated from the store it belongs to.
   const onSnapChange = (event: { readonly target: { readonly checked: boolean } }): void => {
@@ -119,6 +144,25 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
         <span className="h-4 w-px bg-border" />
         <ActivityLegend />
       </div>
+
+      {notice !== null && (
+        <div
+          role="status"
+          className="absolute top-14 left-3 z-10 flex max-w-sm items-start gap-3 rounded-panel border border-border bg-surface px-3 py-2 text-xs text-ink shadow-sm"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="ml-auto text-ink-muted hover:text-ink"
+            onClick={() => {
+              store.getState().setNotice(null);
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {departments.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
