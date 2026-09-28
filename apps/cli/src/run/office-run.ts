@@ -14,6 +14,7 @@
  * run is meant to be reproducible from an office file and a brief.
  */
 import {
+  isErr,
   openTaskCounts,
   transitionTask,
   type EmployeeId,
@@ -32,6 +33,8 @@ import {
   llmAgentTurn,
   type Job,
   officeSnapshot,
+  performHandoff,
+  type PeerCandidate,
   type SchedulerSnapshot,
   type WorkflowContext,
   type WorkflowEffect,
@@ -52,6 +55,8 @@ export interface OfficeRunOptions {
   readonly registry?: ModelRegistry;
   readonly sink?: UsageSink;
   readonly now?: () => Date;
+  /** Ids for work the office creates for itself, such as a handoff. */
+  readonly id?: () => string;
   /** Stops a run that never settles. */
   readonly maxTicks?: number;
   /**
@@ -83,6 +88,8 @@ export interface OfficeRunResult {
   readonly tasks: readonly Task[];
   readonly usage: readonly UsageEvent[];
   readonly effects: readonly WorkflowEffect[];
+  /** Handoffs the office could not place, said out loud rather than dropped. */
+  readonly handoffProblems: readonly string[];
   readonly done: number;
 }
 
@@ -106,6 +113,9 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
 
   const engine = defaultWorkflowEngine();
   const effects: WorkflowEffect[] = [];
+  const handoffProblems: string[] = [];
+  let handedOn = 0;
+  const nextTaskId = options.id ?? (() => `task-handoff-${String(++handedOn)}`);
   const queue = new InProcessJobQueue(
     { limits: { maxPerEmployee: 1 } },
     {
@@ -122,6 +132,19 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       status: e.status,
     })),
     connections: config.connections,
+  };
+
+  /** The receiving department's people, for a handoff to choose between. */
+  const candidatesIn = (departmentId: string): PeerCandidate[] => {
+    const load = openTaskCounts([...tasks.values()]);
+    return config.employees
+      .filter((employee) => employee.departmentId === departmentId)
+      .map((employee) => ({
+        id: employee.id,
+        status: employee.status,
+        skillIds: employee.skillIds,
+        openTasks: load[employee.id] ?? 0,
+      }));
   };
 
   const contextFor = (task: Task, employeeId: EmployeeId | null): WorkflowContext => {
@@ -156,6 +179,27 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     }
     effects.push(...outcome.value.effects);
     tasks.set(outcome.value.task.id, outcome.value.task);
+
+    // Work crossing into another department is the one effect this run carries
+    // out rather than merely recording: without it a finished task is the end
+    // of the line, however the departments are wired.
+    for (const effect of outcome.value.effects) {
+      if (effect.type !== "hand_off") continue;
+      const placed = performHandoff(effect, config.office.id, candidatesIn(effect.toDepartmentId), {
+        id: () => nextTaskId() as TaskId,
+        now,
+      });
+      if (isErr(placed)) {
+        // Refused means the office would not hold it; say so rather than
+        // dropping work on the floor.
+        handoffProblems.push(
+          `could not hand "${effect.title}" to ${effect.toDepartmentId}: ` +
+            placed.error.map((error) => `${error.path}: ${error.message}`).join("; "),
+        );
+        continue;
+      }
+      tasks.set(placed.value.task.id, placed.value.task);
+    }
     return outcome.value.task;
   };
 
@@ -260,6 +304,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     tasks: finished,
     usage: sink instanceof InMemoryUsageSink ? sink.events : [],
     effects,
+    handoffProblems,
     done: finished.filter((task) => task.status === "done").length,
   };
 }

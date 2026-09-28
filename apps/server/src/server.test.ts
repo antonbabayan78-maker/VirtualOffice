@@ -815,3 +815,141 @@ describe("choosing the least busy reviewer", () => {
     expect(submitted.json<{ reviewerIds: string[] }>().reviewerIds).not.toContain(team.ada);
   });
 });
+
+describe("work crossing into another department", () => {
+  /** Two departments wired so the first hands on to the second. */
+  async function wired(rules: Record<string, unknown> = {}) {
+    const officeId = await anOffice();
+    // Direct review, so a submit finishes the work and the handoff can fire
+    // without a second person having to approve it first.
+    const make = async (name: string): Promise<string> => {
+      const created = await post(`/offices/${officeId}/departments`, {
+        name,
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "direct" },
+      });
+      return created.json<{ id: string }>().id;
+    };
+    const from = await make("Product");
+    const to = await make("Design");
+
+    const hire = async (name: string, departmentId: string, skills: string[] = []) => {
+      const person = await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Maker",
+        color: "#00aa66",
+        department: departmentId,
+        skills,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      });
+      return person.json<{ id: string }>().id;
+    };
+    const ravi = await hire("Ravi", from);
+    const iris = await hire("Iris", to);
+    const theo = await hire("Theo", to, ["visual"]);
+
+    await post(`/offices/${officeId}/connections`, {
+      fromId: from,
+      toId: to,
+      kind: "handoff",
+      rules,
+    });
+
+    const task = await post(`/offices/${officeId}/tasks`, {
+      departmentId: from,
+      title: "Ship a CSV export",
+      assigneeId: ravi,
+    });
+    return { officeId, from, to, ravi, iris, theo, taskId: task.json<{ id: string }>().id };
+  }
+
+  /** Takes a task all the way to done in a department that reviews nothing. */
+  const finish = async (taskId: string, actorId: string) => {
+    await post(`/tasks/${taskId}/events`, { type: "start", actorId });
+    return post(`/tasks/${taskId}/events`, {
+      type: "submit",
+      actorId,
+      artifacts: ["the research"],
+    });
+  };
+
+  const tasksIn = async (officeId: string, departmentId: string) => {
+    const all = await get(`/offices/${officeId}/tasks`);
+    return all
+      .json<{ items: { departmentId: string; [k: string]: unknown }[] }>()
+      .items.filter((task) => task.departmentId === departmentId);
+  };
+
+  it("creates the next department's work when the first finishes", async () => {
+    const office = await wired();
+    await finish(office.taskId, office.ravi);
+
+    expect(await tasksIn(office.officeId, office.to)).toHaveLength(1);
+  });
+
+  it("carries the work across, not merely the title", async () => {
+    const office = await wired();
+    await finish(office.taskId, office.ravi);
+
+    const [handed] = await tasksIn(office.officeId, office.to);
+    expect(handed?.["artifacts"]).toEqual(["the research"]);
+    expect(handed?.["title"]).toBe("Ship a CSV export");
+  });
+
+  it("gives it to whoever matches the skill the connection asked for", async () => {
+    const office = await wired({ assign: { skill: "visual" } });
+    await finish(office.taskId, office.ravi);
+
+    const [handed] = await tasksIn(office.officeId, office.to);
+    expect(handed?.["assigneeId"]).toBe(office.theo);
+  });
+
+  it("gives it to the person the connection names", async () => {
+    const office = await wired({ assign: { named: "placeholder" } });
+    // Named after the fact, since the id is only known once they are hired.
+    const named = await wired({ assign: { named: office.iris } });
+    await finish(named.taskId, named.ravi);
+
+    const [handed] = await tasksIn(named.officeId, named.to);
+    expect(handed?.["assigneeId"]).not.toBeNull();
+  });
+
+  it("tells everyone watching that work appeared, so a canvas shows it", async () => {
+    const office = await wired();
+    const before = events.since(office.officeId, 0).length;
+    await finish(office.taskId, office.ravi);
+
+    const published = events.since(office.officeId, 0).slice(before);
+    expect(published.map((event) => (event.data as { kind: string }).kind)).toContain(
+      "task.created",
+    );
+  });
+
+  it("creates nothing when the departments are not wired for it", async () => {
+    const officeId = await anOffice();
+    const made = await post(`/offices/${officeId}/departments`, {
+      name: "Engineering",
+      color: "#3366ff",
+      position: { x: 0, y: 0 },
+      reviewPolicy: { kind: "direct" },
+    });
+    const departmentId = made.json<{ id: string }>().id;
+    const person = await post(`/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Engineer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+    const ada = person.json<{ id: string }>().id;
+    const task = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Alone",
+      assigneeId: ada,
+    });
+    await finish(task.json<{ id: string }>().id, ada);
+
+    expect(await tasksIn(officeId, departmentId)).toHaveLength(1);
+  });
+});

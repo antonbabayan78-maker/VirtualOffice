@@ -9,7 +9,7 @@
  */
 import type { DepartmentId } from "../department/department.js";
 import type { OfficeId } from "../office/office.js";
-import { err, ok, type Result, type ValidationError } from "../shared/result.js";
+import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
 
 declare const connectionIdBrand: unique symbol;
 export type ConnectionId = string & { readonly [connectionIdBrand]: true };
@@ -144,6 +144,56 @@ function validateEdge(
   return errors;
 }
 
+/**
+ * Who picks up work that arrives along a handoff.
+ *
+ * Named or by skill, never both: ranking a named person against a skill match
+ * would need a rule nothing in the office states. Saying nothing is allowed and
+ * means whoever in the receiving department is freest.
+ *
+ * Checked when the arrow is drawn rather than when work arrives, so a mistake
+ * surfaces to whoever made it instead of stopping a handoff weeks later.
+ */
+export type HandoffAssignment =
+  | { readonly kind: "named"; readonly employeeId: string }
+  | { readonly kind: "skill"; readonly skill: string }
+  | { readonly kind: "anyone" };
+
+export function parseHandoffAssignment(raw: unknown): Result<HandoffAssignment> {
+  if (raw === undefined) return ok({ kind: "anyone" });
+  if (!isRecord(raw)) return err([{ path: "assign", message: "must be an object" }]);
+
+  const named = raw["named"];
+  const skill = raw["skill"];
+  if (named !== undefined && skill !== undefined) {
+    return err([{ path: "assign", message: "name somebody or name a skill, not both" }]);
+  }
+  if (named !== undefined) {
+    if (typeof named !== "string" || named.length === 0) {
+      return err([{ path: "assign.named", message: "must be an employee id" }]);
+    }
+    return ok({ kind: "named", employeeId: named });
+  }
+  if (skill !== undefined) {
+    if (typeof skill !== "string" || skill.length === 0) {
+      return err([{ path: "assign.skill", message: "must be a skill" }]);
+    }
+    return ok({ kind: "skill", skill });
+  }
+  return err([
+    { path: "assign", message: "say who takes the work: name somebody, or name a skill" },
+  ]);
+}
+
+/** A handoff's rules, as the engine reads them. Other kinds carry rules of their own. */
+export function parseHandoffRules(rules: Readonly<Record<string, unknown>>): Result<{
+  readonly assign: HandoffAssignment;
+}> {
+  const assign = parseHandoffAssignment(rules["assign"]);
+  if (!assign.ok) return err(assign.error);
+  return ok({ assign: assign.value });
+}
+
 export function createConnection(
   input: CreateConnectionInput,
   ctx: CreateConnectionContext,
@@ -152,6 +202,12 @@ export function createConnection(
   const errors = validateEdge(input, ctx.departments, ctx.existing, "");
   const rules = input.rules ?? {};
   if (!isRecord(rules)) errors.push({ path: "rules", message: "must be an object" });
+  else if (input.kind === "handoff") {
+    // Only a handoff interprets these. The same key on another kind is somebody
+    // else's business, not something to refuse.
+    const parsed = parseHandoffRules(rules);
+    if (!parsed.ok) errors.push(...prefixErrors("rules", parsed.error));
+  }
   if (errors.length > 0) return err(errors);
   return ok({
     id: deps.id(),

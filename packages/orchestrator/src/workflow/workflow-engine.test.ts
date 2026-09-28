@@ -7,6 +7,8 @@ import {
   type DepartmentId,
   type EmployeeId,
   type OfficeId,
+  type Connection,
+  type ConnectionId,
   type ReviewPolicy,
   type Task,
   type TaskId,
@@ -17,6 +19,7 @@ import {
   DIRECT_POLICY_HANDLER,
   WorkflowEngine,
   type WorkflowContext,
+  type WorkflowEffect,
   type WorkflowEvent,
 } from "./workflow-engine.js";
 
@@ -236,5 +239,176 @@ describe("policy registry", () => {
     expect(() => new WorkflowEngine([DIRECT_POLICY_HANDLER, DIRECT_POLICY_HANDLER])).toThrow(
       /duplicate/,
     );
+  });
+});
+
+describe("finishing here starts work next door", () => {
+  const design = "dept-design" as DepartmentId;
+  const at = new Date("2026-09-22T00:00:00Z");
+
+  const connection = (
+    fromId: DepartmentId,
+    toId: DepartmentId,
+    kind: Connection["kind"] = "handoff",
+    rules: Record<string, unknown> = {},
+  ): Connection => ({
+    id: `conn-${fromId}-${toId}` as ConnectionId,
+    officeId,
+    fromId,
+    toId,
+    kind,
+    rules,
+    createdAt: at,
+  });
+
+  const wired = (connections: readonly Connection[]): WorkflowContext =>
+    context(direct, {
+      escalationGraph: {
+        employees: [{ id: ada, departmentId, supervisorId: boss, status: "active" }],
+        connections,
+      },
+    });
+
+  /** Finishing a task the shortest way there is: a department with no review. */
+  const finish = (context: WorkflowContext, overrides: Partial<Task> = {}) =>
+    unwrap(
+      engine.handle(
+        task("in_progress", overrides),
+        { type: "submit", actorId: ada, artifacts: ["the parser"] },
+        context,
+      ),
+    );
+
+  const handoffs = (outcome: { effects: readonly WorkflowEffect[] }): readonly WorkflowEffect[] =>
+    outcome.effects.filter((effect) => effect.type === "hand_off");
+
+  it("hands the work on when the departments are wired for it", () => {
+    const outcome = finish(wired([connection(departmentId, design)]));
+    expect(outcome.task.status).toBe("done");
+    expect(handoffs(outcome)).toHaveLength(1);
+  });
+
+  it("says where the work is going", () => {
+    const [effect] = handoffs(finish(wired([connection(departmentId, design)])));
+    expect(effect).toMatchObject({ toDepartmentId: design });
+  });
+
+  it("hands nothing on when nothing is wired", () => {
+    expect(handoffs(finish(wired([])))).toEqual([]);
+  });
+
+  it("hands nothing on along an arrow pointing the other way", () => {
+    expect(handoffs(finish(wired([connection(design, departmentId)])))).toEqual([]);
+  });
+
+  it("hands nothing on along an arrow that is not a handoff", () => {
+    const other = connection(departmentId, design, "collaborates");
+    expect(handoffs(finish(wired([other])))).toEqual([]);
+  });
+
+  it("hands nothing on when the office says nothing about its connections", () => {
+    // A caller that supplies no graph gets no handoffs rather than a crash.
+    expect(handoffs(finish(context()))).toEqual([]);
+  });
+
+  it("hands nothing on for a task that merely moved, rather than finished", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("assigned"),
+        { type: "start", actorId: ada },
+        wired([connection(departmentId, design)]),
+      ),
+    );
+    expect(handoffs(outcome)).toEqual([]);
+  });
+
+  it("hands the work itself on, not a description of it", () => {
+    const [effect] = handoffs(finish(wired([connection(departmentId, design)])));
+    expect(effect).toMatchObject({ artifacts: ["the parser"] });
+  });
+
+  it("carries a brief naming where the work came from", () => {
+    const [effect] = handoffs(finish(wired([connection(departmentId, design)])));
+    expect(effect?.type).toBe("hand_off");
+    if (effect?.type === "hand_off") expect(effect.brief).toContain("Write the parser");
+  });
+
+  it("carries the route it has taken, with this department added", () => {
+    const [effect] = handoffs(
+      finish(wired([connection(departmentId, design)]), {
+        route: ["dept-product" as DepartmentId],
+      }),
+    );
+    expect(effect?.type).toBe("hand_off");
+    if (effect?.type === "hand_off") {
+      expect(effect.route).toEqual(["dept-product", departmentId]);
+    }
+  });
+
+  it("carries what the connection said about who should take it", () => {
+    const named = connection(departmentId, design, "handoff", { assign: { named: "emp-theo" } });
+    const [effect] = handoffs(finish(wired([named])));
+    expect(effect).toMatchObject({ assign: { kind: "named", employeeId: "emp-theo" } });
+  });
+
+  it("hands on down every arrow leaving the department, not merely the first", () => {
+    const ops = "dept-ops" as DepartmentId;
+    const outcome = finish(
+      wired([connection(departmentId, design), connection(departmentId, ops)]),
+    );
+    expect(handoffs(outcome)).toHaveLength(2);
+  });
+});
+
+describe("work going round in circles", () => {
+  const design = "dept-design" as DepartmentId;
+  const at = new Date("2026-09-22T00:00:00Z");
+  const handoff = (fromId: DepartmentId, toId: DepartmentId): Connection => ({
+    id: `conn-${fromId}-${toId}` as ConnectionId,
+    officeId,
+    fromId,
+    toId,
+    kind: "handoff",
+    rules: {},
+    createdAt: at,
+  });
+
+  const wired = (): WorkflowContext =>
+    context(direct, {
+      escalationGraph: {
+        employees: [{ id: ada, departmentId, supervisorId: boss, status: "active" }],
+        connections: [handoff(departmentId, design)],
+      },
+    });
+
+  const finish = (route: DepartmentId[]) =>
+    unwrap(
+      engine.handle(
+        task("in_progress", { route }),
+        { type: "submit", actorId: ada, artifacts: ["again"] },
+        wired(),
+      ),
+    );
+
+  const kinds = (outcome: { effects: readonly WorkflowEffect[] }): string[] =>
+    outcome.effects.map((effect) => effect.type);
+
+  it("allows work to come back once, which is ordinary rework", () => {
+    expect(kinds(finish([design, departmentId]))).toContain("hand_off");
+  });
+
+  it("stops handing on when the work would arrive somewhere for the third time", () => {
+    expect(kinds(finish([design, departmentId, design, departmentId]))).not.toContain("hand_off");
+  });
+
+  it("escalates instead, so a person decides rather than the office spinning", () => {
+    expect(kinds(finish([design, departmentId, design, departmentId]))).toContain("escalate");
+  });
+
+  it("says what went round in circles, so the reason is actionable", () => {
+    const outcome = finish([design, departmentId, design, departmentId]);
+    const escalation = outcome.effects.find((effect) => effect.type === "escalate");
+    expect(escalation?.type).toBe("escalate");
+    if (escalation?.type === "escalate") expect(escalation.reason).toMatch(/dept-design/);
   });
 });

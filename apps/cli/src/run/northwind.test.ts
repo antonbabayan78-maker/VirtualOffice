@@ -155,7 +155,15 @@ describe("Northwind Studio, as configured", () => {
 describe("a day at Northwind Studio", () => {
   it("gets every piece of work out of the door", async () => {
     const result = await run(approveEverything);
-    expect(result.tasks.map((task) => task.status)).toEqual(["done", "done", "done", "done"]);
+    // Every task, including the ones the studio made for itself by handing work
+    // on — a count would have to be updated every time the wiring changed.
+    expect(result.tasks.every((task) => task.status === "done")).toBe(true);
+    expect(result.handoffProblems).toEqual([]);
+  });
+
+  it("makes more work than it was given, by handing it on", async () => {
+    const result = await run(approveEverything);
+    expect(result.tasks.length).toBeGreaterThan(TASKS.length);
   });
 
   it("sends the scoping back once, and approves it on the second pass", async () => {
@@ -214,7 +222,8 @@ describe("a day at Northwind Studio", () => {
 
     expect(ship?.status).toBe("in_review");
     // The rest of the studio carries on regardless.
-    expect(result.done).toBe(3);
+    expect(result.done).toBeGreaterThan(0);
+    expect(result.tasks.filter((task) => task.status !== "done")).toHaveLength(1);
   });
 
   it("bills every call to the person who made it and the department they sit in", async () => {
@@ -328,3 +337,67 @@ describe("who reviews an engineer's work", () => {
     expect(approval?.actorId).toBe(person("Linus"));
   });
 });
+
+describe("one brief travelling the length of the studio", () => {
+  /** Only Product is given anything; everything downstream must make itself. */
+  async function theDayAfter() {
+    return runOffice({
+      config,
+      tasks: [brief("task-brief", "Ship a CSV export", "Ravi")],
+      provider: studio(),
+      decide: approveEverything,
+      maxTicks: 60,
+      id: (() => {
+        let n = 0;
+        return () => `handed-${String((n += 1))}`;
+      })(),
+    });
+  }
+
+  const inDepartment = (result: OfficeRunResult, name: string): readonly Task[] => {
+    const id = config.departments.find((department) => department.name === name)?.id;
+    return result.tasks.filter((task) => task.departmentId === id);
+  };
+
+  it("reaches Design without anybody creating the work", async () => {
+    expect(inDepartment(await theDayAfter(), "Design")).toHaveLength(1);
+  });
+
+  it("reaches Engineering, two departments from where it started", async () => {
+    expect(inDepartment(await theDayAfter(), "Engineering")).toHaveLength(1);
+  });
+
+  it("reaches Operations, at the far end of the studio", async () => {
+    expect(inDepartment(await theDayAfter(), "Operations")).toHaveLength(1);
+  });
+
+  it("carries the work along with it, not merely a title", async () => {
+    const [handed] = inDepartment(await theDayAfter(), "Design");
+    expect(handed?.artifacts.length).toBeGreaterThan(0);
+  });
+
+  it("remembers where it has been", async () => {
+    const [handed] = inDepartment(await theDayAfter(), "Operations");
+    expect(handed?.route.map((id) => name(id))).toEqual(["Product", "Design", "Engineering"]);
+  });
+
+  it("gives the work to somebody, so it is not left in a pile", async () => {
+    const [handed] = inDepartment(await theDayAfter(), "Design");
+    expect(handed?.assigneeId).not.toBeNull();
+    expect(departmentOf(handed?.assigneeId ?? ("" as EmployeeId))).toBe(
+      config.departments.find((department) => department.name === "Design")?.id,
+    );
+  });
+
+  it("finishes everything it started", async () => {
+    const result = await theDayAfter();
+    expect(result.tasks.every((task) => task.status === "done")).toBe(true);
+  });
+});
+
+/** A department's name, for reading a route out loud. */
+function name(departmentId: string): string {
+  return (
+    config.departments.find((department) => department.id === departmentId)?.name ?? departmentId
+  );
+}

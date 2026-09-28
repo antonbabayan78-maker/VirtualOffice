@@ -56,6 +56,7 @@ describe("createTask", () => {
       gatedActions: [],
       dependsOn: [],
       artifacts: [],
+      route: [],
       tokenBudget: null,
       deadline: null,
       history: [{ at: t0, from: null, to: "backlog", actorId: null, reason: null }],
@@ -391,5 +392,36 @@ describe("what is still on somebody's desk", () => {
 
   it("says nothing about somebody with nothing on", () => {
     expect(openTaskCounts([])["emp-ada"]).toBeUndefined();
+  });
+});
+
+describe("the route a piece of work has taken", () => {
+  const base = { officeId, departmentId, title: "Write the parser" };
+
+  it("is empty for work that started here", () => {
+    expect(unwrap(createTask(base, deps)).route).toEqual([]);
+  });
+
+  it("carries where the work has already been, when it was handed on", () => {
+    const route = ["dept-product", "dept-design"] as DepartmentId[];
+    expect(unwrap(createTask({ ...base, route }, deps)).route).toEqual(route);
+  });
+
+  it("refuses a route that is not a list of departments", () => {
+    expect(isErr(createTask({ ...base, route: ["dept-a", 7] as never }, deps))).toBe(true);
+  });
+
+  it("starts with nothing to show for itself", () => {
+    expect(unwrap(createTask(base, deps)).artifacts).toEqual([]);
+  });
+
+  it("can be handed the artifacts it is continuing from", () => {
+    // A handoff carries the work; without this it could only carry a title.
+    const artifacts = ["the wireframes", "the copy deck"];
+    expect(unwrap(createTask({ ...base, artifacts }, deps)).artifacts).toEqual(artifacts);
+  });
+
+  it("refuses artifacts that are not text", () => {
+    expect(isErr(createTask({ ...base, artifacts: [{}] as never }, deps))).toBe(true);
   });
 });

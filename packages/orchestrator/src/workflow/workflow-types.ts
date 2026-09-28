@@ -5,15 +5,21 @@
 import {
   err,
   transitionTask,
+  type ConnectionId,
+  type DepartmentId,
   type EmployeeId,
   type EmployeeStatus,
   type GatedAction,
+  type HandoffAssignment,
   type ReviewPolicy,
   type Result,
   type Task,
+  type TaskPriority,
   type TaskStatus,
 } from "@vo/core";
 import type { CheckReport } from "./check-runner.js";
+
+export type { HandoffAssignment } from "@vo/core";
 import type { EscalationGraph, EscalationTarget } from "../escalation/escalation.js";
 
 /** A colleague the peer policy may pick as reviewer, resolved by the caller from storage. */
@@ -84,6 +90,24 @@ export type WorkflowEffect =
   | { readonly type: "escalate"; readonly reason: string; readonly to: EscalationTarget }
   /** Ask the caller to run a named check and dispatch a "check_reported" event. */
   | { readonly type: "run_check"; readonly checkId: string }
+  | {
+      /**
+       * Work crossing into another department. The engine creates nothing —
+       * whoever holds a store performs this, which is also what lets a handoff
+       * that cannot be placed be reported rather than half-happen.
+       */
+      readonly type: "hand_off";
+      readonly connectionId: ConnectionId;
+      readonly toDepartmentId: DepartmentId;
+      readonly title: string;
+      readonly brief: string;
+      /** What is being handed on. Never the transcript. */
+      readonly artifacts: readonly string[];
+      readonly priority: TaskPriority;
+      /** Where this work has been, including the department handing it on. */
+      readonly route: readonly DepartmentId[];
+      readonly assign: HandoffAssignment;
+    }
   /** Put the task in the owner's approvals inbox and wait for a "gate_decided" event. */
   | {
       readonly type: "request_approval";
