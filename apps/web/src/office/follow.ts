@@ -78,6 +78,25 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
       } else if (kind === "employee.created" || kind === "employee.updated") {
         const fetched = await api.getEmployee(id);
         if (fetched.ok) replaceEmployee(fetched.value);
+      } else if (
+        kind === "connection.created" ||
+        kind === "connection.updated" ||
+        kind === "connection.deleted"
+      ) {
+        // An arrow has no route of its own to fetch, so the office is asked
+        // again. There are a handful of them and this is a rare event.
+        const snapshot = await api.loadOffice(officeId);
+        if (snapshot.ok) {
+          store.setState({ connections: snapshot.value.connections });
+          store
+            .getState()
+            .load(
+              store.getState().departments,
+              store.getState().employees,
+              store.getState().tasks,
+              snapshot.value.connections,
+            );
+        }
       } else if (kind === "office.updated") {
         const fetched = await api.getOffice(id);
         if (fetched.ok) store.getState().loadOffice(fetched.value);

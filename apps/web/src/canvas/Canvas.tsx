@@ -24,7 +24,7 @@ import { PALETTE_MIME } from "./Palette.js";
 import { dropItem, type PaletteKind } from "./drop.js";
 import { DepartmentNode, type DepartmentNodeType } from "./DepartmentNode.js";
 import { DepartmentMenu, type DepartmentMenuTarget } from "./DepartmentMenu.js";
-import { edgesFrom } from "./edges.js";
+import { connectionBehind, edgesFrom } from "./edges.js";
 import { summariseEmployee } from "../office/employee-summary.js";
 
 const NODE_TYPES = { department: DepartmentNode };
@@ -125,6 +125,9 @@ function CanvasSurface({
       nodes={nodes}
       edges={edges}
       nodeTypes={NODE_TYPES}
+      onEdgeClick={(_event, edge) => {
+        store.getState().selectConnection(connectionBehind(links, edge.id));
+      }}
       onNodeContextMenu={(event, node) => {
         event.preventDefault();
         onContextMenu({

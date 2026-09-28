@@ -518,3 +518,68 @@ describe("being told where the office actually lives", () => {
     expect(spy.sent[0]?.what).toBe("office");
   });
 });
+
+describe("changing an arrow from the canvas", () => {
+  const arrow = {
+    ...engToSales,
+    kind: "watches" as const,
+    enabled: true,
+    rules: { for: ["work_went_wrong"] },
+  };
+
+  function spyApi() {
+    const sent: Record<string, unknown>[] = [];
+    return {
+      sent,
+      api: {
+        patchConnection: (_id: string, changes: Record<string, unknown>) => {
+          sent.push(changes);
+          return Promise.resolve({ ok: true as const, value: { ...arrow, ...changes } as never });
+        },
+      } as never,
+    };
+  }
+
+  it("switches one off, and shows it off at once", async () => {
+    open([eng, sales]);
+    store.getState().load([eng, sales], [], [], [arrow]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store.getState().saveConnection(arrow.id, { enabled: false });
+    expect(result.ok).toBe(true);
+    expect(store.getState().connections[0]?.enabled).toBe(false);
+    expect(spy.sent).toEqual([{ enabled: false }]);
+  });
+
+  it("stops drawing a switched-off arrow as if it were in force", async () => {
+    open([eng, sales]);
+    store.getState().load([eng, sales], [], [], [arrow]);
+    store.getState().connect(spyApi().api);
+    await store.getState().saveConnection(arrow.id, { enabled: false });
+
+    expect(store.getState().links[0]?.enabled).toBe(false);
+  });
+
+  it("puts it back when the office refuses the change", async () => {
+    open([eng, sales]);
+    store.getState().load([eng, sales], [], [], [arrow]);
+    store.getState().connect({
+      patchConnection: () =>
+        Promise.resolve({
+          ok: false as const,
+          kind: "validation" as const,
+          errors: [{ path: "rules.for", message: "no such moment" }],
+        }),
+    } as never);
+
+    const result = await store.getState().saveConnection(arrow.id, { enabled: false });
+    expect(result.ok).toBe(false);
+    expect(store.getState().connections[0]?.enabled).toBe(true);
+  });
+
+  it("says so when there is no such arrow", async () => {
+    open([eng, sales]);
+    expect((await store.getState().saveConnection(arrow.id, { enabled: false })).ok).toBe(false);
+  });
+});

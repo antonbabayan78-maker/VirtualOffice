@@ -280,6 +280,45 @@ export function createConnection(
   });
 }
 
+/** Absent leaves a field alone. An arrow's ends and kind are not changeable. */
+export interface UpdateConnectionInput {
+  readonly enabled?: boolean;
+  readonly rules?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Changes an arrow without redrawing it.
+ *
+ * Which departments it joins, and what kind of relationship it is, are not
+ * changeable: that is a different arrow, and anything already referring to this
+ * one — work raised along it, a route recorded through it — would be describing
+ * something that never happened.
+ */
+export function updateConnection(
+  connection: Connection,
+  changes: UpdateConnectionInput,
+): Result<Connection> {
+  const errors: ValidationError[] = [];
+
+  const enabled = changes.enabled ?? connection.enabled;
+  if (typeof enabled !== "boolean") {
+    errors.push({ path: "enabled", message: "must be true or false" });
+  }
+
+  const rules = changes.rules ?? connection.rules;
+  if (!isRecord(rules)) errors.push({ path: "rules", message: "must be an object" });
+  else if (connection.kind === "watches") {
+    const parsed = parseWatchRules(rules);
+    if (!parsed.ok) errors.push(...prefixErrors("rules", parsed.error));
+  } else if (connection.kind === "handoff") {
+    const parsed = parseHandoffRules(rules);
+    if (!parsed.ok) errors.push(...prefixErrors("rules", parsed.error));
+  }
+
+  if (errors.length > 0 || typeof enabled !== "boolean" || !isRecord(rules)) return err(errors);
+  return ok({ ...connection, enabled, rules: { ...rules } });
+}
+
 /** Whole-graph check used on import/restore. Each edge is validated against the ones before it. */
 export function validateConnectionGraph(
   connections: readonly Connection[],

@@ -19,10 +19,12 @@ import {
   err,
   isErr,
   updateDepartment,
+  updateConnection,
   updateEmployee,
   updateOffice,
   type Connection,
   type ConnectionId,
+  type UpdateConnectionInput,
   type Department,
   type DepartmentId,
   type Office,
@@ -114,6 +116,8 @@ export interface OfficeStoreState {
   /** Changes the office here and then at the office, like any other save. */
   saveOffice(changes: UpdateOfficeInput): Promise<SaveOutcome>;
   putConnection(connection: Connection): void;
+  /** Changes an arrow here and then at the office, like any other save. */
+  saveConnection(id: ConnectionId, changes: UpdateConnectionInput): Promise<SaveOutcome>;
   removeConnection(id: ConnectionId): void;
   /** Closes a department down. Refused while anybody still works there. */
   removeDepartment(id: DepartmentId): SaveOutcome;
@@ -130,6 +134,9 @@ export interface OfficeStoreState {
   setNotice(notice: string | null): void;
   select(id: DepartmentId | null): void;
   readonly selectedEmployeeId: EmployeeId | null;
+  /** The arrow whose settings are open, if any. */
+  readonly selectedConnectionId: ConnectionId | null;
+  selectConnection(id: ConnectionId | null): void;
   selectEmployee(id: EmployeeId | null): void;
   updateEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Result<Employee>;
   updateDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Result<Department>;
@@ -278,6 +285,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       notice: null,
       office: null,
       officeOpen: false,
+      selectedConnectionId: null,
       connections: [],
       links: [],
       selectedEmployeeId: null,
@@ -339,6 +347,35 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           return { ok: false, problems: [] };
         }
         set({ office: before });
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      selectConnection: (id) => {
+        set({ selectedConnectionId: id });
+      },
+
+      saveConnection: async (id, changes) => {
+        const before = get().connections.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such connection" }] };
+        }
+
+        const applied = updateConnection(before, changes);
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        get().putConnection(applied.value);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.patchConnection(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        if (answer.ok) {
+          get().putConnection(answer.value);
+          return { ok: true };
+        }
+        get().putConnection(before);
         if (answer.kind === "transport") set({ notice: answer.message });
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },

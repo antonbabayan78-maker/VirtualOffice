@@ -19,6 +19,7 @@ import {
   createEmployee,
   createOffice,
   openTaskCounts,
+  updateConnection,
   updateOffice,
   createTask,
   isErr,
@@ -630,6 +631,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       "connection.created",
       (connection) => store.connections.put(connection),
     );
+  });
+
+  app.patch("/connections/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const connection = await store.connections.get(id);
+    if (connection === null) return missing(reply, "connection");
+
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(connection.officeId, id, since)) {
+      return reply
+        .code(409)
+        .send({ error: "this connection changed since you loaded it", current: connection });
+    }
+
+    const updated = updateConnection(connection, request.body as Record<string, never>);
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.connections.put(updated.value);
+    events.publish(connection.officeId, { kind: "connection.updated", id });
+    return updated.value;
   });
 
   app.delete("/connections/:id", async (request, reply) => {
