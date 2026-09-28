@@ -46,6 +46,7 @@ const edge = (fromId: DepartmentId, toId: DepartmentId): Connection => ({
   fromId,
   toId,
   kind: "escalates_to",
+  enabled: true,
   rules: {},
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
 });

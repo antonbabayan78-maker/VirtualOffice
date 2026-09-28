@@ -1054,3 +1054,106 @@ describe("what the office expects of work", () => {
     expect(done.json<{ status: string }>().status).toBe("done");
   });
 });
+
+describe("a department noticing another over the wire", () => {
+  async function watched() {
+    const officeId = await anOffice();
+    const make = async (name: string): Promise<string> => {
+      const created = await post(`/offices/${officeId}/departments`, {
+        name,
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "direct" },
+      });
+      return created.json<{ id: string }>().id;
+    };
+    const engineering = await make("Engineering");
+    const operations = await make("Operations");
+
+    const hire = async (name: string, departmentId: string) => {
+      const person = await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Maker",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      });
+      return person.json<{ id: string }>().id;
+    };
+    const ada = await hire("Ada", engineering);
+    await hire("Nadia", operations);
+
+    return { officeId, engineering, operations, ada };
+  }
+
+  const watch = (officeId: string, from: string, to: string, moments: string[], enabled = true) =>
+    post(`/offices/${officeId}/connections`, {
+      fromId: from,
+      toId: to,
+      kind: "watches",
+      enabled,
+      rules: { for: moments },
+    });
+
+  const tasksIn = async (officeId: string, departmentId: string) => {
+    const all = await get(`/offices/${officeId}/tasks`);
+    return all
+      .json<{ items: { departmentId: string; title: string }[] }>()
+      .items.filter((task) => task.departmentId === departmentId);
+  };
+
+  const blockSomething = async (office: Awaited<ReturnType<typeof watched>>) => {
+    const made = await post(`/offices/${office.officeId}/tasks`, {
+      departmentId: office.engineering,
+      title: "Build the export endpoint",
+      assigneeId: office.ada,
+    });
+    const id = made.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.ada });
+    return post(`/tasks/${id}/events`, { type: "block", reason: "staging is down" });
+  };
+
+  it("raises work in the watching department when something goes wrong", async () => {
+    const office = await watched();
+    await watch(office.officeId, office.operations, office.engineering, ["work_went_wrong"]);
+    await blockSomething(office);
+
+    const raised = await tasksIn(office.officeId, office.operations);
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.title).toMatch(/something went wrong/i);
+  });
+
+  it("raises nothing when the arrow is switched off", async () => {
+    const office = await watched();
+    await watch(office.officeId, office.operations, office.engineering, ["work_went_wrong"], false);
+    await blockSomething(office);
+
+    expect(await tasksIn(office.officeId, office.operations)).toEqual([]);
+  });
+
+  it("raises nothing at a moment the arrow was not pointed at", async () => {
+    const office = await watched();
+    await watch(office.officeId, office.operations, office.engineering, ["work_finished"]);
+    await blockSomething(office);
+
+    expect(await tasksIn(office.officeId, office.operations)).toEqual([]);
+  });
+
+  it("tells everyone watching the canvas that work appeared", async () => {
+    const office = await watched();
+    await watch(office.officeId, office.operations, office.engineering, ["work_went_wrong"]);
+    const before = events.since(office.officeId, 0).length;
+    await blockSomething(office);
+
+    const published = events.since(office.officeId, 0).slice(before);
+    expect(published.map((event) => (event.data as { kind: string }).kind)).toContain(
+      "task.created",
+    );
+  });
+
+  it("refuses an arrow pointed at a moment nobody has heard of", async () => {
+    const office = await watched();
+    const made = await watch(office.officeId, office.operations, office.engineering, ["whenever"]);
+    expect(made.statusCode).toBe(400);
+  });
+});

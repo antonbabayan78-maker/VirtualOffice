@@ -12,6 +12,7 @@ const link = (from: string, to: string, kind: ConnectionKind = "handoff"): Conne
   fromId: from as DepartmentId,
   toId: to as DepartmentId,
   kind,
+  enabled: true,
   rules: {},
   createdAt: at,
 });

@@ -156,3 +156,23 @@ connections:
   - { id: conn-design-product, from: dept-design, to: dept-product, kind: escalates_to }
   - { id: conn-eng-product, from: dept-engineering, to: dept-product, kind: escalates_to }
   - { id: conn-ops-eng, from: dept-operations, to: dept-engineering, kind: escalates_to }
+
+  # Operations watches the rest of the studio. Nobody else knows it is there and
+  # nobody waits for it: when work anywhere stalls or gets sent upward,
+  # Operations raises its own task to find out why. This is the office's error
+  # log, drawn as arrows rather than hidden in a subsystem.
+  - id: conn-ops-watch-product
+    from: dept-operations
+    to: dept-product
+    kind: watches
+    rules: { for: [work_went_wrong] }
+  - id: conn-ops-watch-design
+    from: dept-operations
+    to: dept-design
+    kind: watches
+    rules: { for: [work_went_wrong] }
+  - id: conn-ops-watch-eng
+    from: dept-operations
+    to: dept-engineering
+    kind: watches
+    rules: { for: [work_went_wrong] }

@@ -114,7 +114,9 @@ export type WorkflowEffect =
        * whoever holds a store performs this, which is also what lets a handoff
        * that cannot be placed be reported rather than half-happen.
        */
-      readonly type: "hand_off";
+      readonly type: "create_work";
+      /** Why this work exists: handed on by a department, or noticed by one. */
+      readonly because: "handoff" | "watching";
       readonly connectionId: ConnectionId;
       readonly toDepartmentId: DepartmentId;
       readonly title: string;

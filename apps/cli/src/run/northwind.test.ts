@@ -448,7 +448,9 @@ describe("the studio's own definition of done", () => {
 
   it("does not finish work that leaves a criterion unmet, however cheerful the reviewer", async () => {
     const result = await oneBrief(forgetful("success is measurable"));
-    expect(result.tasks.some((task) => task.status === "done")).toBe(false);
+    // The brief itself, not whatever else the studio raised in response to it.
+    const scoping = result.tasks.find((task) => task.id === "task-scope");
+    expect(scoping?.status).not.toBe("done");
   });
 
   it("says which criterion was outstanding, so the next round is actionable", async () => {
@@ -467,5 +469,49 @@ describe("the studio's own definition of done", () => {
   it("finishes once the list is actually met", async () => {
     const result = await oneBrief(studio());
     expect(result.tasks.every((task) => task.status === "done")).toBe(true);
+  });
+});
+
+describe("Operations watching the studio", () => {
+  const operations = () => config.departments.find((d) => d.name === "Operations")?.id;
+
+  it("is wired to watch every other department, and nothing watches it", () => {
+    const watching = config.connections.filter((c) => c.kind === "watches");
+    expect(watching.map((c) => c.fromId)).toEqual([operations(), operations(), operations()]);
+    expect(watching.every((c) => c.toId !== operations())).toBe(true);
+  });
+
+  it("raises its own work when something goes wrong elsewhere, which nobody asked it to", async () => {
+    // Engineering's reviewer never approves, so the work escalates. Operations
+    // is not told; it notices.
+    const stubborn = new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) =>
+        isReview(request)
+          ? toolCall("review_verdict", { approved: false, reason: "not good enough" })
+          : toolCall("submit_work", {
+              summary: `${speaker(request)} did it`,
+              met: criteriaAsked(request),
+            }),
+    });
+
+    const result = await runOffice({
+      config,
+      tasks: [brief("task-endpoint", "Build the export endpoint", "Ada")],
+      provider: stubborn,
+      decide: approveEverything,
+      maxTicks: 40,
+    });
+
+    const inOperations = result.tasks.filter((task) => task.departmentId === operations());
+    expect(inOperations.length).toBeGreaterThan(0);
+    expect(inOperations[0]?.title).toMatch(/something went wrong/i);
+  });
+
+  it("does not slow the studio down on an ordinary day", async () => {
+    // Nothing goes wrong, so Operations notices nothing and the day is as it was.
+    const result = await run(approveEverything);
+    expect(result.tasks.every((task) => task.status === "done")).toBe(true);
+    expect(result.tasks.some((task) => task.title.includes("went wrong"))).toBe(false);
   });
 });

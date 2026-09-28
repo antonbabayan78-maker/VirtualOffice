@@ -73,7 +73,8 @@ export function handoffEffects(task: Task, context: WorkflowContext): readonly W
     }
 
     effects.push({
-      type: "hand_off",
+      type: "create_work",
+      because: "handoff",
       connectionId: connection.id,
       toDepartmentId: connection.toId,
       title: task.title,

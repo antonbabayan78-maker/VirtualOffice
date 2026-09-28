@@ -34,7 +34,7 @@ import {
   type Job,
   acceptanceCriteriaFor,
   officeSnapshot,
-  performHandoff,
+  performCreateWork,
   type PeerCandidate,
   type SchedulerSnapshot,
   type WorkflowContext,
@@ -189,11 +189,16 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     // out rather than merely recording: without it a finished task is the end
     // of the line, however the departments are wired.
     for (const effect of outcome.value.effects) {
-      if (effect.type !== "hand_off") continue;
-      const placed = performHandoff(effect, config.office.id, candidatesIn(effect.toDepartmentId), {
-        id: () => nextTaskId() as TaskId,
-        now,
-      });
+      if (effect.type !== "create_work") continue;
+      const placed = performCreateWork(
+        effect,
+        config.office.id,
+        candidatesIn(effect.toDepartmentId),
+        {
+          id: () => nextTaskId() as TaskId,
+          now,
+        },
+      );
       if (isErr(placed)) {
         // Refused means the office would not hold it; say so rather than
         // dropping work on the floor.
