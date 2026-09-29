@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDepartment,
+  createDocument,
   createEmployee,
   unwrap,
   type Department,
   type DepartmentId,
+  type DocumentId,
   type Employee,
   type EmployeeId,
   type OfficeId,
@@ -76,7 +78,9 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     patchDepartment: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
-    listDocuments: () => Promise.reject(new Error("not used here")),
+    getDocument: () => Promise.reject(new Error("not used here")),
+    // Reloading an office asks what it is holding, so this one is always used.
+    listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),
     deleteDocument: () => Promise.reject(new Error("not used here")),
@@ -379,5 +383,83 @@ describe("arrows changing under you", () => {
       data: { kind: "connection.deleted", id: "conn-1" },
     });
     expect(store.getState().links).toEqual([]);
+  });
+});
+
+describe("documents arriving and leaving", () => {
+  const brief = unwrap(
+    createDocument(
+      {
+        officeId,
+        owner: { kind: "employee", id: ada.id },
+        tray: "in",
+        name: "brief.md",
+        mediaType: "text/markdown",
+        size: 8,
+      },
+      { id: () => "doc-1" as DocumentId, now: () => at },
+    ),
+  );
+
+  it("fetches a document somebody put on a desk", async () => {
+    const api = fakeApi({ getDocument: () => Promise.resolve({ ok: true, value: brief }) });
+    await follow(api).apply({
+      offset: 4,
+      officeId,
+      at: 0,
+      data: { kind: "document.added", id: brief.id },
+    });
+
+    expect(store.getState().documents.map((d) => d.name)).toEqual(["brief.md"]);
+  });
+
+  it("takes away one somebody took off a desk, without asking about it", async () => {
+    store.getState().loadDocuments([brief]);
+    // Nothing to fetch: it is gone, and asking would only 404.
+    const getDocument = vi.fn(() => Promise.reject(new Error("should not be asked")));
+    await follow(fakeApi({ getDocument })).apply({
+      offset: 5,
+      officeId,
+      at: 0,
+      data: { kind: "document.removed", id: brief.id },
+    });
+
+    expect(store.getState().documents).toEqual([]);
+    expect(getDocument).not.toHaveBeenCalled();
+  });
+
+  it("moves on when a document it was told about cannot be fetched", async () => {
+    const api = fakeApi({
+      getDocument: () => Promise.resolve({ ok: false, kind: "transport", message: "gone" }),
+    });
+    await follow(api).apply({
+      offset: 9,
+      officeId,
+      at: 0,
+      data: { kind: "document.added", id: "doc-nope" },
+    });
+
+    expect(store.getState().documents).toEqual([]);
+    expect(store.getState().seenOffset).toBe(9);
+  });
+
+  it("loads what the office is holding when the office is loaded", async () => {
+    const listDocuments = vi.fn(() => Promise.resolve({ ok: true as const, value: [brief] }));
+    await follow(fakeApi({ listDocuments })).reload();
+
+    expect(listDocuments).toHaveBeenCalledWith(officeId);
+    expect(store.getState().documents.map((d) => d.name)).toEqual(["brief.md"]);
+  });
+
+  it("still opens an office that cannot say what it is holding", async () => {
+    // An office running a version without trays is an office with no documents,
+    // not an office that fails to load.
+    const api = fakeApi({
+      listDocuments: () => Promise.resolve({ ok: false, kind: "transport", message: "no trays" }),
+    });
+    await follow(api).reload();
+
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().documents).toEqual([]);
   });
 });

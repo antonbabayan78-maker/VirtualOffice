@@ -262,3 +262,10 @@ describe("what this department expects of everything it makes", () => {
     expect(screen.getByText(/done|acceptable|finished/i)).toBeTruthy();
   });
 });
+
+describe("what is in the room's trays", () => {
+  it("shows both, so a person can give the department something to work from", () => {
+    expect(screen.getByRole("group", { name: /in-tray for department/i })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /out-tray for department/i })).toBeInTheDocument();
+  });
+});

@@ -11,7 +11,7 @@
  * canvas asking about the same event for as long as the office is unreachable,
  * and the next reconnect repairs it anyway.
  */
-import type { Department, Employee, EmployeeId, OfficeId } from "@vo/core";
+import type { Department, DocumentId, Employee, EmployeeId, OfficeId } from "@vo/core";
 import type { ApiClient } from "@vo/api-client";
 import type { OfficeStore } from "./office-store.js";
 
@@ -97,6 +97,12 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
               snapshot.value.connections,
             );
         }
+      } else if (kind === "document.added") {
+        const fetched = await api.getDocument(id);
+        if (fetched.ok) store.getState().putDocument(fetched.value);
+      } else if (kind === "document.removed") {
+        // Nothing to fetch: it has gone, and asking would only be a 404.
+        store.getState().dropDocument(id as DocumentId);
       } else if (kind === "office.updated") {
         const fetched = await api.getOffice(id);
         if (fetched.ok) store.getState().loadOffice(fetched.value);
@@ -125,6 +131,12 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         snapshot.value.tasks,
         snapshot.value.connections,
       );
+
+    // Every tray in one request, since a tray is a filter over these. An office
+    // that cannot answer is an office with no trays rather than one that fails
+    // to open, so a refusal is not reported as a problem with the office.
+    const documents = await api.listDocuments(officeId);
+    if (documents.ok) store.getState().loadDocuments(documents.value);
   };
 
   return { apply, reload };

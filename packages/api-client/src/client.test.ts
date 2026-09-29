@@ -494,6 +494,14 @@ describe("documents", () => {
     }
   });
 
+  it("fetches one document, which is what a canvas does when told one arrived", async () => {
+    server.use(http.get(`${BASE}/documents/doc-1`, () => HttpResponse.json(documentRow)));
+
+    const result = await client().getDocument("doc-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.addedAt).toBeInstanceOf(Date);
+  });
+
   it("asks for one tray when told which", async () => {
     let asked = "";
     server.use(
@@ -623,6 +631,21 @@ describe("documents", () => {
     const result = await client().downloadDocument("doc-1");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.kind).toBe("transport");
+  });
+
+  it("takes a document off a desk without claiming to send JSON", async () => {
+    // A request with no body must not say it has one: a strict server refuses
+    // "content-type: application/json" with nothing after it, and answers 400.
+    let contentType: string | null = "not asked";
+    server.use(
+      http.delete(`${BASE}/documents/doc-1`, ({ request }) => {
+        contentType = request.headers.get("content-type");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    await client().deleteDocument("doc-1");
+    expect(contentType).toBeNull();
   });
 
   it("takes a document off a desk, which answers with nothing at all", async () => {

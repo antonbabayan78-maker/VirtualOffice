@@ -47,6 +47,7 @@ function scriptedApi(): {
       });
     },
     patchEmployee: () => Promise.reject(new Error("not used here")),
+    getDocument: () => Promise.reject(new Error("not used here")),
     listDocuments: () => Promise.reject(new Error("not used here")),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),
