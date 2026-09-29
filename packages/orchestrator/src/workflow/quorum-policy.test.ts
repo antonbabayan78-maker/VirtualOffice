@@ -47,6 +47,7 @@ const quorum = (required: number, maxIterations = 3): ReviewPolicy => ({
 });
 const candidate = (id: EmployeeId, overrides: Partial<PeerCandidate> = {}): PeerCandidate => ({
   id,
+  departmentId,
   status: "active",
   skillIds: [],
   openTasks: 0,

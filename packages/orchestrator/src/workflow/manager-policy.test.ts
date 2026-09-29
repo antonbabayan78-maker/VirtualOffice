@@ -10,10 +10,13 @@ import {
   type Task,
   type TaskId,
   type TaskStatus,
+  type Connection,
+  type ConnectionId,
 } from "@vo/core";
 import { MANAGER_POLICY_HANDLER, reviewRounds } from "./manager-policy.js";
 import {
   defaultWorkflowEngine,
+  type PeerCandidate,
   type WorkflowContext,
   type WorkflowEvent,
   type WorkflowOutcome,
@@ -392,5 +395,116 @@ describe("approving against a definition of done", () => {
       capped,
     );
     expect(unwrap(twice).task.status).toBe("escalated");
+  });
+});
+
+describe("another department having to look at it first", () => {
+  const operations = "dept-operations" as DepartmentId;
+  const nadia = "emp-nadia" as EmployeeId;
+  const at = new Date("2026-09-29T09:00:00Z");
+
+  const reviews = (overrides: Partial<Connection> = {}): Connection => ({
+    id: "conn-check" as ConnectionId,
+    officeId,
+    fromId: operations,
+    toId: departmentId,
+    kind: "reviews",
+    enabled: true,
+    rules: {},
+    createdAt: at,
+    ...overrides,
+  });
+
+  const person = (id: EmployeeId, department: DepartmentId): PeerCandidate => ({
+    id,
+    departmentId: department,
+    status: "active",
+    skillIds: [],
+    openTasks: 0,
+  });
+
+  const checked = (connections: readonly Connection[] = [reviews()]): WorkflowContext =>
+    context(manager(), {
+      colleagues: [person(nadia, operations), person(ada, departmentId)],
+      escalationGraph: { employees: [], connections },
+    });
+
+  it("does not finish when a department that checks this one has not looked", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [boss] }),
+        { type: "approve", actorId: boss },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_review");
+  });
+
+  it("hands it to somebody in the checking department", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [boss] }),
+        { type: "approve", actorId: boss },
+        checked(),
+      ),
+    );
+    expect(outcome.task.reviewerIds).toEqual([nadia]);
+  });
+
+  it("finishes once the checking department approves", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [nadia] }),
+        { type: "approve", actorId: nadia },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("remembers who signed, so the same check is not asked for twice", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [nadia] }),
+        { type: "approve", actorId: nadia },
+        checked(),
+      ),
+    );
+    expect(outcome.task.checkedBy).toEqual([operations]);
+  });
+
+  it("finishes straight away when the checking department already signed", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [boss], checkedBy: [operations] }),
+        { type: "approve", actorId: boss },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("finishes as it always did when nobody checks this department", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [boss] }),
+        { type: "approve", actorId: boss },
+        checked([]),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("sends the work back when the checking department refuses it", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [nadia] }),
+        { type: "request_changes", actorId: nadia, reason: "the rollback was not rehearsed" },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_progress");
+    const reasons = outcome.task.history.map((event) => event.reason ?? "").join(" ");
+    expect(reasons).toContain("rollback");
   });
 });

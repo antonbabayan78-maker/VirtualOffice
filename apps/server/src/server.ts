@@ -519,6 +519,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const load = openTaskCounts(
       (await store.tasks.list({ where: { officeId: task.officeId } })).items,
     );
+    const everyone = colleagues.items.map((employee) => ({
+      id: employee.id,
+      departmentId: employee.departmentId,
+      status: employee.status,
+      skillIds: employee.skillIds,
+      openTasks: load[employee.id] ?? 0,
+    }));
 
     const context: WorkflowContext = {
       policy: department?.reviewPolicy ?? { kind: "direct" },
@@ -528,14 +535,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       ),
       now: now(),
       supervisorId: assignee?.supervisorId ?? null,
-      peers: colleagues.items
-        .filter((employee) => employee.departmentId === task.departmentId)
-        .map((employee) => ({
-          id: employee.id,
-          status: employee.status,
-          skillIds: employee.skillIds,
-          openTasks: load[employee.id] ?? 0,
-        })),
+      peers: everyone.filter((employee) => employee.departmentId === task.departmentId),
+      // The whole office, for the one thing that looks outside this task's own
+      // department: another department whose arrow says it checks this work.
+      colleagues: everyone,
       escalationGraph: {
         employees: colleagues.items.map((employee) => ({
           id: employee.id,
@@ -562,18 +565,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     // creating it is the store's business, and this is the store.
     for (const effect of outcome.value.effects) {
       if (effect.type !== "create_work") continue;
-      const receiving = colleagues.items.filter(
-        (employee) => employee.departmentId === effect.toDepartmentId,
-      );
       const placed = performCreateWork(
         effect,
         task.officeId,
-        receiving.map((employee) => ({
-          id: employee.id,
-          status: employee.status,
-          skillIds: employee.skillIds,
-          openTasks: load[employee.id] ?? 0,
-        })),
+        everyone.filter((employee) => employee.departmentId === effect.toDepartmentId),
         { id: () => newId() as TaskId, now },
       );
       if (isErr(placed)) {

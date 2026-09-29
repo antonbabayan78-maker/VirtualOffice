@@ -544,3 +544,70 @@ describe("the office noticing what its departments do", () => {
     expect(outcome.effects).toEqual([]);
   });
 });
+
+describe("a department with no review of its own, checked by one that has", () => {
+  const operations = "dept-operations" as DepartmentId;
+  const nadia = "emp-nadia" as EmployeeId;
+  const at = new Date("2026-09-29T09:00:00Z");
+
+  const checked = (): WorkflowContext =>
+    context(direct, {
+      colleagues: [
+        { id: nadia, departmentId: operations, status: "active", skillIds: [], openTasks: 0 },
+        { id: ada, departmentId, status: "active", skillIds: [], openTasks: 0 },
+      ],
+      escalationGraph: {
+        employees: [],
+        connections: [
+          {
+            id: "conn-check" as ConnectionId,
+            officeId,
+            fromId: operations,
+            toId: departmentId,
+            kind: "reviews",
+            enabled: true,
+            rules: {},
+            createdAt: at,
+          },
+        ],
+      },
+    });
+
+  it("waits for the checker rather than finishing on submit", () => {
+    const outcome = unwrap(
+      engine.handle(task("in_progress"), { type: "submit", actorId: ada }, checked()),
+    );
+    expect(outcome.task.status).toBe("in_review");
+    expect(outcome.task.reviewerIds).toEqual([nadia]);
+  });
+
+  it("takes the checker's approval, even though it reviews nothing itself", () => {
+    // Without this a direct department with a checker is a dead end: it can be
+    // put into review and never taken out of it.
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [nadia] }),
+        { type: "approve", actorId: nadia },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("done");
+  });
+
+  it("takes the checker's refusal too", () => {
+    const outcome = unwrap(
+      engine.handle(
+        task("in_review", { reviewerIds: [nadia] }),
+        { type: "request_changes", actorId: nadia, reason: "not rehearsed" },
+        checked(),
+      ),
+    );
+    expect(outcome.task.status).toBe("in_progress");
+  });
+
+  it("still refuses an approval where nothing asked for one", () => {
+    expect(
+      isErr(engine.handle(task("in_progress"), { type: "approve", actorId: ada }, context(direct))),
+    ).toBe(true);
+  });
+});

@@ -13,7 +13,8 @@ import type { Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
 import { handoffEffects } from "./handoff.js";
 import { watchEffects } from "./watch.js";
-import { outstandingFor } from "./review-common.js";
+import { checkerFor } from "./checker.js";
+import { approveReview, outstandingFor, requestChangesOrEscalate } from "./review-common.js";
 import { GATE_POLICY_HANDLER } from "./gate-policy.js";
 import { MANAGER_POLICY_HANDLER } from "./manager-policy.js";
 import { PEER_POLICY_HANDLER } from "./peer-policy.js";
@@ -40,9 +41,25 @@ export type {
   WorkflowOutcome,
 } from "./workflow-types.js";
 
+/**
+ * How many times a department that reviews nothing of its own may be sent back
+ * by a department that checks it. It declares no cap because it has no policy,
+ * and without one an obstinate checker could keep work moving forever.
+ */
+const CHECK_ROUNDS = 3;
+
 export const DIRECT_POLICY_HANDLER: PolicyHandler = {
   kind: "direct",
   handle(task, event, context) {
+    // This policy reviews nothing of its own, but another department may check
+    // its work — and then somebody has to be able to answer. Without this a
+    // department with a checker is a dead end: put into review and never taken
+    // out of it.
+    const asked = task.status === "in_review" && task.reviewerIds.length > 0;
+    if (asked && event.type === "approve") return approveReview(task, event, context);
+    if (asked && event.type === "request_changes") {
+      return requestChangesOrEscalate(task, event, context, event.reason, CHECK_ROUNDS);
+    }
     if (event.type !== "submit") {
       return workflowError(
         "event.type",
@@ -64,6 +81,20 @@ export const DIRECT_POLICY_HANDLER: PolicyHandler = {
     const outstanding = outstandingFor(withArtifacts, event, context);
     if (outstanding.length > 0) {
       return workflowError("met", `not done yet: ${outstanding.join("; ")}`);
+    }
+
+    // Nobody reviews here, but another department may still check this one's
+    // work. Straight into review, since there was no approval step to record.
+    const pending = checkerFor(withArtifacts, context);
+    if (pending !== null) {
+      return applyTransition(
+        { ...withArtifacts, reviewerIds: [pending.reviewerId], approvals: [] },
+        "in_review",
+        event,
+        context,
+        [],
+        `waiting to be checked by ${pending.departmentId}`,
+      );
     }
     return applyTransition(withArtifacts, "done", event, context);
   },

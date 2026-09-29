@@ -37,7 +37,10 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   in_review: ["approved", "changes_requested", "escalated", "cancelled"],
   changes_requested: ["in_progress", "escalated", "transferred", "cancelled"],
   // "assigned" hands a pipeline task to the next stage instead of completing it.
-  approved: ["done", "assigned"],
+  // "in_review" is work its own department has approved and another department
+  // still has to check, which is a review by somebody outside rather than a
+  // second opinion within.
+  approved: ["done", "assigned", "in_review"],
   blocked: ["assigned", "in_progress", "escalated", "transferred", "cancelled"],
   escalated: ["assigned", "in_progress", "transferred", "cancelled"],
   transferred: ["assigned", "cancelled"],
@@ -138,6 +141,12 @@ export interface Task {
    * something the department does not always ask for.
    */
   readonly acceptanceCriteria: readonly string[];
+  /**
+   * Departments that have already checked this work and let it through. A
+   * department checking another's work signs here, so the same sign-off is not
+   * asked for twice and the work does not loop between done and review.
+   */
+  readonly checkedBy: readonly DepartmentId[];
   readonly tokenBudget: number | null;
   readonly deadline: Date | null;
   readonly history: readonly TaskEvent[];
@@ -159,6 +168,8 @@ export interface CreateTaskInput {
   readonly artifacts?: readonly string[];
   /** What this work in particular has to achieve, over its department's standing list. */
   readonly acceptanceCriteria?: readonly string[];
+  /** Who has already signed it off, for work that arrives part-way through. */
+  readonly checkedBy?: readonly DepartmentId[];
   readonly gatedActions?: readonly GatedAction[];
   readonly dependsOn?: readonly string[];
   readonly tokenBudget?: number;
@@ -269,6 +280,11 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
   // it meant.
   errors.push(...uniqueIds(acceptanceCriteria, "acceptanceCriteria", "criterion"));
 
+  const checkedBy = input.checkedBy ?? [];
+  if (checkedBy.some((id) => typeof id !== "string" || id.length === 0)) {
+    errors.push({ path: "checkedBy", message: "must each be a department id" });
+  }
+
   const tokenBudget = input.tokenBudget ?? null;
   if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
     errors.push({ path: "tokenBudget", message: "must be a positive integer" });
@@ -300,6 +316,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     artifacts: [...artifacts],
     route: [...route],
     acceptanceCriteria: [...acceptanceCriteria],
+    checkedBy: [...checkedBy],
     tokenBudget,
     deadline,
     history: [{ at: now, from: null, to: status, actorId: null, reason: null }],
