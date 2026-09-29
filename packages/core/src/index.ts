@@ -1,7 +1,7 @@
 /**
  * @vo/core
  *
- * Pure domain model and invariants: Office, Department, Employee, Task, Skill, Memory, Connection, Connector. No IO.
+ * Pure domain model and invariants: Office, Department, Employee, Task, Document, Skill, Memory, Connection, Connector. No IO.
  */
 export const PACKAGE_NAME = "@vo/core" as const;
 
@@ -15,6 +15,7 @@ export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";
 export * from "./connection/connection.js";
 export * from "./task/task.js";
+export * from "./document/document.js";
 export * from "./skill/semver.js";
 export * from "./skill/skill.js";
 export * from "./memory/memory.js";
