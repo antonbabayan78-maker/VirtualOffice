@@ -24,5 +24,6 @@ export * from "./relational/query-memory.js";
 export * from "./adapters/sqlite/sqlite-events.js";
 export * from "./adapters/sqlite/sqlite-vectors.js";
 export * from "./snapshots/snapshots.js";
+export * from "./documents/documents.js";
 export * from "./adapters/fs/fs-blob-store.js";
 export * from "./stores/streams.js";
