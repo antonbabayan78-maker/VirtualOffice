@@ -142,6 +142,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       .filter((employee) => employee.departmentId === departmentId)
       .map((employee) => ({
         id: employee.id,
+        departmentId: employee.departmentId,
         status: employee.status,
         skillIds: employee.skillIds,
         openTasks: load[employee.id] ?? 0,
@@ -155,6 +156,13 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     // Recomputed per call rather than kept: tasks move throughout a run, and a
     // stale count would send work to somebody who has since filled up.
     const load = openTaskCounts([...tasks.values()]);
+    const everyone = config.employees.map((e) => ({
+      id: e.id,
+      departmentId: e.departmentId,
+      status: e.status,
+      skillIds: e.skillIds,
+      openTasks: load[e.id] ?? 0,
+    }));
     return {
       policy: department?.reviewPolicy ?? { kind: "direct" },
       acceptanceCriteria: acceptanceCriteriaFor(
@@ -163,14 +171,10 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       ),
       now: now(),
       supervisorId: assignee?.supervisorId ?? employee?.supervisorId ?? null,
-      peers: config.employees
-        .filter((e) => e.departmentId === task.departmentId)
-        .map((e) => ({
-          id: e.id,
-          status: e.status,
-          skillIds: e.skillIds,
-          openTasks: load[e.id] ?? 0,
-        })),
+      peers: everyone.filter((e) => e.departmentId === task.departmentId),
+      // The whole office, for the one thing that looks outside this task's own
+      // department: another department whose arrow says it checks this work.
+      colleagues: everyone,
       escalationGraph,
     };
   };

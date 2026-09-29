@@ -26,6 +26,7 @@ import type { EscalationGraph, EscalationTarget } from "../escalation/escalation
 export interface PeerCandidate {
   readonly id: EmployeeId;
   readonly status: EmployeeStatus;
+  readonly departmentId: DepartmentId;
   readonly skillIds: readonly string[];
   /** Open tasks currently assigned, used to spread review load. */
   readonly openTasks: number;
@@ -36,8 +37,15 @@ export interface WorkflowContext {
   readonly now: Date;
   /** Who reviews this department's work; null or absent when the office owner does. */
   readonly supervisorId?: EmployeeId | null;
-  /** Colleagues eligible for peer review. */
+  /** Colleagues eligible for peer review: this task's own department. */
   readonly peers?: readonly PeerCandidate[];
+  /**
+   * Everybody in the office, for the one thing that has to look outside the
+   * task's own department: a department whose arrow says it checks this one's
+   * work. Kept apart from `peers` so a peer review cannot accidentally reach
+   * across the office.
+   */
+  readonly colleagues?: readonly PeerCandidate[];
   /** Skills the work needs, used to rank peer reviewers. */
   readonly reviewSkills?: readonly string[];
   /**

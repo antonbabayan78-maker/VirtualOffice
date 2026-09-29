@@ -27,6 +27,7 @@ const effect = (overrides: Partial<CreateWorkEffect> = {}): CreateWorkEffect => 
 
 const person = (id: string, overrides: Partial<PeerCandidate> = {}): PeerCandidate => ({
   id: id as EmployeeId,
+  departmentId: design,
   status: "active",
   skillIds: [],
   openTasks: 0,

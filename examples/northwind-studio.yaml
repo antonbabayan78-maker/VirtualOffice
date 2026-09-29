@@ -157,6 +157,11 @@ connections:
   - { id: conn-eng-product, from: dept-engineering, to: dept-product, kind: escalates_to }
   - { id: conn-ops-eng, from: dept-operations, to: dept-engineering, kind: escalates_to }
 
+  # Nothing ships without Operations looking at it. Engineering reviews its own
+  # work first; this is a second pair of eyes from outside the department, which
+  # is why it lives on the arrow rather than in Engineering's own policy.
+  - { id: conn-ops-checks-eng, from: dept-operations, to: dept-engineering, kind: reviews }
+
   # Operations watches the rest of the studio. Nobody else knows it is there and
   # nobody waits for it: when work anywhere stalls or gets sent upward,
   # Operations raises its own task to find out why. This is the office's error

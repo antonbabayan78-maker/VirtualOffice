@@ -5,6 +5,7 @@
  */
 import type { EmployeeId, Result, Task } from "@vo/core";
 import { acceptanceCriteriaFor, unmetCriteria } from "./acceptance.js";
+import { checkerFor, signedOffBy } from "./checker.js";
 import { escalateTask } from "../escalation/escalation.js";
 import {
   applyTransition,
@@ -168,7 +169,34 @@ export function approveReview(
     );
   }
 
-  const approved = applyTransition(task, "approved", event, context);
+  // Whoever just approved may themselves have been a department checking this
+  // one's work; their signature goes on before anybody asks who is left.
+  const signed: Task = { ...task, checkedBy: signedOffBy(task, event.actorId ?? null, context) };
+
+  const pending = checkerFor(signed, context);
+  if (pending !== null) {
+    // Its own department has approved; another still has to check. Recorded as
+    // two steps rather than one so the history says both — approved here, then
+    // waiting on somebody outside — which is what an audit of this work needs.
+    const approvedHere = applyTransition(signed, "approved", event, context);
+    if (!approvedHere.ok) return approvedHere;
+    return applyTransition(
+      { ...approvedHere.value.task, reviewerIds: [pending.reviewerId], approvals: [] },
+      "in_review",
+      event,
+      context,
+      [
+        {
+          type: "notify",
+          audience: "reviewer",
+          message: `task "${task.title}" is waiting to be checked by ${pending.departmentId}`,
+        },
+      ],
+      `waiting to be checked by ${pending.departmentId}`,
+    );
+  }
+
+  const approved = applyTransition(signed, "approved", event, context);
   if (!approved.ok) return approved;
   return applyTransition(approved.value.task, "done", event, context, [
     { type: "notify", audience: "assignee", message: `task "${task.title}" was approved` },
@@ -180,6 +208,12 @@ export function requestChangesOrEscalate(
   event: WorkflowEvent,
   context: WorkflowContext,
   rawReason: string,
+  /**
+   * How many rounds are allowed when the department's policy declares none. A
+   * department that reviews nothing of its own still cannot be sent round
+   * forever by a department that checks it.
+   */
+  cap?: number,
 ): Result<WorkflowOutcome> {
   const reason = rawReason.trim();
   if (reason.length === 0) {
@@ -188,13 +222,14 @@ export function requestChangesOrEscalate(
   const denied = assertReviewer(task, event, "review");
   if (denied) return denied;
 
-  if (!("maxIterations" in context.policy)) {
+  const declared = "maxIterations" in context.policy ? context.policy.maxIterations : cap;
+  if (declared === undefined) {
     return workflowError(
       "policy",
       `a review policy needs maxIterations; got "${context.policy.kind}"`,
     );
   }
-  const maxIterations = context.policy.maxIterations;
+  const maxIterations = declared;
 
   if (reviewRounds(task) + 1 > maxIterations) {
     return escalateTask(

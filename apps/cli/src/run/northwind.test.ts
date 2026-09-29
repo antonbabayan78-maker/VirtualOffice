@@ -202,6 +202,8 @@ describe("a day at Northwind Studio", () => {
   it("has an engineer's work reviewed by another engineer, never by themselves", async () => {
     const result = await run(approveEverything);
     const endpoint = result.tasks.find((task) => task.id === "task-endpoint");
+    // The first approval is the department's own review. Operations checks it
+    // afterwards, which is a different thing and asserted separately.
     const approval = (endpoint?.history ?? []).find((event) => event.to === "approved");
     const reviewer = config.employees.find((e) => e.id === approval?.actorId);
 
@@ -209,12 +211,20 @@ describe("a day at Northwind Studio", () => {
     expect(reviewer?.id).not.toBe(person("Ada"));
   });
 
-  it("does not let a department review another department's work", async () => {
+  it("keeps a department's work inside it, unless an arrow says otherwise", async () => {
+    // Departments do their own reviewing. The exception is deliberate and
+    // drawn: Operations checks Engineering, so its people act on Engineering's
+    // work and nobody else's.
+    const checks = config.connections.filter((connection) => connection.kind === "reviews");
+    const allowed = new Set(checks.map((connection) => `${connection.fromId}->${connection.toId}`));
+
     const result = await run(approveEverything);
     for (const task of result.tasks) {
       for (const event of task.history) {
         if (event.actorId === null) continue;
-        expect(departmentOf(event.actorId)).toBe(task.departmentId);
+        const acting = departmentOf(event.actorId);
+        if (acting === task.departmentId) continue;
+        expect(allowed).toContain(`${acting}->${task.departmentId}`);
       }
     }
   });
@@ -240,14 +250,20 @@ describe("a day at Northwind Studio", () => {
     expect(result.tasks.filter((task) => task.status !== "done")).toHaveLength(1);
   });
 
-  it("bills every call to the person who made it and the department they sit in", async () => {
+  it("bills every call to the person who made it, against the work it was for", async () => {
     const result = await run(approveEverything);
     expect(result.usage.length).toBeGreaterThan(0);
     for (const event of result.usage) {
       const employee = config.employees.find((e) => e.id === event.attribution.employeeId);
       expect(employee).toBeDefined();
-      expect(event.attribution.departmentId).toBe(employee?.departmentId);
       expect(event.attribution.taskId).toBeDefined();
+
+      // Billed to the department whose work it is, not to the person's own.
+      // When Operations checks something Engineering built, that check is part
+      // of what Engineering's work cost, and a cost per department that said
+      // otherwise could not be added up.
+      const task = result.tasks.find((candidate) => candidate.id === event.attribution.taskId);
+      expect(event.attribution.departmentId).toBe(task?.departmentId);
     }
   });
 
@@ -513,5 +529,97 @@ describe("Operations watching the studio", () => {
     const result = await run(approveEverything);
     expect(result.tasks.every((task) => task.status === "done")).toBe(true);
     expect(result.tasks.some((task) => task.title.includes("went wrong"))).toBe(false);
+  });
+});
+
+describe("Operations checking Engineering's work", () => {
+  const engineeringTask = () => brief("task-endpoint", "Build the export endpoint", "Ada");
+
+  it("is wired as an arrow, not buried in Engineering's own policy", () => {
+    const checks = config.connections.filter((connection) => connection.kind === "reviews");
+    expect(checks).toHaveLength(1);
+    expect(checks[0]).toMatchObject({
+      fromId: config.departments.find((d) => d.name === "Operations")?.id,
+      toId: config.departments.find((d) => d.name === "Engineering")?.id,
+    });
+  });
+
+  it("takes an Engineering approval and a signature from Operations before it is done", async () => {
+    const result = await runOffice({
+      config,
+      tasks: [engineeringTask()],
+      provider: studio(),
+      decide: approveEverything,
+      maxTicks: 40,
+    });
+
+    const endpoint = result.tasks.find((task) => task.id === "task-endpoint");
+    expect(endpoint?.status).toBe("done");
+    expect(endpoint?.checkedBy).toEqual([
+      config.departments.find((d) => d.name === "Operations")?.id,
+    ]);
+  });
+
+  it("says in the history that it waited on somebody outside the department", async () => {
+    const result = await runOffice({
+      config,
+      tasks: [engineeringTask()],
+      provider: studio(),
+      decide: approveEverything,
+      maxTicks: 40,
+    });
+
+    const endpoint = result.tasks.find((task) => task.id === "task-endpoint");
+    const reasons = (endpoint?.history ?? []).map((event) => event.reason ?? "").join(" ");
+    expect(reasons).toMatch(/checked by/i);
+  });
+
+  it("does not finish the work when Operations will not sign it off", async () => {
+    // Engineering approves its own work; Operations refuses. The refusal is
+    // what a checker is for, and the work goes back rather than shipping.
+    const opsSaysNo = new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        if (!isReview(request)) {
+          return toolCall("submit_work", {
+            summary: `${speaker(request)} did it`,
+            met: criteriaAsked(request),
+          });
+        }
+        return speaker(request) === "Nadia"
+          ? toolCall("review_verdict", {
+              approved: false,
+              reason: "the rollback was not rehearsed",
+            })
+          : toolCall("review_verdict", { approved: true, met: criteriaAsked(request) });
+      },
+    });
+
+    const result = await runOffice({
+      config,
+      tasks: [engineeringTask()],
+      provider: opsSaysNo,
+      decide: approveEverything,
+      maxTicks: 40,
+    });
+
+    const endpoint = result.tasks.find((task) => task.id === "task-endpoint");
+    expect(endpoint?.status).not.toBe("done");
+    const reasons = (endpoint?.history ?? []).map((event) => event.reason ?? "").join(" ");
+    expect(reasons).toContain("rollback");
+  });
+
+  it("leaves departments nobody checks exactly as they were", async () => {
+    const result = await runOffice({
+      config,
+      tasks: [brief("task-screen", "Draw the export screen", "Theo")],
+      provider: studio(),
+      decide: approveEverything,
+      maxTicks: 40,
+    });
+
+    const screen = result.tasks.find((task) => task.id === "task-screen");
+    expect(screen?.status).toBe("done");
+    expect(screen?.checkedBy).toEqual([]);
   });
 });

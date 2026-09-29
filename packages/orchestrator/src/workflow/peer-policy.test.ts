@@ -42,6 +42,7 @@ function task(status: TaskStatus = "in_progress", overrides: Partial<Task> = {})
 const peer = (maxIterations = 3): ReviewPolicy => ({ kind: "peer", maxIterations });
 const candidate = (id: EmployeeId, overrides: Partial<PeerCandidate> = {}): PeerCandidate => ({
   id,
+  departmentId,
   status: "active",
   skillIds: [],
   openTasks: 0,

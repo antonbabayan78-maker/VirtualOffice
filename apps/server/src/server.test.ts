@@ -1238,3 +1238,93 @@ describe("changing an arrow without redrawing it", () => {
     expect(office.json<{ items: { enabled: boolean }[] }>().items[0]?.enabled).toBe(false);
   });
 });
+
+describe("one department checking another's work over the wire", () => {
+  async function checked(withArrow = true) {
+    const officeId = await anOffice();
+    const make = async (name: string): Promise<string> => {
+      const created = await post(`/offices/${officeId}/departments`, {
+        name,
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "direct" },
+      });
+      return created.json<{ id: string }>().id;
+    };
+    const engineering = await make("Engineering");
+    const operations = await make("Operations");
+
+    const hire = async (name: string, departmentId: string) => {
+      const person = await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Maker",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      });
+      return person.json<{ id: string }>().id;
+    };
+    const ada = await hire("Ada", engineering);
+    const nadia = await hire("Nadia", operations);
+
+    if (withArrow) {
+      await post(`/offices/${officeId}/connections`, {
+        fromId: operations,
+        toId: engineering,
+        kind: "reviews",
+      });
+    }
+
+    const made = await post(`/offices/${officeId}/tasks`, {
+      departmentId: engineering,
+      title: "Build the export endpoint",
+      assigneeId: ada,
+    });
+    return {
+      officeId,
+      engineering,
+      operations,
+      ada,
+      nadia,
+      taskId: made.json<{ id: string }>().id,
+    };
+  }
+
+  const finish = async (taskId: string, actorId: string) => {
+    await post(`/tasks/${taskId}/events`, { type: "start", actorId });
+    return post(`/tasks/${taskId}/events`, { type: "submit", actorId });
+  };
+
+  it("does not finish the work until the checking department has looked", async () => {
+    const office = await checked();
+    const submitted = await finish(office.taskId, office.ada);
+
+    expect(submitted.json<{ status: string }>().status).toBe("in_review");
+  });
+
+  it("hands it to somebody in the checking department", async () => {
+    const office = await checked();
+    const submitted = await finish(office.taskId, office.ada);
+
+    expect(submitted.json<{ reviewerIds: string[] }>().reviewerIds).toEqual([office.nadia]);
+  });
+
+  it("finishes once they approve, and records that they did", async () => {
+    const office = await checked();
+    await finish(office.taskId, office.ada);
+    const signed = await post(`/tasks/${office.taskId}/events`, {
+      type: "approve",
+      actorId: office.nadia,
+    });
+
+    expect(signed.json<{ status: string }>().status).toBe("done");
+    expect(signed.json<{ checkedBy: string[] }>().checkedBy).toEqual([office.operations]);
+  });
+
+  it("finishes as it always did when no department checks this one", async () => {
+    const office = await checked(false);
+    const submitted = await finish(office.taskId, office.ada);
+
+    expect(submitted.json<{ status: string }>().status).toBe("done");
+  });
+});

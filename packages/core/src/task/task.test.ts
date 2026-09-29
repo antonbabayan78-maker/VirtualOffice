@@ -59,6 +59,7 @@ describe("createTask", () => {
       artifacts: [],
       route: [],
       acceptanceCriteria: [],
+      checkedBy: [],
       tokenBudget: null,
       deadline: null,
       history: [{ at: t0, from: null, to: "backlog", actorId: null, reason: null }],
@@ -217,7 +218,7 @@ describe("transition table", () => {
     ]);
     // "assigned" is the multi-stage pipeline hand-off: a stage signs off and the
     // work moves on to the next stage's worker instead of completing.
-    expect(TASK_TRANSITIONS.approved).toEqual(["done", "assigned"]);
+    expect(TASK_TRANSITIONS.approved).toEqual(["done", "assigned", "in_review"]);
     expect(TASK_TRANSITIONS.blocked).toEqual([
       "assigned",
       "in_progress",
@@ -458,5 +459,37 @@ describe("what would make this work acceptable", () => {
   it("refuses the same criterion twice, which would be asked about twice", () => {
     const twice = ["has tests", "has tests"];
     expect(isErr(createTask({ ...base, acceptanceCriteria: twice }, deps))).toBe(true);
+  });
+});
+
+describe("which departments have already signed this off", () => {
+  const base = { officeId, departmentId, title: "Write the parser" };
+
+  it("is nobody, for work that has been nowhere near a checker", () => {
+    expect(unwrap(createTask(base, deps)).checkedBy).toEqual([]);
+  });
+
+  it("carries who has signed off, for work that is already part-way through", () => {
+    const checked = ["dept-qa"] as DepartmentId[];
+    expect(unwrap(createTask({ ...base, checkedBy: checked }, deps)).checkedBy).toEqual(checked);
+  });
+
+  it("refuses a signature that is not a department", () => {
+    expect(isErr(createTask({ ...base, checkedBy: [7] as never }, deps))).toBe(true);
+  });
+});
+
+describe("work approved here but not yet checked elsewhere", () => {
+  it("may go back into review, for a department that checks this one's work", () => {
+    expect(canTransition("approved", "in_review")).toBe(true);
+  });
+
+  it("may still simply finish, or hand on to the next stage", () => {
+    expect(canTransition("approved", "done")).toBe(true);
+    expect(canTransition("approved", "assigned")).toBe(true);
+  });
+
+  it("may not go back to being worked on directly", () => {
+    expect(canTransition("approved", "in_progress")).toBe(false);
   });
 });
