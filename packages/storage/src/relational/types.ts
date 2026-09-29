@@ -8,6 +8,7 @@ import type {
   Connection,
   Connector,
   Department,
+  Document,
   Employee,
   MemoryItem,
   Office,
@@ -55,6 +56,7 @@ export interface RelationalCollections {
   readonly departments: EntityRepository<Department>;
   readonly employees: EntityRepository<Employee>;
   readonly tasks: EntityRepository<Task>;
+  readonly documents: EntityRepository<Document>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -67,6 +69,7 @@ export const COLLECTION_NAMES = [
   "departments",
   "employees",
   "tasks",
+  "documents",
   "connections",
   "connectors",
   "skills",

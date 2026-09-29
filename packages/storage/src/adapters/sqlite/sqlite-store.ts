@@ -11,6 +11,7 @@ import type {
   Connection,
   Connector,
   Department,
+  Document,
   Employee,
   MemoryItem,
   Office,
@@ -366,6 +367,7 @@ function collections(
     departments: repo<Department>("departments"),
     employees: repo<Employee>("employees"),
     tasks: repo<Task>("tasks"),
+    documents: repo<Document>("documents"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -383,6 +385,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly departments: EntityRepository<Department>;
   readonly employees: EntityRepository<Employee>;
   readonly tasks: EntityRepository<Task>;
+  readonly documents: EntityRepository<Document>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -422,6 +425,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.departments = this.all.departments;
     this.employees = this.all.employees;
     this.tasks = this.all.tasks;
+    this.documents = this.all.documents;
     this.connections = this.all.connections;
     this.connectors = this.all.connectors;
     this.skills = this.all.skills;
