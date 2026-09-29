@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@vo/core": "workspace:*",
+    "@vo/orchestrator": "workspace:*",
     "@vo/storage": "workspace:*"
   }
 }
