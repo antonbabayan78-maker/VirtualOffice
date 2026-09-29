@@ -640,3 +640,85 @@ connections:
     expect(exportOfficeYaml(unwrap(importOfficeYaml(on, deps)))).not.toContain("enabled");
   });
 });
+
+describe("what a department may reach, in the office file", () => {
+  const office = (departmentTools: string, connectors = CONNECTORS_YAML): string => `
+version: 1
+office:
+  id: office-1
+  name: Acme
+${connectors}
+departments:
+  - id: dept-design
+    name: Design
+    color: "#7c5cff"
+    position: { x: 0, y: 0 }
+${departmentTools}
+employees: []
+connections: []
+`;
+
+  const CONNECTORS_YAML = `connectors:
+  - id: conn-web
+    kind: rest
+    name: web
+    tools: [fetch_url]`;
+
+  it("reads the tools a whole room may call", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        office("    tools:\n      - { connector: conn-web, tool: fetch_url }"),
+        deps,
+      ),
+    );
+    expect(config.departments[0]?.toolGrants).toEqual([
+      { connectorId: "conn-web", tool: "fetch_url" },
+    ]);
+  });
+
+  it("gives a room none when it says nothing", () => {
+    expect(unwrap(importOfficeYaml(office(""), deps)).departments[0]?.toolGrants).toEqual([]);
+  });
+
+  it("refuses a grant naming a connector this office does not have", () => {
+    const refused = importOfficeYaml(
+      office("    tools:\n      - { connector: conn-nope, tool: fetch_url }"),
+      deps,
+    );
+    if (!isErr(refused)) throw new Error("expected this office to be refused");
+    expect(refused.error.map((problem) => problem.path)).toContain(
+      "departments[0].tools[0].connector",
+    );
+  });
+
+  it("refuses a grant naming a tool the connector does not have", () => {
+    const refused = importOfficeYaml(
+      office("    tools:\n      - { connector: conn-web, tool: send_email }"),
+      deps,
+    );
+    if (!isErr(refused)) throw new Error("expected this office to be refused");
+    expect(refused.error.map((problem) => problem.path)).toContain("departments[0].tools[0].tool");
+  });
+
+  it("allows a wildcard, which names no particular tool", () => {
+    const config = unwrap(
+      importOfficeYaml(office("    tools:\n      - { connector: conn-web, tool: '*' }"), deps),
+    );
+    expect(config.departments[0]?.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
+  });
+
+  it("writes them back out under the same key it read them from", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        office("    tools:\n      - { connector: conn-web, tool: fetch_url }"),
+        deps,
+      ),
+    );
+    const yaml = exportOfficeYaml(config);
+
+    expect(yaml).toContain("connector: conn-web");
+    expect(unwrap(importOfficeYaml(yaml, deps)).departments[0]?.toolGrants).toEqual(
+      config.departments[0]?.toolGrants,
+    );
+  });
+});

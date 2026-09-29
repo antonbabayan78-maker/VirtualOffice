@@ -145,6 +145,7 @@ describe("createDepartment", () => {
       reviewPolicy: DEFAULT_REVIEW_POLICY,
       priority: "normal",
       definitionOfDone: [],
+      toolGrants: [],
       schedule: { kind: "always" },
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
@@ -349,5 +350,54 @@ describe("a department's standing definition of done", () => {
     expect(unwrap(updateDepartment(department, { name: "Platform" }, [])).definitionOfDone).toEqual(
       ["has tests"],
     );
+  });
+});
+
+describe("what a department may reach", () => {
+  const grants = (toolGrants: unknown) =>
+    createDepartment(
+      { officeId, name: "Design", color: "#3366ff", position: { x: 0, y: 0 }, toolGrants } as never,
+      [],
+      deps,
+    );
+
+  it("reaches nothing until somebody says otherwise", () => {
+    expect(unwrap(createDepartment(base, [], deps)).toolGrants).toEqual([]);
+  });
+
+  it("carries what the whole room may call, so a grant is not repeated per person", () => {
+    const department = unwrap(grants([{ connectorId: "conn-web", tool: "fetch_url" }]));
+    expect(department.toolGrants).toEqual([{ connectorId: "conn-web", tool: "fetch_url" }]);
+  });
+
+  it("takes a wildcard, for a connector a whole department lives in", () => {
+    expect(unwrap(grants([{ connectorId: "conn-figma", tool: "*" }])).toolGrants).toEqual([
+      { connectorId: "conn-figma", tool: "*" },
+    ]);
+  });
+
+  it("refuses a grant that names no connector", () => {
+    const refused = grants([{ connectorId: "", tool: "fetch_url" }]);
+    if (!isErr(refused)) throw new Error("expected this grant to be refused");
+    expect(refused.error[0]?.path).toBe("toolGrants[0].connectorId");
+  });
+
+  it("refuses a grant that names no tool", () => {
+    const refused = grants([{ connectorId: "conn-web" }]);
+    if (!isErr(refused)) throw new Error("expected this grant to be refused");
+    expect(refused.error[0]?.path).toBe("toolGrants[0].tool");
+  });
+
+  it("refuses something that is not a grant at all", () => {
+    expect(isErr(grants(["conn-web"]))).toBe(true);
+  });
+
+  it("can be changed without touching anything else about the room", () => {
+    const department = unwrap(createDepartment(base, [], deps));
+    const changed = unwrap(
+      updateDepartment(department, { toolGrants: [{ connectorId: "conn-web", tool: "*" }] }, []),
+    );
+    expect(changed.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
+    expect(changed.name).toBe(department.name);
   });
 });

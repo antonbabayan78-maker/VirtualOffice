@@ -83,6 +83,10 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         reviewPolicy: d.reviewPolicy,
         schedule: d.schedule,
         definitionOfDone: d.definitionOfDone.length > 0 ? d.definitionOfDone : null,
+        tools:
+          d.toolGrants.length > 0
+            ? d.toolGrants.map((g) => ({ connector: g.connectorId, tool: g.tool }))
+            : null,
         priority: d.priority === "normal" ? null : d.priority,
         createdAt: d.createdAt.toISOString(),
       }),
@@ -262,6 +266,10 @@ const EMPLOYEE_RENAMES: [RegExp, string][] = [
   [/^skillIds\b/, "skills"],
   [/^workspaceRef\b/, "workspace"],
 ];
+const DEPARTMENT_RENAMES: [RegExp, string][] = [
+  [/^toolGrants\[(\d+)\]\.connectorId\b/, "tools[$1].connector"],
+  [/^toolGrants\b/, "tools"],
+];
 const CONNECTION_RENAMES: [RegExp, string][] = [
   [/^fromId\b/, "from"],
   [/^toId\b/, "to"],
@@ -332,6 +340,14 @@ export function importOfficeYaml(
     c.add("office.configVersion", "must be a positive integer");
   else if (office) office = { ...office, configVersion: rawVersion };
 
+  /** A `tools:` block, as both a department and an employee spell it. */
+  const grantsOf = (raw: Record<string, unknown>): ToolGrant[] =>
+    (Array.isArray(raw["tools"]) ? (raw["tools"] as unknown[]) : []).map((t) =>
+      isRecord(t)
+        ? { connectorId: asText(t["connector"]), tool: asText(t["tool"]) }
+        : { connectorId: "", tool: "" },
+    );
+
   // Departments -----------------------------------------------------------
   const departments: Department[] = [];
   const seenDepartmentIds = new Set<string>();
@@ -361,6 +377,7 @@ export function importOfficeYaml(
         ...("definitionOfDone" in d
           ? { definitionOfDone: d["definitionOfDone"] as readonly string[] }
           : {}),
+        toolGrants: grantsOf(d),
       },
       departments,
       { id: () => id as DepartmentId, now: () => created },
@@ -399,6 +416,16 @@ export function importOfficeYaml(
     else c.addAll(path, r.error);
   });
 
+  // A department's grants are checked once the connectors are known, since the
+  // rooms are read before them and a grant means nothing without its connector.
+  departments.forEach((department, i) => {
+    c.addAll(
+      `departments[${String(i)}]`,
+      validateToolGrants(department.toolGrants, connectors),
+      rename(DEPARTMENT_RENAMES),
+    );
+  });
+
   // Employees -------------------------------------------------------------
   const rawEmployees = list(raw, "employees", c);
   const employeeIds = rawEmployees.map((e) => str(e, "id") ?? deps.id());
@@ -425,12 +452,7 @@ export function importOfficeYaml(
             status: (rawEmployees[supervisorIndex]?.["status"] ?? "active") as EmployeeStatus,
           }
         : null;
-    const rawTools = Array.isArray(e["tools"]) ? (e["tools"] as unknown[]) : [];
-    const toolGrants: ToolGrant[] = rawTools.map((t) =>
-      isRecord(t)
-        ? { connectorId: asText(t["connector"]), tool: asText(t["tool"]) }
-        : { connectorId: "", tool: "" },
-    );
+    const toolGrants = grantsOf(e);
     const created = date(e, "createdAt", deps.now(), report, path);
     const r = createEmployee(
       {

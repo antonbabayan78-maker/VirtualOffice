@@ -102,6 +102,11 @@ export function createConnector(
     const path = `tools[${String(i)}]`;
     if (tool.length === 0 || tool === WILDCARD_TOOL)
       errors.push({ path, message: 'must be a non-empty tool name other than "*"' });
+    else if (tool.includes(TOOL_WIRE_SEPARATOR))
+      errors.push({
+        path,
+        message: `must not contain "${TOOL_WIRE_SEPARATOR}", which separates a connector from its tool`,
+      });
     else if (seen.has(tool)) errors.push({ path, message: `duplicate tool "${tool}"` });
     seen.add(tool);
   });
@@ -121,6 +126,39 @@ export function createConnector(
     enabled: input.enabled ?? true,
     createdAt: deps.now(),
   });
+}
+
+/**
+ * Checks a grant is shaped like one, without asking what it names.
+ *
+ * Separate from `validateToolGrants` because they answer different questions at
+ * different moments: this one runs whenever an entity is created or changed and
+ * has no connector list to consult, while that one is the cross-check an office
+ * file can afford. They were two functions with one name for a while, which is
+ * exactly the confusion worth spending a rename on.
+ */
+export function validateGrantShape(
+  raw: readonly ToolGrant[] | undefined,
+  path = "toolGrants",
+): Result<readonly ToolGrant[]> {
+  const grants = raw ?? [];
+  const errors: ValidationError[] = [];
+  grants.forEach((grant: unknown, index) => {
+    const at = `${path}[${String(index)}]`;
+    if (typeof grant !== "object" || grant === null || Array.isArray(grant)) {
+      errors.push({ path: at, message: "must be an object with connectorId and tool" });
+      return;
+    }
+    const fields = grant as Record<string, unknown>;
+    if (typeof fields["connectorId"] !== "string" || fields["connectorId"].length === 0) {
+      errors.push({ path: `${at}.connectorId`, message: "must be a non-empty string" });
+    }
+    if (typeof fields["tool"] !== "string" || fields["tool"].length === 0) {
+      errors.push({ path: `${at}.tool`, message: 'must be a tool name or "*"' });
+    }
+  });
+  if (errors.length > 0) return err(errors);
+  return ok(grants.map((grant) => ({ connectorId: grant.connectorId, tool: grant.tool })));
 }
 
 /** Checks grants against the office's connectors; wildcards are always valid. */
@@ -179,4 +217,30 @@ export function canCallTool(ctx: GrantContext, connectorId: string, tool: string
     (t) => t.connectorId === connectorId && t.tool === tool,
   );
   return granted ? { allowed: true } : { allowed: false, reason: "not_granted" };
+}
+
+/**
+ * How a tool is named when it is offered to a model.
+ *
+ * A connector's tools have to be distinguishable — two connectors both offering
+ * `search` would collide in one catalogue. The office's own convention is
+ * `connector.tool`, but a dot is not allowed in a tool name, so the wire uses a
+ * double underscore instead. `createConnector` refuses a tool name containing
+ * one, which is what makes splitting it again unambiguous.
+ */
+export const TOOL_WIRE_SEPARATOR = "__";
+
+export function toolWireName(connectorName: string, tool: string): string {
+  return `${connectorName}${TOOL_WIRE_SEPARATOR}${tool}`;
+}
+
+/** The pair back out of a wire name, or null for a name that is not one. */
+export function splitToolWireName(
+  wire: string,
+): { readonly connector: string; readonly tool: string } | null {
+  const at = wire.indexOf(TOOL_WIRE_SEPARATOR);
+  if (at <= 0) return null;
+  const tool = wire.slice(at + TOOL_WIRE_SEPARATOR.length);
+  if (tool.length === 0) return null;
+  return { connector: wire.slice(0, at), tool };
 }

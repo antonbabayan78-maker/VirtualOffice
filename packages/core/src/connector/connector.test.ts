@@ -6,6 +6,8 @@ import {
   CONNECTOR_KINDS,
   createConnector,
   resolveToolAccess,
+  splitToolWireName,
+  toolWireName,
   validateToolGrants,
   type Connector,
   type ConnectorId,
@@ -199,5 +201,51 @@ describe("resolveToolAccess and canCallTool", () => {
       "create_review",
       "merge",
     ]);
+  });
+});
+
+describe("tool names a catalogue can tell apart", () => {
+  const withTools = (tools: string[]) =>
+    createConnector({ officeId, kind: "rest", name: "web", tools }, [], {
+      id: () => "conn-1" as ConnectorId,
+      now: () => new Date("2026-09-29T09:00:00Z"),
+    });
+
+  it("takes an ordinary tool name", () => {
+    expect(unwrap(withTools(["fetch_url"])).tools).toEqual(["fetch_url"]);
+  });
+
+  it("refuses a name carrying the separator a catalogue uses", () => {
+    // Tools are offered to a model as "connector__tool", because a dot is not
+    // allowed in a tool name. A tool called "a__b" would be indistinguishable
+    // from a tool "b" on a connector "a", and the collision is much cheaper to
+    // catch when the office is written than halfway through somebody's turn.
+    const refused = withTools(["fetch__url"]);
+    if (!isErr(refused)) throw new Error("expected this connector to be refused");
+    expect(refused.error[0]?.path).toBe("tools[0]");
+  });
+
+  it("says which of several names is the problem", () => {
+    const refused = withTools(["fetch_url", "post__thing"]);
+    if (!isErr(refused)) throw new Error("expected this connector to be refused");
+    expect(refused.error[0]?.path).toBe("tools[1]");
+  });
+});
+
+describe("how a tool is named on the wire", () => {
+  it("joins the connector and the tool", () => {
+    expect(toolWireName("web", "fetch_url")).toBe("web__fetch_url");
+  });
+
+  it("takes it apart again", () => {
+    expect(splitToolWireName("web__fetch_url")).toEqual({ connector: "web", tool: "fetch_url" });
+  });
+
+  it("says nothing for a name that was never one of ours", () => {
+    expect(splitToolWireName("find_tool")).toBeNull();
+  });
+
+  it("splits on the first separator, since only the connector name is guarded", () => {
+    expect(splitToolWireName("web__a__b")).toEqual({ connector: "web", tool: "a__b" });
   });
 });
