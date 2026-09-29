@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@vo/api-client": "workspace:*",
+    "@vo/connectors": "workspace:*",
     "@vo/core": "workspace:*",
     "@vo/llm": "workspace:*",
     "@vo/orchestrator": "workspace:*"

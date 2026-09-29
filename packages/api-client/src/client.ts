@@ -13,11 +13,13 @@
  */
 import type {
   Connection,
+  Connector,
   Department,
   Document,
   Employee,
   Office,
   Task,
+  ToolGrant,
   ValidationError,
 } from "@vo/core";
 
@@ -33,6 +35,8 @@ export interface OfficeSnapshot {
   readonly employees: readonly Employee[];
   readonly tasks: readonly Task[];
   readonly connections: readonly Connection[];
+  /** What this office can reach outside itself. */
+  readonly connectors: readonly Connector[];
 }
 
 export interface ApiClient {
@@ -50,6 +54,18 @@ export interface ApiClient {
    * the move.
    */
   postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
+  /** What this office can reach: every connector, granted or not. */
+  listConnectors(officeId: string): Promise<ApiResult<readonly Connector[]>>;
+  createConnector(
+    officeId: string,
+    input: Readonly<Record<string, unknown>>,
+  ): Promise<ApiResult<Connector>>;
+  patchConnector(
+    id: string,
+    changes: Readonly<Record<string, unknown>>,
+    sinceOffset: number,
+  ): Promise<ApiResult<Connector>>;
+  deleteConnector(id: string): Promise<ApiResult<true>>;
   /** One document, which is what a live canvas fetches when told one arrived. */
   getDocument(id: string): Promise<ApiResult<Document>>;
   /** A whole office's documents, or one tray of them. */
@@ -114,6 +130,17 @@ function reviveDocument(raw: Record<string, unknown>): Document {
   return { ...raw, addedAt: asDate(raw["addedAt"]) } as unknown as Document;
 }
 
+function reviveConnector(raw: Record<string, unknown>): Connector {
+  return {
+    ...raw,
+    tools: listOr(raw["tools"]),
+    // An office that predates a field says nothing about it, and a connector
+    // that says nothing about being off is on — as an arrow is.
+    enabled: raw["enabled"] !== false,
+    createdAt: asDate(raw["createdAt"]),
+  } as unknown as Connector;
+}
+
 function reviveOffice(raw: Record<string, unknown>): Office {
   return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Office;
 }
@@ -128,10 +155,15 @@ function reviveOffice(raw: Record<string, unknown>): Office {
  */
 const listOr = (raw: unknown): readonly string[] => (Array.isArray(raw) ? (raw as string[]) : []);
 
+/** The same promise, for the one list that is not a list of strings. */
+const grantsOr = (raw: unknown): readonly ToolGrant[] =>
+  Array.isArray(raw) ? (raw as ToolGrant[]) : [];
+
 function reviveDepartment(raw: Record<string, unknown>): Department {
   return {
     ...raw,
     definitionOfDone: listOr(raw["definitionOfDone"]),
+    toolGrants: grantsOr(raw["toolGrants"]),
     createdAt: asDate(raw["createdAt"]),
   } as unknown as Department;
 }
@@ -162,6 +194,7 @@ function reviveConnection(raw: Record<string, unknown>): Connection {
 function reviveEmployee(raw: Record<string, unknown>): Employee {
   return {
     ...raw,
+    toolGrants: grantsOr(raw["toolGrants"]),
     createdAt: asDate(raw["createdAt"]),
     statusChangedAt: asDate(raw["statusChangedAt"]),
   } as unknown as Employee;
@@ -329,14 +362,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       const asOffice = interpret(office, reviveOffice);
       if (!asOffice.ok) return asOffice;
 
-      const departments = await call(`/offices/${officeId}/departments`);
-      const employees = await call(`/offices/${officeId}/employees`);
-      const tasks = await call(`/offices/${officeId}/tasks`);
-      const connections = await call(`/offices/${officeId}/connections`);
+      // Together rather than one after another: they do not depend on each
+      // other, and this was already four round trips before connectors made five.
+      const [departments, employees, tasks, connections, connectors] = await Promise.all([
+        call(`/offices/${officeId}/departments`),
+        call(`/offices/${officeId}/employees`),
+        call(`/offices/${officeId}/tasks`),
+        call(`/offices/${officeId}/connections`),
+        call(`/offices/${officeId}/connectors`),
+      ]);
       if (!departments.ok) return { ok: false, kind: "transport", message: departments.message };
       if (!employees.ok) return { ok: false, kind: "transport", message: employees.message };
       if (!tasks.ok) return { ok: false, kind: "transport", message: tasks.message };
       if (!connections.ok) return { ok: false, kind: "transport", message: connections.message };
+      if (!connectors.ok) return { ok: false, kind: "transport", message: connectors.message };
 
       const items = (response: { body: unknown }): Record<string, unknown>[] =>
         (response.body as { items?: Record<string, unknown>[] } | null)?.items ?? [];
@@ -349,6 +388,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           employees: items(employees).map(reviveEmployee),
           tasks: items(tasks).map(reviveTask),
           connections: items(connections).map(reviveConnection),
+          connectors: items(connectors).map(reviveConnector),
         },
       };
     },
@@ -364,6 +404,25 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await call(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify(event) }),
         reviveTask,
       ),
+
+    listConnectors: async (officeId) =>
+      interpret(await call(`/offices/${officeId}/connectors`), (raw) =>
+        ((raw["items"] ?? []) as Record<string, unknown>[]).map(reviveConnector),
+      ),
+
+    createConnector: async (officeId, input) =>
+      interpret(
+        await call(`/offices/${officeId}/connectors`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+        reviveConnector,
+      ),
+
+    patchConnector: (id, changes, sinceOffset) =>
+      patch(`/connectors/${id}`, changes, sinceOffset, reviveConnector),
+
+    deleteConnector: async (id) => nothing(await call(`/connectors/${id}`, { method: "DELETE" })),
 
     getDocument: async (id) => interpret(await call(`/documents/${id}`), reviveDocument),
 

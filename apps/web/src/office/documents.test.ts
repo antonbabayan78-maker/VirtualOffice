@@ -50,6 +50,10 @@ function scriptedApi(): Scripted {
     patchEmployee: unused,
     postTaskEvent: unused,
     getDocument: unused,
+    listConnectors: () => Promise.resolve({ ok: true, value: [] }),
+    createConnector: unused,
+    patchConnector: unused,
+    deleteConnector: unused,
     listDocuments: unused,
     uploadDocument: (_officeId, input) => {
       uploads.push({ ...input });

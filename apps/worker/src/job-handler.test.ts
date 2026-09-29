@@ -19,13 +19,20 @@ const task = {
   acceptanceCriteria: [],
   history: [{ type: "created", at }],
 };
-const ada = { id: "emp-ada", name: "Ada", officeId: "office-1", departmentId: "dept-eng" };
+const ada = {
+  id: "emp-ada",
+  name: "Ada",
+  officeId: "office-1",
+  departmentId: "dept-eng",
+  toolGrants: [],
+};
 
 function api(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
     loadOffice: () => Promise.reject(new Error("not used here")),
     getOffice: () => Promise.reject(new Error("not used here")),
-    getDepartment: () => Promise.resolve({ ok: true, value: { definitionOfDone: [] } as never }),
+    getDepartment: () =>
+      Promise.resolve({ ok: true, value: { definitionOfDone: [], toolGrants: [] } as never }),
     getEmployee: () => Promise.resolve({ ok: true, value: ada as never }),
     getTask: () => Promise.resolve({ ok: true, value: task as never }),
     patchOffice: () => Promise.reject(new Error("not used here")),
@@ -33,6 +40,10 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     patchDepartment: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     getDocument: () => Promise.reject(new Error("not used here")),
+    listConnectors: () => Promise.resolve({ ok: true, value: [] }),
+    createConnector: () => Promise.reject(new Error("not used here")),
+    patchConnector: () => Promise.reject(new Error("not used here")),
+    deleteConnector: () => Promise.reject(new Error("not used here")),
     // Every turn asks what is in its in-tray, so this one is always used.
     listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
@@ -98,13 +109,15 @@ describe("doing a piece of an office's work", () => {
 
     expect(getTask).toHaveBeenCalledWith("task-1");
     expect(getEmployee).toHaveBeenCalledWith("emp-ada");
-    expect(agent).toHaveBeenCalledWith({
-      task,
-      actor: ada,
-      kind: AGENT_RUN_JOB,
-      acceptanceCriteria: [],
-      documents: [],
-    });
+    expect(agent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task,
+        actor: ada,
+        kind: AGENT_RUN_JOB,
+        acceptanceCriteria: [],
+        documents: [],
+      }),
+    );
   });
 
   it("gives the agent what is in the work's in-tray, as text it can read", async () => {
@@ -247,7 +260,7 @@ describe("telling the agent what done means", () => {
     const getDepartment = vi.fn(() =>
       Promise.resolve({
         ok: true as const,
-        value: { id: "dept-eng", definitionOfDone: ["has tests"] } as never,
+        value: { id: "dept-eng", definitionOfDone: ["has tests"], toolGrants: [] } as never,
       }),
     );
     await officeJobHandler({ api: api({ getDepartment }), agent })(job());
@@ -267,7 +280,10 @@ describe("telling the agent what done means", () => {
       }),
     );
     const getDepartment = vi.fn(() =>
-      Promise.resolve({ ok: true as const, value: { definitionOfDone: ["has tests"] } as never }),
+      Promise.resolve({
+        ok: true as const,
+        value: { definitionOfDone: ["has tests"], toolGrants: [] } as never,
+      }),
     );
     await officeJobHandler({ api: api({ getTask, getDepartment }), agent })(job());
 
@@ -285,5 +301,67 @@ describe("telling the agent what done means", () => {
     await officeJobHandler({ api: api({ getDepartment }), agent })(job());
 
     expect(agent).toHaveBeenCalledWith(expect.objectContaining({ acceptanceCriteria: [] }));
+  });
+});
+
+describe("what a worker's employee may reach", () => {
+  const webConnector = {
+    id: "conn-web",
+    officeId: "office-1",
+    kind: "web",
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: new Date("2026-09-30T09:00:00Z"),
+  };
+
+  it("asks the office what it can reach", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const listConnectors = vi.fn(() =>
+      Promise.resolve({ ok: true as const, value: [webConnector] as never }),
+    );
+
+    await officeJobHandler({ api: api({ listConnectors }), agent })(job());
+    expect(listConnectors).toHaveBeenCalledWith("office-1");
+  });
+
+  it("offers the employee only what its room and it were granted", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const granted = { ...task, departmentId: "dept-eng" };
+    const api2 = api({
+      listConnectors: () => Promise.resolve({ ok: true as const, value: [webConnector] as never }),
+      getDepartment: () =>
+        Promise.resolve({
+          ok: true as const,
+          value: {
+            id: "dept-eng",
+            definitionOfDone: [],
+            toolGrants: [{ connectorId: "conn-web", tool: "fetch_url" }],
+          } as never,
+        }),
+      getTask: () => Promise.resolve({ ok: true as const, value: granted as never }),
+    });
+
+    await officeJobHandler({ api: api2, agent })(job());
+    expect(agent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolGrants: [{ connectorId: "conn-web", tool: "fetch_url" }],
+      }),
+    );
+  });
+
+  it("works on with nothing to reach when the office cannot say", async () => {
+    // An office running a version without connectors is an office with no
+    // tools, not a job that fails.
+    const agent = vi.fn(() => Promise.resolve([]));
+    const api2 = api({
+      listConnectors: () =>
+        Promise.resolve({ ok: false as const, kind: "transport" as const, message: "no route" }),
+    });
+
+    await officeJobHandler({ api: api2, agent })(job());
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ connectors: [] }));
   });
 });

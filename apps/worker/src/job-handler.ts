@@ -17,12 +17,16 @@
  * better reported than retried until it runs out of attempts.
  */
 import type { ApiClient, ApiResult } from "@vo/api-client";
+import { officeBroker } from "@vo/connectors";
+import type { Connector, ToolGrant } from "@vo/core";
 import {
   acceptanceCriteriaFor,
+  catalogFor,
   AGENT_RUN_JOB,
   AGENT_REVIEW_JOB,
   type AgentTurn,
   type HandedOver,
+  type ToolCatalog,
   type Job,
 } from "@vo/orchestrator";
 
@@ -34,6 +38,21 @@ export interface JobHandlerOptions {
 }
 
 const AGENT_JOBS: readonly string[] = [AGENT_RUN_JOB, AGENT_REVIEW_JOB];
+
+/**
+ * Everything this employee may call, named as the model will see it.
+ *
+ * Built per job rather than per worker because it depends on whose turn it is,
+ * and asked of the connectors themselves because only they know what they offer.
+ */
+async function catalogueFor(
+  connectors: readonly Connector[],
+  departmentGrants: readonly ToolGrant[],
+  employeeGrants: readonly ToolGrant[],
+): Promise<ToolCatalog> {
+  const described = await officeBroker(connectors).describe();
+  return catalogFor({ connectors, departmentGrants, employeeGrants }, described);
+}
 
 /**
  * What this work was handed, as text a prompt can carry.
@@ -99,12 +118,22 @@ export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Prom
       department.ok ? department.value.definitionOfDone : [],
     );
 
+    // What this office can reach, and what this employee may reach of it. An
+    // office that cannot say has no tools rather than a job that fails.
+    const listed = await options.api.listConnectors(task.value.officeId);
+    const connectors: readonly Connector[] = listed.ok ? listed.value : [];
+    const departmentGrants = department.ok ? department.value.toolGrants : [];
+    const grants: readonly ToolGrant[] = [...departmentGrants, ...actor.value.toolGrants];
+
     const events = await options.agent({
       task: task.value,
       actor: actor.value,
       kind: job.kind as typeof AGENT_RUN_JOB | typeof AGENT_REVIEW_JOB,
       acceptanceCriteria,
       documents: await handedOver(options.api, task.value.officeId, taskId),
+      toolCatalog: await catalogueFor(connectors, departmentGrants, actor.value.toolGrants),
+      connectors,
+      toolGrants: grants,
     });
 
     for (const event of events) {
