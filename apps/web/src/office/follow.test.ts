@@ -52,6 +52,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
           employees: [ada],
           tasks: [],
           connections: [],
+          connectors: [],
         },
       } satisfies ApiResult<OfficeSnapshot>),
     getDepartment: (id) =>
@@ -79,6 +80,10 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     postTaskEvent: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     getDocument: () => Promise.reject(new Error("not used here")),
+    listConnectors: () => Promise.resolve({ ok: true, value: [] }),
+    createConnector: () => Promise.reject(new Error("not used here")),
+    patchConnector: () => Promise.reject(new Error("not used here")),
+    deleteConnector: () => Promise.reject(new Error("not used here")),
     // Reloading an office asks what it is holding, so this one is always used.
     listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
@@ -216,6 +221,7 @@ describe("falling too far behind", () => {
           employees: [],
           tasks: [],
           connections: [],
+          connectors: [],
         },
       }),
     );
@@ -258,6 +264,7 @@ describe("the arrows the office says are there", () => {
                 createdAt: at,
               },
             ] as never,
+            connectors: [],
           },
         }),
     });
@@ -283,7 +290,14 @@ describe("the office itself changing", () => {
       loadOffice: () =>
         Promise.resolve({
           ok: true,
-          value: { office: acme, departments: [eng], employees: [], tasks: [], connections: [] },
+          value: {
+            office: acme,
+            departments: [eng],
+            employees: [],
+            tasks: [],
+            connections: [],
+            connectors: [],
+          },
         }),
     });
     await follow(api).reload();
@@ -343,6 +357,7 @@ describe("arrows changing under you", () => {
             employees: [],
             tasks: [],
             connections: connections as never,
+            connectors: [],
           },
         }),
     });

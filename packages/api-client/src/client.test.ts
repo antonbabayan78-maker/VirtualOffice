@@ -48,6 +48,7 @@ describe("loading an office", () => {
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -66,6 +67,7 @@ describe("loading an office", () => {
       http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/connections`, () =>
         HttpResponse.json({
           items: [
@@ -103,6 +105,7 @@ describe("loading an office", () => {
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () => HttpResponse.json({ items: [] })),
     );
 
     const result = await client().loadOffice("office-1");
@@ -121,6 +124,7 @@ describe("loading an office", () => {
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () => HttpResponse.json({ items: [] })),
     );
 
     await client().loadOffice("office-1");
@@ -454,6 +458,7 @@ describe("changing an arrow", () => {
       http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () => HttpResponse.json({ items: [] })),
       http.get(`${BASE}/offices/office-1/connections`, () =>
         // An office that predates the switch simply does not send it.
         HttpResponse.json({ items: [{ id: "conn-1", kind: "handoff", rules: {} }] }),
@@ -667,5 +672,106 @@ describe("documents", () => {
 
     const result = await client().deleteDocument("doc-1");
     expect(result.ok).toBe(false);
+  });
+});
+
+const connectorRow = {
+  id: "conn-web",
+  officeId: "office-1",
+  kind: "web",
+  name: "design-web",
+  config: { hosts: ["help.figma.com"] },
+  secretRef: null,
+  tools: ["fetch_url"],
+  enabled: true,
+  createdAt: "2026-09-30T09:00:00.000Z",
+};
+
+describe("connectors", () => {
+  it("lists what an office can reach, with real dates", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/connectors`, () =>
+        HttpResponse.json({ items: [connectorRow] }),
+      ),
+    );
+
+    const result = await client().listConnectors("office-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]?.name).toBe("design-web");
+      expect(result.value[0]?.createdAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it("promises the lists its type promises, for an office that predates them", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/connectors`, () =>
+        HttpResponse.json({ items: [{ ...connectorRow, tools: undefined, enabled: undefined }] }),
+      ),
+    );
+
+    const result = await client().listConnectors("office-1");
+    if (!result.ok) throw new Error("expected this list to load");
+    expect(result.value[0]?.tools).toEqual([]);
+    // An arrow that says nothing about being off is on; so is a connector.
+    expect(result.value[0]?.enabled).toBe(true);
+  });
+
+  it("adds one", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/offices/office-1/connectors`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(connectorRow, { status: 201 });
+      }),
+    );
+
+    await client().createConnector("office-1", {
+      kind: "web",
+      name: "design-web",
+      tools: ["fetch_url"],
+      config: { hosts: ["help.figma.com"] },
+    });
+    expect(sent).toMatchObject({ kind: "web", name: "design-web", tools: ["fetch_url"] });
+  });
+
+  it("switches one off, saying what it was working from", async () => {
+    let offset: string | null = null;
+    server.use(
+      http.patch(`${BASE}/connectors/conn-web`, ({ request }) => {
+        offset = request.headers.get("x-vo-since-offset");
+        return HttpResponse.json({ ...connectorRow, enabled: false });
+      }),
+    );
+
+    const result = await client().patchConnector("conn-web", { enabled: false }, 9);
+    expect(offset).toBe("9");
+    if (result.ok) expect(result.value.enabled).toBe(false);
+  });
+
+  it("removes one", async () => {
+    server.use(
+      http.delete(`${BASE}/connectors/conn-web`, () => new HttpResponse(null, { status: 204 })),
+    );
+    expect((await client().deleteConnector("conn-web")).ok).toBe(true);
+  });
+
+  it("brings connectors back with the rest of the office", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1`, () =>
+        HttpResponse.json({ id: "office-1", name: "Acme", schedule: { kind: "always" } }),
+      ),
+      http.get(`${BASE}/offices/office-1/departments`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/employees`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/tasks`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connections`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/offices/office-1/connectors`, () =>
+        HttpResponse.json({ items: [connectorRow] }),
+      ),
+    );
+
+    const result = await client().loadOffice("office-1");
+    if (!result.ok) throw new Error("expected this office to load");
+    expect(result.value.connectors.map((one) => one.name)).toEqual(["design-web"]);
   });
 });

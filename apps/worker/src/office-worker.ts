@@ -17,6 +17,7 @@ import type { WorkerConfig } from "./config.js";
 import { officeSource } from "./office-source.js";
 import { officeJobHandler } from "./job-handler.js";
 import { apiDocumentSink } from "./document-sink.js";
+import { officeTools } from "./office-tools.js";
 
 export interface OfficeWorkerOptions {
   readonly config: WorkerConfig;
@@ -37,7 +38,14 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
     handle: officeJobHandler({
       api,
       // Filing goes through the office like everything else a worker writes.
-      agent: llmAgentTurn({ provider: options.provider, documents: apiDocumentSink(api) }),
+      agent: llmAgentTurn({
+        provider: options.provider,
+        documents: apiDocumentSink(api),
+        // Asks the office what it can reach each time: this is built before any
+        // office has been read, and a connector switched off on the canvas
+        // should stop working without restarting the worker.
+        tools: officeTools(api, options.config.officeId),
+      }),
       onProblem: problem,
     }),
     batchSize: options.config.batchSize,

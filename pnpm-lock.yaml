@@ -336,6 +336,9 @@ importers:
       '@vo/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@vo/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
