@@ -795,3 +795,99 @@ describe("work carrying its documents next door", () => {
     expect(bodies.size).toBe(1);
   });
 });
+
+describe("a studio that can look things up", () => {
+  /**
+   * The office reaching outside itself, end to end.
+   *
+   * The assertion that matters is on the prompt of the turn after the fetch: a
+   * page that arrives in a tray nobody reads has not been read.
+   */
+  function reader(): { provider: FakeLlmProvider; prompts: string[] } {
+    const prompts: string[] = [];
+    const looked = new Set<string>();
+    const read = new Set<string>();
+    const provider = new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        prompts.push(systemText(request.system));
+        if (isReview(request)) {
+          return toolCall("review_verdict", { approved: true, met: criteriaAsked(request) });
+        }
+        const what = about(request);
+        const offered = (request.tools ?? []).map((tool) => tool.name);
+        if (offered.includes("find_tool") && !looked.has(what)) {
+          looked.add(what);
+          return toolCall("find_tool", { query: "fetch a page" });
+        }
+        // Read once, as somebody sensible would: an agent that fetches the
+        // same page every turn files it every turn, which is its own problem.
+        if (offered.includes("design-web__fetch_url") && !read.has(what)) {
+          read.add(what);
+          return toolCall("design-web__fetch_url", { url: "https://help.figma.com/states" });
+        }
+        return toolCall("submit_work", {
+          summary: `${speaker(request)}: ${what}`,
+          met: criteriaAsked(request),
+        });
+      },
+    });
+    return { provider, prompts };
+  }
+
+  const day = async (title = "Draw the export screen", who = "Theo") => {
+    const { provider, prompts } = reader();
+    const result = await runOffice({
+      config,
+      tasks: [brief("task-screen", title, who)],
+      provider,
+      decide: approveEverything,
+      maxTicks: 60,
+      fetch: () =>
+        Promise.resolve(
+          new Response("<h1>Empty states</h1><p>Draw the empty one too.</p>", {
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+    });
+    return { result, prompts };
+  };
+
+  it("tells a designer what it may reach, and nothing more", async () => {
+    const { prompts } = await day();
+    const designers = prompts.filter((said) => said.includes("design-web__fetch_url"));
+
+    expect(designers.length).toBeGreaterThan(0);
+    // Operations' connector is granted to Operations, not to Design.
+    expect(designers[0]).not.toContain("ops-web__fetch_url");
+  });
+
+  it("puts the page it read in the in-tray of the work", async () => {
+    const { result } = await day();
+    const read = result.documents.filter((one) => one.document.tray === "in");
+
+    expect(read.map((one) => one.document.name)).toEqual(["states.md"]);
+    expect(read[0]?.text).toContain("Draw the empty one too.");
+  });
+
+  it("keeps the page as text rather than as the HTML it arrived in", async () => {
+    const { result } = await day();
+    const read = result.documents.find((one) => one.document.tray === "in");
+
+    expect(read?.document.mediaType).toBe("text/markdown");
+    expect(read?.text).not.toContain("<h1>");
+  });
+
+  it("gives it back to the employee on its next turn, as material it was handed", async () => {
+    const { prompts } = await day();
+    const afterwards = prompts.filter((said) => said.includes("Draw the empty one too."));
+
+    expect(afterwards.length).toBeGreaterThan(0);
+    expect(afterwards[0]).toContain(HANDED_OVER_PREFIX);
+  });
+
+  it("still finishes the work it was reading for", async () => {
+    const { result } = await day();
+    expect(result.done).toBeGreaterThan(0);
+  });
+});

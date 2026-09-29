@@ -9,7 +9,7 @@ import { err, ok, type Result, type ValidationError } from "../shared/result.js"
 declare const connectorIdBrand: unique symbol;
 export type ConnectorId = string & { readonly [connectorIdBrand]: true };
 
-export const CONNECTOR_KINDS = ["mcp", "rest", "webhook", "plugin"] as const;
+export const CONNECTOR_KINDS = ["web", "mcp", "rest", "webhook", "plugin"] as const;
 export type ConnectorKind = (typeof CONNECTOR_KINDS)[number];
 
 export const WILDCARD_TOOL = "*";

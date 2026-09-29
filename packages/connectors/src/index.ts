@@ -8,3 +8,4 @@ export const PACKAGE_NAME = "@vo/connectors" as const;
 export * from "./vault/vault.js";
 export * from "./web/allowlist.js";
 export * from "./web/web-connector.js";
+export * from "./office-broker.js";
