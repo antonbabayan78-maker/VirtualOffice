@@ -623,3 +623,86 @@ describe("Operations checking Engineering's work", () => {
     expect(screen?.checkedBy).toEqual([]);
   });
 });
+
+describe("what the studio actually produced", () => {
+  /**
+   * The office writing things down, rather than describing them.
+   *
+   * Before this, a day's work left four one-line summaries and nothing else —
+   * which is why "is the sample producing an output?" had the answer no. These
+   * assertions are on real rows with real bytes, so a summary string cannot
+   * make them pass.
+   */
+  function writingStudio(): FakeLlmProvider {
+    // Writes the work down once, then submits — the shape a real turn takes.
+    const filed = new Set<string>();
+    return new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        if (isReview(request)) {
+          return toolCall("review_verdict", { approved: true, met: criteriaAsked(request) });
+        }
+        const who = speaker(request);
+        const what = about(request);
+        if (!filed.has(what)) {
+          filed.add(what);
+          return toolCall("file_document", {
+            name: `${what.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`,
+            mediaType: "text/markdown",
+            content: `# ${what}\n\nBy ${who}.\n`,
+          });
+        }
+        return toolCall("submit_work", { summary: `${who}: ${what}`, met: criteriaAsked(request) });
+      },
+    });
+  }
+
+  const written = async (): Promise<OfficeRunResult> =>
+    runOffice({
+      config,
+      tasks: TASKS,
+      provider: writingStudio(),
+      decide: approveEverything,
+      maxTicks: 60,
+    });
+
+  it("comes out of the day holding documents, not just summaries", async () => {
+    const result = await written();
+    expect(result.documents.length).toBeGreaterThan(0);
+  });
+
+  it("wrote real bytes, which is the whole difference", async () => {
+    const result = await written();
+    const scoped = result.documents.find((one) => one.document.name.includes("scope"));
+
+    expect(scoped?.text).toContain("# Scope the 4.2 release");
+    expect(scoped?.document.size).toBe(scoped?.text.length);
+  });
+
+  it("files each document into the out-tray of the work it came from", async () => {
+    const result = await written();
+    const scoped = result.documents.find((one) => one.document.name.includes("scope"));
+
+    expect(scoped?.document.ownerKind).toBe("task");
+    expect(scoped?.document.tray).toBe("out");
+    expect(scoped?.document.ownerId).toBe("task-scope");
+  });
+
+  it("records which employee wrote each one", async () => {
+    const result = await written();
+    const scoped = result.documents.find((one) => one.document.name.includes("scope"));
+    expect(scoped?.document.addedBy).toBe(person("Ravi"));
+  });
+
+  it("still finishes the day's work while writing it down", async () => {
+    const result = await written();
+    expect(result.done).toBeGreaterThan(0);
+  });
+
+  it("produces nothing but summaries when nobody files anything", async () => {
+    // The tool is offered, not forced: a turn that writes nothing leaves an
+    // empty out-tray rather than a document padded out of the summary.
+    const result = await run(approveEverything);
+    expect(result.documents).toEqual([]);
+  });
+});

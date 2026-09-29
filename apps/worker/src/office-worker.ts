@@ -16,6 +16,7 @@ import { InProcessJobQueue, Worker, llmAgentTurn } from "@vo/orchestrator";
 import type { WorkerConfig } from "./config.js";
 import { officeSource } from "./office-source.js";
 import { officeJobHandler } from "./job-handler.js";
+import { apiDocumentSink } from "./document-sink.js";
 
 export interface OfficeWorkerOptions {
   readonly config: WorkerConfig;
@@ -35,7 +36,8 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
     snapshot: officeSource({ api, officeId: options.config.officeId, onProblem: problem }),
     handle: officeJobHandler({
       api,
-      agent: llmAgentTurn({ provider: options.provider }),
+      // Filing goes through the office like everything else a worker writes.
+      agent: llmAgentTurn({ provider: options.provider, documents: apiDocumentSink(api) }),
       onProblem: problem,
     }),
     batchSize: options.config.batchSize,

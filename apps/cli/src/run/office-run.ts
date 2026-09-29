@@ -19,6 +19,8 @@ import {
   transitionTask,
   type EmployeeId,
   type GatedAction,
+  type Document,
+  type DocumentId,
   type OfficeConfig,
   type Task,
   type TaskId,
@@ -31,6 +33,8 @@ import {
   Worker,
   defaultWorkflowEngine,
   llmAgentTurn,
+  type DocumentSink,
+  type HandedOver,
   type Job,
   acceptanceCriteriaFor,
   officeSnapshot,
@@ -41,6 +45,13 @@ import {
   type WorkflowEffect,
   type WorkflowEvent,
 } from "@vo/orchestrator";
+import {
+  InMemoryBlobStore,
+  InMemoryRelationalStore,
+  fileDocument,
+  listTray,
+  readDocument,
+} from "@vo/storage";
 import {
   InMemoryUsageSink,
   UsageRecorder,
@@ -84,9 +95,21 @@ export interface GateDecision {
 /** Answers a waiting gate, or null to leave the work waiting. */
 export type GateDecider = (request: GateRequest) => GateDecision | null;
 
+/** Something the office wrote, with what is actually in it. */
+export interface ProducedDocument {
+  readonly document: Document;
+  readonly text: string;
+}
+
 export interface OfficeRunResult {
   readonly ticks: number;
   readonly tasks: readonly Task[];
+  /**
+   * What the day produced. Held in memory like the tasks are: a headless run is
+   * meant to be reproducible from an office file and a brief, and persisting
+   * what it wrote is the server's job.
+   */
+  readonly documents: readonly ProducedDocument[];
   readonly usage: readonly UsageEvent[];
   readonly effects: readonly WorkflowEffect[];
   /** Handoffs the office could not place, said out loud rather than dropped. */
@@ -117,6 +140,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   const handoffProblems: string[] = [];
   let handedOn = 0;
   const nextTaskId = options.id ?? (() => `task-handoff-${String(++handedOn)}`);
+  const decoder = new TextDecoder();
   const queue = new InProcessJobQueue(
     { limits: { maxPerEmployee: 1 } },
     {
@@ -222,10 +246,49 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
    * end up with two different ideas of what an employee does when its name
    * comes up. Metering is wrapped in here because attribution is per turn.
    */
+  // Trays for the day, thrown away with the run. The real service rather than a
+  // fourth hand-rolled one, so filing here and filing at the office agree about
+  // keys, sizes and what a refusal looks like.
+  const store = new InMemoryRelationalStore();
+  const trays = { documents: store.documents, blobs: new InMemoryBlobStore() };
+  let writtenCount = 0;
+  const documentId = () => `doc-${String(++writtenCount)}` as DocumentId;
+
+  const documentSink: DocumentSink = {
+    file: async (request) =>
+      fileDocument(
+        trays,
+        {
+          officeId: request.officeId,
+          owner: { kind: "task", id: request.taskId },
+          tray: "out",
+          name: request.name,
+          mediaType: request.mediaType,
+          body: new TextEncoder().encode(request.content),
+          addedBy: request.actorId,
+        },
+        { id: documentId, now },
+      ).then((filed) =>
+        isErr(filed)
+          ? filed
+          : { ok: true as const, value: { id: filed.value.id, name: filed.value.name } },
+      ),
+  };
+
   const turn = llmAgentTurn({
     provider: options.provider,
     wrapProvider: (provider, attribution) => meterProvider(provider, { recorder, attribution }),
+    documents: documentSink,
   });
+
+  /** What this work was handed, as text a prompt can carry. */
+  const handedOver = async (task: Task): Promise<readonly HandedOver[]> => {
+    const held = await listTray(store.documents, { kind: "task", id: task.id }, "in");
+    const read = await Promise.all(held.map((one) => readDocument(trays, one.id)));
+    return read.flatMap((found) =>
+      found === null ? [] : [{ name: found.document.name, text: decoder.decode(found.body) }],
+    );
+  };
 
   const handle = async (job: Job): Promise<void> => {
     if (job.kind !== AGENT_RUN_JOB && job.kind !== AGENT_REVIEW_JOB) return;
@@ -246,6 +309,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       actor,
       kind: job.kind,
       acceptanceCriteria: criteria,
+      documents: await handedOver(current),
     })) {
       // Each event is applied to where the last one left the task; a refused
       // one leaves it untouched and the next is judged against that.
@@ -322,9 +386,15 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   }
 
   const finished = [...tasks.values()];
+  const rows = await store.documents.list({ orderBy: { field: "id", direction: "asc" } });
+  const produced = await Promise.all(rows.items.map((row) => readDocument(trays, row.id)));
+
   return {
     ticks,
     tasks: finished,
+    documents: produced.flatMap((found) =>
+      found === null ? [] : [{ document: found.document, text: decoder.decode(found.body) }],
+    ),
     usage: sink instanceof InMemoryUsageSink ? sink.events : [],
     effects,
     handoffProblems,

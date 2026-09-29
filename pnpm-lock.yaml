@@ -223,6 +223,9 @@ importers:
       '@vo/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+      '@vo/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@vo/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
