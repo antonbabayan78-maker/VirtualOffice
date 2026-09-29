@@ -231,3 +231,49 @@ describe("an employee's standing priority", () => {
     expect(store.getState().employees.find((e) => e.id === ada.id)?.priority).toBe("low");
   });
 });
+
+describe("what is on their desk", () => {
+  it("shows both trays, so work can be handed over and taken back", () => {
+    // Wired here rather than only unit-tested on its own: a tray nobody mounted
+    // is a tray nobody can use.
+    expect(screen.getByRole("group", { name: /in-tray for employee/i })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /out-tray for employee/i })).toBeInTheDocument();
+  });
+
+  it("shows this employee's documents and not the department's", () => {
+    act(() => {
+      store.getState().loadDocuments([
+        {
+          id: "doc-1" as never,
+          officeId: "office-acme" as never,
+          ownerKind: "employee",
+          ownerId: ada.id,
+          tray: "in",
+          name: "theirs.md",
+          mediaType: "text/markdown",
+          size: 4,
+          blobRef: "office-acme/documents/doc-1",
+          addedBy: null,
+          addedAt: new Date("2026-09-29T09:00:00Z"),
+        },
+        {
+          id: "doc-2" as never,
+          officeId: "office-acme" as never,
+          ownerKind: "department",
+          ownerId: eng.id,
+          tray: "in",
+          name: "the-rooms.md",
+          mediaType: "text/markdown",
+          size: 4,
+          blobRef: "office-acme/documents/doc-2",
+          addedBy: null,
+          addedAt: new Date("2026-09-29T09:00:00Z"),
+        },
+      ]);
+    });
+
+    const tray = screen.getByRole("group", { name: /in-tray for employee/i });
+    expect(tray).toHaveTextContent("theirs.md");
+    expect(tray).not.toHaveTextContent("the-rooms.md");
+  });
+});

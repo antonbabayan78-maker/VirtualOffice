@@ -27,6 +27,9 @@ import {
   type UpdateConnectionInput,
   type Department,
   type DepartmentId,
+  type Document,
+  type DocumentId,
+  type DocumentOwnerRef,
   type Office,
   type UpdateOfficeInput,
   type Employee,
@@ -86,6 +89,18 @@ export interface OfficeStoreState {
   readonly tasks: readonly Task[];
   readonly connections: readonly Connection[];
   /**
+   * Every document the office holds, kept whole rather than per tray. A tray is
+   * a filter over this, the way `links` and `activity` are filters over what is
+   * already here — so one request keeps every drawer right.
+   */
+  readonly documents: readonly Document[];
+  /**
+   * Whether a document is on its way to the office. The only thing the canvas
+   * does that is not instant: bytes have to travel before the office can name
+   * what arrived, so there is nothing to show optimistically.
+   */
+  readonly uploading: boolean;
+  /**
    * The arrows to draw: one per relationship, with two heads where the work
    * goes both ways. Derived from the connections rather than stored beside
    * them, so an arrow cannot survive the connection it stands for.
@@ -125,6 +140,22 @@ export interface OfficeStoreState {
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
   removeTask(id: TaskId): void;
+  loadDocuments(documents: readonly Document[]): void;
+  /** Told about one, from the office's event stream. */
+  putDocument(document: Document): void;
+  dropDocument(id: DocumentId): void;
+  /**
+   * Puts a document in a tray at the office. Not optimistic: until the office
+   * answers there is no document, only some bytes and an intention.
+   */
+  fileDocument(input: FileDocumentInput): Promise<SaveOutcome>;
+  /** Takes one off a desk here first, and puts it back if the office refuses. */
+  takeDocument(id: DocumentId): Promise<SaveOutcome>;
+  /**
+   * The bytes of a document, for saving or showing. The store asks, because the
+   * API client lives in here and a component has no way to reach it.
+   */
+  fetchBody(id: DocumentId): Promise<Uint8Array | null>;
   moveDepartment(id: DepartmentId, position: Position): void;
   resizeDepartment(id: DepartmentId, size: Size): void;
   addDepartment(input: AddDepartmentInput): Result<Department>;
@@ -160,6 +191,14 @@ export const DEFAULT_GRID_SIZE = 20;
 /** What a save came to in the end, for the drawer that asked for it. */
 export type SaveOutcome =
   { readonly ok: true } | { readonly ok: false; readonly problems: readonly ValidationError[] };
+
+export interface FileDocumentInput {
+  readonly owner: DocumentOwnerRef;
+  readonly tray: "in" | "out";
+  readonly name: string;
+  readonly mediaType?: string;
+  readonly body: Uint8Array;
+}
 
 export interface OfficeStoreDeps {
   readonly storage: LayoutStorage;
@@ -205,6 +244,19 @@ function drawable(
     connections.filter(
       (connection) => present.has(connection.fromId) && present.has(connection.toId),
     ),
+  );
+}
+
+/**
+ * A tray reads oldest first, which is the order the office lists one in. Sorting
+ * here rather than trusting arrival order means a document put back after a
+ * refused removal returns to where it was, instead of to the end.
+ */
+function inOrder(documents: readonly Document[]): readonly Document[] {
+  return [...documents].sort((a, b) =>
+    a.addedAt.getTime() === b.addedAt.getTime()
+      ? a.id.localeCompare(b.id)
+      : a.addedAt.getTime() - b.addedAt.getTime(),
   );
 }
 
@@ -292,6 +344,9 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       seenOffset: 0,
       settings: { snapToGrid: stored?.snapToGrid ?? false, gridSize },
       selectedId: null,
+
+      documents: [],
+      uploading: false,
 
       load: (departments, employees = [], tasks = [], connections = []) => {
         const layout = deps.storage.readLayout();
@@ -481,6 +536,79 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       removeTask: (id) => {
         const tasks = get().tasks.filter((candidate) => candidate.id !== id);
         set({ tasks, activity: activityFromTasks(tasks) });
+      },
+
+      loadDocuments: (documents) => {
+        set({ documents: inOrder(documents) });
+      },
+
+      putDocument: (document) => {
+        const existing = get().documents;
+        set({
+          documents: inOrder(
+            existing.some((candidate) => candidate.id === document.id)
+              ? existing.map((candidate) => (candidate.id === document.id ? document : candidate))
+              : [...existing, document],
+          ),
+        });
+      },
+
+      dropDocument: (id) => {
+        set({ documents: get().documents.filter((candidate) => candidate.id !== id) });
+      },
+
+      fileDocument: async (input) => {
+        // The office this canvas is showing, not one named when the store was
+        // built: the app makes its store before it has read its configuration,
+        // which is the same reason the API client arrives through connect().
+        const officeId = get().office?.id ?? deps.officeId;
+        if (connected === undefined || officeId === undefined) {
+          // Reporting success would leave a document on the canvas that the
+          // office has never heard of and nobody else will ever see.
+          return { ok: false, problems: [{ path: "", message: "this canvas has no office yet" }] };
+        }
+
+        set({ uploading: true });
+        const answer = await connected.uploadDocument(officeId, {
+          ownerKind: input.owner.kind,
+          ownerId: input.owner.id,
+          tray: input.tray,
+          name: input.name,
+          ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+          body: input.body,
+        });
+        set({ uploading: false });
+
+        if (answer.ok) {
+          get().putDocument(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      takeDocument: async (id) => {
+        const before = get().documents.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such document" }] };
+        }
+
+        get().dropDocument(id);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.deleteDocument(id);
+        if (answer.ok) return { ok: true };
+        get().putDocument(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      fetchBody: async (id) => {
+        if (connected === undefined) return null;
+        const answer = await connected.downloadDocument(id);
+        if (answer.ok) return answer.value;
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return null;
       },
 
       addEmployee: (input) => {

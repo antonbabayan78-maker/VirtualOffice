@@ -50,6 +50,8 @@ export interface ApiClient {
    * the move.
    */
   postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
+  /** One document, which is what a live canvas fetches when told one arrived. */
+  getDocument(id: string): Promise<ApiResult<Document>>;
   /** A whole office's documents, or one tray of them. */
   listDocuments(officeId: string, tray?: DocumentFilter): Promise<ApiResult<readonly Document[]>>;
   uploadDocument(officeId: string, input: UploadDocument): Promise<ApiResult<Document>>;
@@ -200,7 +202,10 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         signal: controller.signal,
         headers: {
           authorization: `Bearer ${options.token}`,
-          "content-type": "application/json",
+          // Only when there is one. A request that says it carries JSON and
+          // carries nothing is refused by a strict server, which is how a
+          // delete comes back 400 having done nothing.
+          ...(init.body === undefined ? {} : { "content-type": "application/json" }),
           ...(init.headers ?? {}),
         },
       });
@@ -359,6 +364,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await call(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify(event) }),
         reviveTask,
       ),
+
+    getDocument: async (id) => interpret(await call(`/documents/${id}`), reviveDocument),
 
     listDocuments: async (officeId, tray) => {
       // Built rather than pasted: an owner id is somebody else's string.

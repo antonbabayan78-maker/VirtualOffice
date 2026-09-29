@@ -52,6 +52,7 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     patchConnection: () => Promise.reject(new Error("not used here")),
     patchDepartment: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
+    getDocument: () => Promise.reject(new Error("not used here")),
     listDocuments: () => Promise.reject(new Error("not used here")),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),
