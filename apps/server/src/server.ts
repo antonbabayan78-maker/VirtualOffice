@@ -17,17 +17,21 @@ import {
   createConnection,
   createDepartment,
   createEmployee,
+  createConnector,
   createOffice,
   isDocumentOwnerKind,
   isDocumentTray,
   openTaskCounts,
   updateConnection,
+  updateConnector,
   updateOffice,
+  validateToolGrants,
   createTask,
   isErr,
   updateDepartment,
   updateEmployee,
   type ConnectionId,
+  type ConnectorId,
   type DepartmentId,
   type DocumentId,
   type DocumentOwnerKind,
@@ -35,6 +39,7 @@ import {
   type OfficeId,
   type Result,
   type TaskId,
+  type ToolGrant,
   type ValidationError,
 } from "@vo/core";
 import {
@@ -182,6 +187,44 @@ function bytes(
 function contentDisposition(name: string): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+/**
+ * Grants out of an untrusted body, checked against the office's own connectors.
+ *
+ * Shape alone is not enough and was all this ever did: a grant naming a
+ * connector that does not exist passed, was stored, and granted nothing
+ * forever. The function that knows better has existed since the connector model
+ * was written and was called only when an office file was loaded.
+ */
+async function grantsFrom(
+  body: Record<string, unknown>,
+  officeId: string,
+  connectorsOf: (
+    officeId: string,
+  ) => Promise<readonly { id: string; name: string; tools: readonly string[]; enabled: boolean }[]>,
+  problems: ValidationError[],
+): Promise<readonly ToolGrant[] | undefined> {
+  const raw = body["toolGrants"];
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    problems.push({ path: "toolGrants", message: "must be a list of grants" });
+    return undefined;
+  }
+
+  const grants = raw.map((grant) => {
+    const fields = (typeof grant === "object" && grant !== null ? grant : {}) as Record<
+      string,
+      unknown
+    >;
+    return {
+      connectorId: typeof fields["connectorId"] === "string" ? fields["connectorId"] : "",
+      tool: typeof fields["tool"] === "string" ? fields["tool"] : "",
+    };
+  }) as ToolGrant[];
+
+  problems.push(...validateToolGrants(grants, (await connectorsOf(officeId)) as never));
+  return grants;
 }
 
 export function buildServer(options: ServerOptions): FastifyInstance {
@@ -346,6 +389,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const name = text(body, "name", problems);
     const color = text(body, "color", problems);
     const icon = body["icon"] === undefined ? undefined : text(body, "icon", problems);
+    const grants = await grantsFrom(body, officeId, connectorsIn, problems);
     if (problems.length > 0) return fail(reply, problems);
 
     return created(
@@ -366,6 +410,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(Array.isArray(body["definitionOfDone"])
             ? { definitionOfDone: body["definitionOfDone"] as readonly string[] }
             : {}),
+          ...(grants === undefined ? {} : { toolGrants: grants }),
         },
         existing.items,
         { id: () => newId() as DepartmentId, now },
@@ -393,6 +438,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         current: department,
       });
     }
+    const refusals: ValidationError[] = [];
+    await grantsFrom(
+      request.body as Record<string, unknown>,
+      department.officeId,
+      connectorsIn,
+      refusals,
+    );
+    if (refusals.length > 0) return fail(reply, refusals);
+
     const siblings = await store.departments.list({ where: { officeId: department.officeId } });
 
     const updated = updateDepartment(
@@ -433,6 +487,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const role = text(body, "role", problems);
     const color = text(body, "color", problems);
     const departmentId = text(body, "department", problems);
+    const grants = await grantsFrom(body, officeId, connectorsIn, problems);
     if (problems.length > 0) return fail(reply, problems);
 
     const department = await store.departments.get(departmentId);
@@ -455,6 +510,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(body["skills"] === undefined ? {} : { skillIds: body["skills"] as string[] }),
           ...(body["schedule"] === undefined ? {} : { schedule: body["schedule"] }),
           ...(body["priority"] === undefined ? {} : { priority: body["priority"] as string }),
+          ...(grants === undefined ? {} : { toolGrants: grants }),
         },
         {
           department: { id: department.id, officeId: department.officeId },
@@ -488,6 +544,15 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         current: employee,
       });
     }
+    const refusals: ValidationError[] = [];
+    await grantsFrom(
+      request.body as Record<string, unknown>,
+      employee.officeId,
+      connectorsIn,
+      refusals,
+    );
+    if (refusals.length > 0) return fail(reply, refusals);
+
     const body = request.body as { supervisorId?: string | null };
     const supervisor =
       body.supervisorId === undefined || body.supervisorId === null
@@ -739,6 +804,90 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (connection === null) return missing(reply, "connection");
     await store.connections.delete(id);
     events.publish(connection.officeId, { kind: "connection.deleted", id });
+    return reply.code(204).send();
+  });
+
+  // -- connectors ------------------------------------------------------------
+
+  /** This office's connectors, which every grant is judged against. */
+  const connectorsIn = async (officeId: string) =>
+    (await store.connectors.list({ where: { officeId: officeId as OfficeId } })).items;
+
+  app.get("/offices/:officeId/connectors", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    return { items: await connectorsIn(officeId) };
+  });
+
+  app.post("/offices/:officeId/connectors", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const body = request.body as Record<string, unknown>;
+
+    // Read before handing over: `createConnector` trims the name and walks the
+    // tools without checking either is what it says, so an untyped body reaches
+    // it as a thrown TypeError rather than as a refusal.
+    const problems: ValidationError[] = [];
+    const name = text(body, "name", problems);
+    const kind = text(body, "kind", problems);
+    const rawTools = body["tools"];
+    if (!Array.isArray(rawTools) || rawTools.some((tool) => typeof tool !== "string")) {
+      problems.push({ path: "tools", message: "must be a list of tool names" });
+    }
+    if (problems.length > 0) return fail(reply, problems);
+
+    return created(
+      reply,
+      createConnector(
+        {
+          officeId: officeId as OfficeId,
+          kind: kind as never,
+          name,
+          tools: rawTools as string[],
+          ...(body["config"] === undefined
+            ? {}
+            : { config: body["config"] as Record<string, unknown> }),
+          ...(typeof body["secretRef"] === "string" ? { secretRef: body["secretRef"] } : {}),
+          ...(typeof body["enabled"] === "boolean" ? { enabled: body["enabled"] } : {}),
+        },
+        await connectorsIn(officeId),
+        { id: () => newId() as ConnectorId, now },
+      ),
+      officeId,
+      "connector.created",
+      (connector) => store.connectors.put(connector),
+    );
+  });
+
+  app.patch("/connectors/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const connector = await store.connectors.get(id);
+    if (connector === null) return missing(reply, "connector");
+
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(connector.officeId, id, since)) {
+      return reply
+        .code(409)
+        .send({ error: "this connector changed since you loaded it", current: connector });
+    }
+
+    const siblings = await connectorsIn(connector.officeId);
+    const updated = updateConnector(connector, request.body as Record<string, never>, siblings);
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.connectors.put(updated.value);
+    events.publish(connector.officeId, { kind: "connector.updated", id });
+    return updated.value;
+  });
+
+  app.delete("/connectors/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const connector = await store.connectors.get(id);
+    if (connector === null) return missing(reply, "connector");
+    // Grants naming it are left alone. They resolve to nothing without it, and
+    // walking two other entities to prune them is a bigger change than a stale
+    // row that grants nobody anything.
+    await store.connectors.delete(id);
+    events.publish(connector.officeId, { kind: "connector.deleted", id });
     return reply.code(204).send();
   });
 

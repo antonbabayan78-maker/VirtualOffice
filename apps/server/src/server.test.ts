@@ -1755,3 +1755,220 @@ describe("work crossing a department taking its documents with it", () => {
     expect(await handedOn()).toBe("");
   });
 });
+
+describe("what an office can reach, over the wire", () => {
+  let officeId: string;
+
+  const aConnector = (body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/connectors`, {
+      kind: "web",
+      name: "design-web",
+      tools: ["fetch_url"],
+      config: { hosts: ["help.figma.com"] },
+      ...body,
+    });
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+  });
+
+  it("adds one an office can reach", async () => {
+    const response = await aConnector();
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      kind: "web",
+      name: "design-web",
+      tools: ["fetch_url"],
+      enabled: true,
+    });
+  });
+
+  it("lists what this office has", async () => {
+    await aConnector();
+    await aConnector({ name: "ops-web", config: { hosts: ["status.test"] } });
+
+    const listed = await get(`/offices/${officeId}/connectors`);
+    expect(listed.json<{ items: { name: string }[] }>().items.map((one) => one.name)).toEqual([
+      "design-web",
+      "ops-web",
+    ]);
+  });
+
+  it("refuses a second connector with the same name", async () => {
+    await aConnector();
+    expect((await aConnector()).statusCode).toBe(400);
+  });
+
+  it("refuses a name that is not a name, rather than falling over", async () => {
+    // createConnector trims the name and walks the tools without checking either
+    // is what it says, so an untyped body reaches it as a throw unless the route
+    // reads them first.
+    expect((await aConnector({ name: 7 })).statusCode).toBe(400);
+    expect((await aConnector({ tools: "fetch_url" })).statusCode).toBe(400);
+    expect((await aConnector({ kind: "telepathy" })).statusCode).toBe(400);
+  });
+
+  it("switches one off without deleting it", async () => {
+    const id = (await aConnector()).json<{ id: string }>().id;
+    const off = await patch(`/connectors/${id}`, { enabled: false });
+
+    expect(off.statusCode).toBe(200);
+    expect(off.json<{ enabled: boolean; tools: string[] }>()).toMatchObject({
+      enabled: false,
+      tools: ["fetch_url"],
+    });
+  });
+
+  it("widens what one may read", async () => {
+    const id = (await aConnector()).json<{ id: string }>().id;
+    const wider = await patch(`/connectors/${id}`, {
+      config: { hosts: ["help.figma.com", "*.w3.org"] },
+    });
+
+    expect(wider.json<{ config: { hosts: string[] } }>().config.hosts).toHaveLength(2);
+  });
+
+  it("removes one", async () => {
+    const id = (await aConnector()).json<{ id: string }>().id;
+    expect(
+      (await server.inject({ method: "DELETE", url: `/connectors/${id}`, headers: auth }))
+        .statusCode,
+    ).toBe(204);
+    expect((await get(`/offices/${officeId}/connectors`)).json<{ items: [] }>().items).toEqual([]);
+  });
+
+  it("says on the log what changed", async () => {
+    const id = (await aConnector()).json<{ id: string }>().id;
+    await patch(`/connectors/${id}`, { enabled: false });
+    await server.inject({ method: "DELETE", url: `/connectors/${id}`, headers: auth });
+
+    const kinds = events.since(officeId, 0).map((event) => event.data["kind"]);
+    expect(kinds.slice(-3)).toEqual([
+      "connector.created",
+      "connector.updated",
+      "connector.deleted",
+    ]);
+  });
+
+  it("has never heard of a connector in another office", async () => {
+    expect((await patch("/connectors/nope", { enabled: false })).statusCode).toBe(404);
+    expect((await get("/offices/nope/connectors")).statusCode).toBe(404);
+  });
+});
+
+describe("granting tools over the wire", () => {
+  let officeId: string;
+  let connectorId: string;
+
+  const aDepartment2 = (body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/departments`, {
+      name: "Design",
+      color: "#7c5cff",
+      position: { x: 0, y: 0 },
+      ...body,
+    });
+
+  const anEmployee = (departmentId: string, body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/employees`, {
+      name: "Iris",
+      role: "Designer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      ...body,
+    });
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    connectorId = (
+      await post(`/offices/${officeId}/connectors`, {
+        kind: "web",
+        name: "design-web",
+        tools: ["fetch_url"],
+        config: { hosts: ["help.figma.com"] },
+      })
+    ).json<{ id: string }>().id;
+  });
+
+  it("keeps a grant made when a department is created", async () => {
+    // Dropped silently until now: an office wired over HTTP could grant nothing.
+    const made = await aDepartment2({ toolGrants: [{ connectorId, tool: "fetch_url" }] });
+
+    expect(made.statusCode).toBe(201);
+    expect(made.json<{ toolGrants: unknown[] }>().toolGrants).toEqual([
+      { connectorId, tool: "fetch_url" },
+    ]);
+  });
+
+  it("keeps a grant made when somebody is hired", async () => {
+    const departmentId = (await aDepartment2()).json<{ id: string }>().id;
+    const hired = await anEmployee(departmentId, {
+      toolGrants: [{ connectorId, tool: "fetch_url" }],
+    });
+
+    expect(hired.json<{ toolGrants: unknown[] }>().toolGrants).toEqual([
+      { connectorId, tool: "fetch_url" },
+    ]);
+  });
+
+  it("grants a whole connector with a wildcard", async () => {
+    const made = await aDepartment2({ toolGrants: [{ connectorId, tool: "*" }] });
+    expect(made.json<{ toolGrants: { tool: string }[] }>().toolGrants[0]?.tool).toBe("*");
+  });
+
+  it("refuses a grant naming a connector this office does not have", async () => {
+    const refused = await aDepartment2({
+      toolGrants: [{ connectorId: "conn-nope", tool: "fetch_url" }],
+    });
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("refuses a grant naming a tool the connector does not offer", async () => {
+    const refused = await aDepartment2({ toolGrants: [{ connectorId, tool: "send_email" }] });
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("refuses the same on the way in through a change, not only a creation", async () => {
+    // The hole this closes: a patch accepted any grant whose shape was right.
+    const departmentId = (await aDepartment2()).json<{ id: string }>().id;
+    const refused = await patch(`/departments/${departmentId}`, {
+      toolGrants: [{ connectorId: "conn-nope", tool: "fetch_url" }],
+    });
+
+    expect(refused.statusCode).toBe(400);
+    expect(
+      (await get(`/departments/${departmentId}`)).json<{ toolGrants: [] }>().toolGrants,
+    ).toEqual([]);
+  });
+
+  it("refuses the same when somebody's own grants are changed", async () => {
+    const departmentId = (await aDepartment2()).json<{ id: string }>().id;
+    const employeeId = (await anEmployee(departmentId)).json<{ id: string }>().id;
+    const refused = await patch(`/employees/${employeeId}`, {
+      toolGrants: [{ connectorId, tool: "send_email" }],
+    });
+
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("lets a good grant through a change", async () => {
+    const departmentId = (await aDepartment2()).json<{ id: string }>().id;
+    const changed = await patch(`/departments/${departmentId}`, {
+      toolGrants: [{ connectorId, tool: "fetch_url" }],
+    });
+
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json<{ toolGrants: unknown[] }>().toolGrants).toHaveLength(1);
+  });
+
+  it("keeps a grant when its connector is switched off, so turning it back on restores it", async () => {
+    const departmentId = (
+      await aDepartment2({ toolGrants: [{ connectorId, tool: "fetch_url" }] })
+    ).json<{ id: string }>().id;
+    await patch(`/connectors/${connectorId}`, { enabled: false });
+
+    const department = await get(`/departments/${departmentId}`);
+    expect(department.json<{ toolGrants: unknown[] }>().toolGrants).toHaveLength(1);
+  });
+});
