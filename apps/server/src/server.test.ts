@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { InMemoryRelationalStore } from "@vo/storage";
+import { InMemoryBlobStore, InMemoryRelationalStore } from "@vo/storage";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import { OfficeEventLog } from "./events.js";
 import { buildServer } from "./server.js";
@@ -1326,5 +1326,262 @@ describe("one department checking another's work over the wire", () => {
     const submitted = await finish(office.taskId, office.ada);
 
     expect(submitted.json<{ status: string }>().status).toBe("done");
+  });
+});
+
+describe("documents in and out of trays", () => {
+  let app: FastifyInstance;
+  let log: OfficeEventLog;
+  let blobs: InMemoryBlobStore;
+  let officeId: string;
+  let departmentId: string;
+  let employeeId: string;
+
+  const send = (
+    method: "POST" | "GET" | "DELETE" | "PATCH",
+    url: string,
+    payload?: Body,
+    headers: Record<string, string> = auth,
+  ): Promise<LightMyRequestResponse> =>
+    app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload }) });
+
+  const file = (body: Record<string, unknown>): Promise<LightMyRequestResponse> =>
+    send("POST", `/offices/${officeId}/documents`, {
+      ownerKind: "employee",
+      ownerId: employeeId,
+      tray: "in",
+      name: "brief.md",
+      mediaType: "text/markdown",
+      contentBase64: Buffer.from("# Brief\n").toString("base64"),
+      ...body,
+    });
+
+  beforeEach(async () => {
+    let n = 0;
+    log = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    blobs = new InMemoryBlobStore();
+    app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs,
+      events: log,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++n)}`,
+      now: () => new Date("2026-09-29T09:00:00.000Z"),
+    });
+    await app.ready();
+
+    officeId = (await send("POST", "/offices", { name: "Acme" })).json<{ id: string }>().id;
+    departmentId = (
+      await send("POST", `/offices/${officeId}/departments`, {
+        name: "Engineering",
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+      })
+    ).json<{ id: string }>().id;
+    employeeId = (
+      await send("POST", `/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+  });
+
+  it("puts a document on somebody's desk", async () => {
+    const response = await file({});
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      ownerKind: "employee",
+      ownerId: employeeId,
+      tray: "in",
+      name: "brief.md",
+      mediaType: "text/markdown",
+      size: 8,
+    });
+  });
+
+  it("hands the same bytes back", async () => {
+    const id = (await file({})).json<{ id: string }>().id;
+    const content = await send("GET", `/documents/${id}/content`);
+
+    expect(content.statusCode).toBe(200);
+    expect(content.rawPayload.toString("utf8")).toBe("# Brief\n");
+  });
+
+  it("takes bytes that are not text", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const id = (
+      await file({
+        name: "chart.png",
+        mediaType: "image/png",
+        contentBase64: png.toString("base64"),
+      })
+    ).json<{ id: string }>().id;
+
+    expect((await send("GET", `/documents/${id}/content`)).rawPayload).toEqual(png);
+  });
+
+  it("hands a document over as something to save, never as something to run", async () => {
+    // Whoever uploaded it chose the media type. Echoing it back on this origin
+    // is how an uploaded page becomes a page this API serves.
+    const id = (
+      await file({
+        name: "notes.html",
+        mediaType: "text/html",
+        contentBase64: Buffer.from("<script>alert(1)</script>").toString("base64"),
+      })
+    ).json<{ id: string }>().id;
+
+    const content = await send("GET", `/documents/${id}/content`);
+    expect(content.headers["content-type"]).toBe("application/octet-stream");
+    expect(content.headers["content-disposition"]).toMatch(/^attachment/);
+    expect(content.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("lists everything the office is holding", async () => {
+    await file({ name: "one.md" });
+    await file({ name: "two.md", tray: "out" });
+
+    const listed = await send("GET", `/offices/${officeId}/documents`);
+    expect(listed.json<{ items: { name: string }[] }>().items.map((d) => d.name)).toEqual([
+      "one.md",
+      "two.md",
+    ]);
+  });
+
+  it("lists one tray when asked for one", async () => {
+    await file({ name: "given.md", tray: "in" });
+    await file({ name: "made.md", tray: "out" });
+
+    const listed = await send(
+      "GET",
+      `/offices/${officeId}/documents?ownerKind=employee&ownerId=${employeeId}&tray=out`,
+    );
+    expect(listed.json<{ items: { name: string }[] }>().items.map((d) => d.name)).toEqual([
+      "made.md",
+    ]);
+  });
+
+  it("finds one on its own", async () => {
+    const id = (await file({})).json<{ id: string }>().id;
+    expect((await send("GET", `/documents/${id}`)).json<{ name: string }>().name).toBe("brief.md");
+  });
+
+  it("says it has never heard of a document it has not got", async () => {
+    expect((await send("GET", "/documents/nope")).statusCode).toBe(404);
+    expect((await send("GET", "/documents/nope/content")).statusCode).toBe(404);
+  });
+
+  it("refuses a tray on a desk this office does not have", async () => {
+    expect((await file({ ownerId: "emp-elsewhere" })).statusCode).toBe(404);
+    expect((await file({ ownerKind: "department", ownerId: "dept-elsewhere" })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("puts a document in the office's own tray", async () => {
+    const response = await file({ ownerKind: "office", ownerId: officeId });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it("refuses a document the office itself would refuse", async () => {
+    expect((await file({ name: "../escape.md" })).statusCode).toBe(400);
+    expect((await file({ tray: "pending" })).statusCode).toBe(400);
+    expect((await file({ name: 7 })).statusCode).toBe(400);
+  });
+
+  it("refuses a body that is not base64, rather than storing the difference", async () => {
+    const response = await file({ contentBase64: "not base64 at all!!" });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ errors: { path: string }[] }>().errors[0]?.path).toBe("contentBase64");
+  });
+
+  it("records which employee filed it", async () => {
+    const response = await file({ tray: "out", addedBy: employeeId });
+    expect(response.json<{ addedBy: string | null }>().addedBy).toBe(employeeId);
+  });
+
+  it("will not let a document claim it was filed by somebody who does not work here", async () => {
+    expect((await file({ addedBy: "emp-elsewhere" })).statusCode).toBe(400);
+  });
+
+  it("says nobody filed it when a person put it there", async () => {
+    expect((await file({})).json<{ addedBy: string | null }>().addedBy).toBeNull();
+  });
+
+  it("takes it off the desk, and the body with it", async () => {
+    const filed = (await file({})).json<{ id: string; blobRef: string }>();
+
+    expect((await send("DELETE", `/documents/${filed.id}`)).statusCode).toBe(204);
+    expect((await send("GET", `/documents/${filed.id}`)).statusCode).toBe(404);
+    expect(await blobs.exists(filed.blobRef)).toBe(false);
+  });
+
+  it("says it has nothing to take when asked twice", async () => {
+    const id = (await file({})).json<{ id: string }>().id;
+    await send("DELETE", `/documents/${id}`);
+    expect((await send("DELETE", `/documents/${id}`)).statusCode).toBe(404);
+  });
+
+  it("says on the log who put a paper on a desk and who took it off", async () => {
+    const id = (await file({ addedBy: employeeId })).json<{ id: string }>().id;
+    await send("DELETE", `/documents/${id}`);
+
+    const published = log.since(officeId, 0).map((event) => event.data);
+    expect(published.at(-2)).toMatchObject({
+      kind: "document.added",
+      id,
+      ownerKind: "employee",
+      ownerId: employeeId,
+      tray: "in",
+      by: employeeId,
+    });
+    expect(published.at(-2)).toMatchObject({ byKind: "employee" });
+    // Nobody employed here took it off the desk: a person did, holding a token.
+    expect(published.at(-1)).toMatchObject({
+      kind: "document.removed",
+      id,
+      by: "owner-1",
+      byKind: "person",
+    });
+  });
+
+  it("does not make editing that employee look like somebody else's change", async () => {
+    // The log is keyed by the id in an event, so a document event carrying its
+    // owner's id would read as the owner having been changed — and the canvas
+    // would be refused its next save with a conflict it cannot explain.
+    const seen = log.since(officeId, 0).at(-1)?.offset ?? 0;
+    await file({});
+
+    const edited = await send(
+      "PATCH",
+      `/employees/${employeeId}`,
+      { name: "Ada L" },
+      {
+        ...auth,
+        "x-vo-since-offset": String(seen),
+      },
+    );
+    expect(edited.statusCode).toBe(200);
+  });
+
+  it("has no trays at all when the office has nowhere to keep a body", async () => {
+    // Routes appear with the blob store, so every office that was running
+    // before there were documents keeps working exactly as it did.
+    const without = buildServer({
+      store: new InMemoryRelationalStore(),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+    });
+    await without.ready();
+
+    const response = await without.inject({
+      method: "GET",
+      url: "/offices/anything/documents",
+      headers: auth,
+    });
+    expect(response.statusCode).toBe(404);
   });
 });
