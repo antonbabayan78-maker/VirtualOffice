@@ -13,6 +13,7 @@ const request = {
   name: "notes.md",
   mediaType: "text/markdown",
   content: "# Notes\n",
+  tray: "out" as const,
 };
 
 function api(answer: ApiResult<Document>, sent: { value?: UploadDocument } = {}): ApiClient {
@@ -85,5 +86,24 @@ describe("a worker filing what its agent wrote", () => {
     // turn treats a throw as the office being down rather than as bad input.
     const sink = apiDocumentSink(api({ ok: false, kind: "transport", message: "unreachable" }));
     await expect(sink.file(request)).rejects.toThrow(/unreachable/);
+  });
+});
+
+describe("which tray a filed document lands in", () => {
+  it("puts work the employee produced in the out-tray", async () => {
+    const sent: { value?: UploadDocument } = {};
+    await apiDocumentSink(api({ ok: true, value: filed }, sent)).file(request);
+    expect(sent.value?.tray).toBe("out");
+  });
+
+  it("puts material a tool brought back in the in-tray", async () => {
+    // A fetched page is not something this work produced; it is something it
+    // was handed, which is also where the fence around untrusted text is.
+    const sent: { value?: UploadDocument } = {};
+    await apiDocumentSink(api({ ok: true, value: filed }, sent)).file({
+      ...request,
+      tray: "in",
+    });
+    expect(sent.value?.tray).toBe("in");
   });
 });

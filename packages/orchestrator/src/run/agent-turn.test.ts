@@ -3,6 +3,7 @@ import { FakeLlmProvider, reply, toolCall, type LlmProvider } from "@vo/llm";
 import {
   createDepartment,
   createEmployee,
+  createConnector,
   createTask,
   err,
   unwrap,
@@ -22,6 +23,7 @@ import {
   SUBMIT_TOOL,
 } from "./agent-turn.js";
 import { recordingDocumentSink, type DocumentSink } from "./document-sink.js";
+import { catalogFor, describedTool, recordingToolBroker } from "../tools/tool-broker.js";
 
 const officeId = "office-acme" as OfficeId;
 const at = new Date("2026-09-28T09:00:00Z");
@@ -366,6 +368,7 @@ describe("an employee producing something", () => {
         officeId,
         taskId: assigned.id,
         actorId: ada.id,
+        tray: "out",
         name: "parser-notes.md",
         mediaType: "text/markdown",
         content: "# Notes\n",
@@ -530,5 +533,234 @@ describe("an employee reading what it was handed", () => {
     const provider = script();
     await turn(provider)({ task: assigned, actor: ada, kind: AGENT_RUN_JOB });
     expect(JSON.stringify(provider.calls[0]?.system ?? {})).not.toContain(HANDED_OVER_PREFIX);
+  });
+});
+
+describe("an employee calling a tool", () => {
+  const officeId2 = officeId;
+  const web = {
+    ...unwrap(
+      createConnector(
+        { officeId: officeId2, kind: "rest", name: "web", tools: ["fetch_url"] },
+        [],
+        {
+          id: () => "conn-web" as never,
+          now: () => at,
+        },
+      ),
+    ),
+  };
+  const described = [describedTool(web.id, "fetch_url", "Fetch a page.")];
+  const granted = (tool = "fetch_url") =>
+    catalogFor(
+      { connectors: [web], departmentGrants: [{ connectorId: web.id, tool }], employeeGrants: [] },
+      described,
+    );
+
+  const turnWith = (
+    provider: LlmProvider,
+    broker: ReturnType<typeof recordingToolBroker>["broker"],
+    catalog = granted(),
+  ) =>
+    llmAgentTurn({ provider, tools: broker, documents: recordingDocumentSink().sink })({
+      task: assigned,
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: catalog,
+    });
+
+  it("is told what it may call, and calls it", async () => {
+    const { broker, calls } = recordingToolBroker({
+      web__fetch_url: { summary: "Fetched the pricing page." },
+    });
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test/pricing" }),
+        toolCall("submit_work", { summary: "read it" }),
+      ],
+    });
+
+    await turnWith(provider, broker);
+    expect(calls).toEqual([
+      { name: "web__fetch_url", input: { url: "https://acme.test/pricing" } },
+    ]);
+  });
+
+  it("is offered find_tool rather than every tool at once", async () => {
+    const { broker } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done" })],
+    });
+
+    await turnWith(provider, broker);
+    const offered = provider.calls[0]?.tools?.map((tool) => tool.name) ?? [];
+    expect(offered).toContain("find_tool");
+    expect(offered).not.toContain("web__fetch_url");
+  });
+
+  it("still gets the filing tool, which is the office's own", async () => {
+    const { broker } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done" })],
+    });
+
+    await turnWith(provider, broker);
+    expect(provider.calls[0]?.tools?.map((tool) => tool.name)).toContain(FILE_DOCUMENT_TOOL.name);
+  });
+
+  it("lists what it may call in the prompt, so find_tool has something to find", async () => {
+    const { broker } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done" })],
+    });
+
+    await turnWith(provider, broker);
+    expect(JSON.stringify(provider.calls[0]?.system ?? {})).toContain("web__fetch_url");
+  });
+
+  it("refuses a tool this employee was never granted, and says which", async () => {
+    // Refused as a tool result, not thrown: the model can hand the work on or
+    // ask a supervisor, and neither is possible from an exception.
+    const { broker, calls } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test" }),
+        toolCall("submit_work", { summary: "could not" }),
+      ],
+    });
+
+    await turnWith(provider, broker, granted("nothing_at_all"));
+    expect(calls).toEqual([]);
+    expect(JSON.stringify(provider.calls[1]?.messages ?? [])).toMatch(/not granted/i);
+  });
+
+  it("refuses a tool the office switched off between asking and calling", async () => {
+    // The catalogue is a snapshot taken when the turn began; the check at the
+    // call is what makes switching a connector off take effect at once.
+    const off = { ...web, enabled: false };
+    const catalog = catalogFor(
+      {
+        connectors: [web],
+        departmentGrants: [{ connectorId: web.id, tool: "fetch_url" }],
+        employeeGrants: [],
+      },
+      described,
+    );
+    const { broker, calls } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test" }),
+        toolCall("submit_work", { summary: "could not" }),
+      ],
+    });
+
+    await llmAgentTurn({
+      provider,
+      tools: broker,
+      documents: recordingDocumentSink().sink,
+    })({
+      task: assigned,
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: catalog,
+      connectors: [off],
+      toolGrants: [{ connectorId: web.id, tool: "fetch_url" }],
+    });
+
+    expect(calls).toEqual([]);
+    expect(JSON.stringify(provider.calls[1]?.messages ?? [])).toMatch(/switched off/i);
+  });
+
+  it("tells the model what came back", async () => {
+    const { broker } = recordingToolBroker({
+      web__fetch_url: { summary: "Fetched the pricing page (4 kB)." },
+    });
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test/pricing" }),
+        toolCall("submit_work", { summary: "read it" }),
+      ],
+    });
+
+    await turnWith(provider, broker);
+    expect(JSON.stringify(provider.calls[1]?.messages ?? [])).toContain("Fetched the pricing page");
+  });
+
+  it("puts what a tool brought back on the desk, in the in-tray", async () => {
+    // Everything the employee touched is filed, and the in-tray is where
+    // material it was handed lives — which is also where the fence is.
+    const { broker } = recordingToolBroker({
+      web__fetch_url: {
+        summary: "Fetched it.",
+        artifact: { name: "pricing.md", mediaType: "text/markdown", content: "# Pricing\n" },
+      },
+    });
+    const filing = recordingDocumentSink();
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test/pricing" }),
+        toolCall("submit_work", { summary: "read it" }),
+      ],
+    });
+
+    await llmAgentTurn({ provider, tools: broker, documents: filing.sink })({
+      task: assigned,
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: granted(),
+    });
+
+    expect(filing.filed).toEqual([
+      {
+        officeId,
+        taskId: assigned.id,
+        actorId: ada.id,
+        name: "pricing.md",
+        mediaType: "text/markdown",
+        content: "# Pricing\n",
+        tray: "in",
+      },
+    ]);
+  });
+
+  it("says a tool went wrong rather than ending the turn", async () => {
+    const broker = {
+      describe: () => Promise.resolve([]),
+      call: () => Promise.reject(new Error("the site never answered")),
+    };
+    const provider = new FakeLlmProvider({
+      script: [
+        toolCall("web__fetch_url", { url: "https://acme.test" }),
+        toolCall("submit_work", { summary: "gave up on the page" }),
+      ],
+    });
+
+    const events = await turnWith(provider, broker);
+    expect(events.at(-1)).toMatchObject({ type: "submit" });
+    expect(JSON.stringify(provider.calls[1]?.messages ?? [])).toMatch(/never answered/);
+  });
+
+  it("gives a reviewer no tools at all, as it always did", async () => {
+    const { broker } = recordingToolBroker({});
+    const provider = new FakeLlmProvider({ script: [toolCall("review_work", { approved: true })] });
+
+    await llmAgentTurn({ provider, tools: broker, documents: recordingDocumentSink().sink })({
+      task: inReview,
+      actor: grace,
+      kind: AGENT_REVIEW_JOB,
+      toolCatalog: granted(),
+    });
+
+    expect(provider.calls[0]?.tools?.map((tool) => tool.name)).not.toContain("find_tool");
+  });
+
+  it("works exactly as before for an office that has no tools", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "done" })],
+    });
+    const events = await turn(provider)({ task: assigned, actor: ada, kind: AGENT_RUN_JOB });
+
+    expect(events.at(-1)).toMatchObject({ type: "submit" });
+    expect(provider.calls[0]?.tools ?? []).toHaveLength(1);
   });
 });

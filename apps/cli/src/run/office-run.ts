@@ -290,7 +290,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
         {
           officeId: request.officeId,
           owner: { kind: "task", id: request.taskId },
-          tray: "out",
+          tray: request.tray,
           name: request.name,
           mediaType: request.mediaType,
           body: new TextEncoder().encode(request.content),

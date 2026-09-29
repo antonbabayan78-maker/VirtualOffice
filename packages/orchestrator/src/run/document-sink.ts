@@ -17,8 +17,14 @@ import type { EmployeeId, OfficeId, Result, TaskId } from "@vo/core";
 
 export interface FileRequest {
   readonly officeId: OfficeId;
-  /** Whose out-tray: the work, not the worker, so a handoff can carry it. */
+  /** Whose tray: the work, not the worker, so a handoff can carry it. */
   readonly taskId: TaskId;
+  /**
+   * Which tray. Work the employee produced goes in the out-tray; material a
+   * tool brought back goes in the in-tray, where what was handed over lives and
+   * where the fence around untrusted text already is.
+   */
+  readonly tray: "in" | "out";
   readonly actorId: EmployeeId;
   readonly name: string;
   readonly mediaType: string;

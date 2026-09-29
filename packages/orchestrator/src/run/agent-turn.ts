@@ -18,18 +18,25 @@
  * approved that nobody approved.
  */
 import {
+  canCallTool,
   isErr,
+  splitToolWireName,
+  type Connector,
   type DepartmentId,
   type Employee,
   type EmployeeId,
   type OfficeId,
   type Task,
   type TaskId,
+  type ToolGrant,
 } from "@vo/core";
 import type { LlmProvider, ToolDefinition } from "@vo/llm";
 import { AGENT_REVIEW_JOB, type AGENT_RUN_JOB } from "../schedule/scheduler.js";
 import type { WorkflowEvent } from "../workflow/workflow-types.js";
-import { runAgent } from "./agent-run-loop.js";
+import { runAgent, type ToolUse } from "./agent-run-loop.js";
+import { FIND_TOOL_NAME, LazyToolset } from "../tools/lazy-toolset.js";
+import { ToolCatalog, type CatalogTool } from "../tools/tool-catalog.js";
+import type { BrokerOutcome, ToolBroker } from "../tools/tool-broker.js";
 import type { DocumentSink, HandedOver } from "./document-sink.js";
 
 /** What an employee calls to hand finished work over. */
@@ -120,6 +127,19 @@ export interface AgentTurnRequest {
    * need and keeps the prompt testable without a store.
    */
   readonly documents?: readonly HandedOver[];
+  /**
+   * Everything this employee may call, already resolved from the office's
+   * connectors and the grants on its department and itself. Per turn, because
+   * it depends on whose turn it is.
+   */
+  readonly toolCatalog?: ToolCatalog;
+  /**
+   * The office's connectors and this employee's grants, for the check at the
+   * call itself. The catalogue is a snapshot taken when the turn began; these
+   * are what make switching a connector off take effect before the next one.
+   */
+  readonly connectors?: readonly Connector[];
+  readonly toolGrants?: readonly ToolGrant[];
   /** Whose turn it is: the assignee for a run, the reviewer for a review. */
   readonly actor: Employee;
   readonly kind: TurnKind;
@@ -146,6 +166,8 @@ export interface AgentTurnOptions {
    * turn that ran before there were trays runs exactly as it did.
    */
   readonly documents?: DocumentSink;
+  /** Who actually performs a tool call. Without one, no tool is offered. */
+  readonly tools?: ToolBroker;
 }
 
 export type AgentTurn = (request: AgentTurnRequest) => Promise<readonly WorkflowEvent[]>;
@@ -178,6 +200,7 @@ async function fileOne(
       officeId: context.task.officeId,
       taskId: context.task.id,
       actorId: context.actorId,
+      tray: "out",
       name,
       mediaType,
       content,
@@ -194,7 +217,8 @@ async function fileOne(
 }
 
 export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
-  return async ({ task, actor, kind, acceptanceCriteria = [], documents = [] }) => {
+  return async (request) => {
+    const { task, actor, kind, acceptanceCriteria = [], documents = [] } = request;
     const reviewing = kind === AGENT_REVIEW_JOB;
     const resultTool = reviewing ? REVIEW_TOOL : SUBMIT_TOOL;
     const attribution: TurnAttribution = {
@@ -227,6 +251,18 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
     // tool: it is judging the work, not adding to it.
     const sink = reviewing ? undefined : options.documents;
 
+    // The run loop ignores a static tool list once it is given a toolset, so
+    // the office's own filing tool joins the catalogue rather than sitting
+    // beside it. `connectorId` is what the executor dispatches on.
+    const broker = reviewing ? undefined : options.tools;
+    const catalog = reviewing ? undefined : request.toolCatalog;
+    const toolset =
+      catalog === undefined
+        ? undefined
+        : new LazyToolset(withOfficeTools(catalog, sink === undefined ? [] : [OFFICE_FILE_TOOL]), {
+            alwaysLoaded: sink === undefined ? [] : [FILE_DOCUMENT_TOOL.name],
+          });
+
     const result = await runAgent({
       provider,
       model: actor.llm.model,
@@ -235,13 +271,20 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
         dynamic,
       },
       messages: [{ role: "user", content: [{ type: "text", text: instruction }] }],
-      tools: sink === undefined ? [] : [FILE_DOCUMENT_TOOL],
+      ...(toolset === undefined
+        ? { tools: sink === undefined ? [] : [FILE_DOCUMENT_TOOL] }
+        : { toolset }),
       resultTool,
       executeTool: async (call) => ({
-        content:
-          sink === undefined || call.name !== FILE_DOCUMENT_TOOL.name
-            ? ""
-            : await fileOne(sink, call.input, { task, actorId: actor.id }),
+        content: await performCall(call, {
+          sink,
+          broker,
+          catalog,
+          task,
+          actorId: actor.id,
+          connectors: request.connectors ?? [],
+          grants: request.toolGrants ?? [],
+        }),
       }),
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     });
@@ -275,4 +318,113 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
       { type: "submit", actorId: actor.id, artifacts: [summary], met: claimed(verdict["met"]) },
     ];
   };
+}
+
+/** The office's own tools, which belong to no connector. */
+export const OFFICE_CONNECTOR_ID = "office";
+
+const OFFICE_FILE_TOOL: CatalogTool = { ...FILE_DOCUMENT_TOOL, connectorId: OFFICE_CONNECTOR_ID };
+
+/**
+ * The catalogue the model actually sees: what the office granted, plus the
+ * office's own tools.
+ *
+ * They go in the same catalogue rather than beside it because `runAgent`
+ * ignores a static tool list once it has a toolset, and `alwaysLoaded` can only
+ * name tools the catalogue holds. Keeping the filing tool out would mean
+ * touching the run loop to support both at once, for no gain.
+ */
+function withOfficeTools(catalog: ToolCatalog, office: readonly CatalogTool[]): ToolCatalog {
+  return new ToolCatalog([...catalog.all(), ...office]);
+}
+
+interface CallContext {
+  readonly sink: DocumentSink | undefined;
+  readonly broker: ToolBroker | undefined;
+  /** What this employee may call. A name that is not in it is not callable. */
+  readonly catalog: ToolCatalog | undefined;
+  readonly task: Task;
+  readonly actorId: EmployeeId;
+  readonly connectors: readonly Connector[];
+  readonly grants: readonly ToolGrant[];
+}
+
+/** Why a refusal is worth a sentence each: they lead the model somewhere different. */
+function refusal(name: string, reason: string): string {
+  switch (reason) {
+    case "not_granted":
+      return `You are not granted ${name}. Ask your supervisor, or hand this part of the work over to somebody who is.`;
+    case "connector_disabled":
+      return `${name} is switched off in this office at the moment.`;
+    default:
+      return `There is no tool called ${name}. Use ${FIND_TOOL_NAME} to see what you have.`;
+  }
+}
+
+/**
+ * One tool call: the office's own, or a connector's.
+ *
+ * The grant is checked again here, not only when the catalogue was built. The
+ * catalogue is a snapshot taken when the turn began, and a connector switched
+ * off in the meantime should stop working before the next call rather than at
+ * the next turn.
+ *
+ * Nothing throws. A refusal and a failure both come back as text the model can
+ * act on — it can rename, retry elsewhere, or hand the work over, and none of
+ * that is reachable from an exception. A model that keeps retrying the same
+ * refusal trips the run loop's own loop detector, which is the right end.
+ */
+async function performCall(call: ToolUse, context: CallContext): Promise<string> {
+  if (call.name === FILE_DOCUMENT_TOOL.name) {
+    return context.sink === undefined
+      ? ""
+      : fileOne(context.sink, call.input, { task: context.task, actorId: context.actorId });
+  }
+
+  const split = splitToolWireName(call.name);
+  if (split === null || context.broker === undefined || context.catalog === undefined) return "";
+
+  // The catalogue is the check that cannot be skipped: a model may name any
+  // tool it likes, and only the ones this employee was granted are in here. A
+  // caller that forgets to pass the connectors below still cannot be talked
+  // into calling something ungranted.
+  if (context.catalog.get(call.name) === null) {
+    return refusal(call.name, "not_granted");
+  }
+
+  // And again against the office as it stands now, when the caller can say what
+  // that is. The catalogue was built when the turn began.
+  const connector = context.connectors.find((one) => one.name === split.connector);
+  if (connector !== undefined) {
+    const decision = canCallTool(
+      { connectors: context.connectors, departmentGrants: context.grants, employeeGrants: [] },
+      connector.id,
+      split.tool,
+    );
+    if (!decision.allowed) return refusal(call.name, decision.reason);
+  }
+
+  let outcome: BrokerOutcome;
+  try {
+    outcome = await context.broker.call({ name: call.name, input: call.input });
+  } catch (error) {
+    return `${call.name} did not work: ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  if (outcome.artifact === undefined || context.sink === undefined) return outcome.summary;
+
+  // Filed where material somebody handed over lives, which is also where the
+  // fence around untrusted text is. The turn files it because a connector has
+  // no business knowing what a tray is.
+  const filed = await context.sink.file({
+    officeId: context.task.officeId,
+    taskId: context.task.id,
+    actorId: context.actorId,
+    tray: "in",
+    name: outcome.artifact.name,
+    mediaType: outcome.artifact.mediaType,
+    content: outcome.artifact.content,
+  });
+  if (isErr(filed)) return outcome.summary;
+  return `${outcome.summary} Filed as ${filed.value.name} in this work's in-tray.`;
 }

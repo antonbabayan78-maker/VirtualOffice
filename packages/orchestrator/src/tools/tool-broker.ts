@@ -116,6 +116,11 @@ export function recordingToolBroker(outcomes: Readonly<Record<string, BrokerOutc
     broker: {
       describe: () => Promise.resolve(described),
       call(call) {
+        console.log(
+          "BROKER CALLED",
+          call.name,
+          new Error().stack?.split("\n").slice(1, 6).join(" | "),
+        );
         calls.push(call);
         const outcome = outcomes[call.name];
         if (outcome === undefined) {
