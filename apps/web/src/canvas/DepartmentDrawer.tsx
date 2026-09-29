@@ -15,6 +15,7 @@ import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { PriorityField } from "./PriorityField.js";
+import { Produced } from "./Produced.js";
 import { Tray } from "./Tray.js";
 import {
   ALL_GATED_ACTIONS,
@@ -452,6 +453,8 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
 
       <Tray store={store} owner={{ kind: "department", id: department.id }} tray="in" />
       <Tray store={store} owner={{ kind: "department", id: department.id }} tray="out" />
+      <Produced store={store} owner={{ kind: "department", id: department.id }} tray="in" />
+      <Produced store={store} owner={{ kind: "department", id: department.id }} tray="out" />
 
       <div className="mt-auto flex gap-2 pt-2">
         <Button variant="primary" onClick={save}>

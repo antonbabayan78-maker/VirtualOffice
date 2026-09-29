@@ -269,3 +269,9 @@ describe("what is in the room's trays", () => {
     expect(screen.getByRole("group", { name: /out-tray for department/i })).toBeInTheDocument();
   });
 });
+
+describe("what the room's work has produced", () => {
+  it("shows nothing until some work has produced something", () => {
+    expect(screen.queryByRole("group", { name: /produced here/i })).toBeNull();
+  });
+});
