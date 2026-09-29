@@ -4,6 +4,7 @@ import { InMemoryRelationalStore } from "../relational/in-memory.js";
 import { InMemoryBlobStore } from "../stores/in-memory.js";
 import type { RelationalStore } from "../relational/types.js";
 import {
+  copyIntoTray,
   fileDocument,
   listTray,
   readDocument,
@@ -14,6 +15,7 @@ import {
 
 const officeId = "o1" as OfficeId;
 const T0 = new Date("2026-09-29T09:00:00Z");
+const T0_FILED = T0;
 
 let store: RelationalStore;
 let blobs: InMemoryBlobStore;
@@ -214,6 +216,98 @@ describe("taking a document out of a tray", () => {
 
     await removeDocument(stores, filed.id);
     await removeDocument(stores, copy.id);
+    expect(await blobs.exists(filed.blobRef)).toBe(false);
+  });
+});
+
+describe("carrying documents to another desk", () => {
+  let later: { id: () => DocumentId; now: () => Date };
+
+  beforeEach(() => {
+    let n = 0;
+    later = {
+      id: () => `copy-${String(++n)}` as DocumentId,
+      now: () => new Date("2026-09-30T11:00:00Z"),
+    };
+  });
+
+  const onTo = (ids: readonly DocumentId[], to = "task-2") =>
+    copyIntoTray(store.documents, ids, { kind: "task", id: to }, "in", later);
+
+  it("puts a copy in the tray it was carried to", async () => {
+    const filed = unwrap(await fileDocument(stores, input({ tray: "out" }), deps));
+    await onTo([filed.id]);
+
+    const arrived = await listTray(store.documents, { kind: "task", id: "task-2" }, "in");
+    expect(arrived.map((one) => one.name)).toEqual(["brief.md"]);
+  });
+
+  it("leaves the original where it was", async () => {
+    const filed = unwrap(
+      await fileDocument(
+        stores,
+        input({ owner: { kind: "task", id: "task-1" }, tray: "out" }),
+        deps,
+      ),
+    );
+    await onTo([filed.id]);
+
+    const original = await listTray(store.documents, { kind: "task", id: "task-1" }, "out");
+    expect(original.map((one) => one.id)).toEqual([filed.id]);
+  });
+
+  it("reads back the very same bytes, without writing them twice", async () => {
+    const filed = unwrap(await fileDocument(stores, input({ tray: "out" }), deps));
+    const [copied] = await onTo([filed.id]);
+
+    expect(
+      read(
+        (await readDocument(stores, copied?.id ?? ("x" as DocumentId)))?.body ?? new Uint8Array(),
+      ),
+    ).toBe("# Brief\n");
+    // One body, named by two rows: the whole reason this is a copy.
+    expect(await blobs.list("")).toHaveLength(1);
+  });
+
+  it("carries several at once, in the order they were given", async () => {
+    const one = unwrap(await fileDocument(stores, input({ name: "one.md", tray: "out" }), deps));
+    const two = unwrap(await fileDocument(stores, input({ name: "two.md", tray: "out" }), deps));
+
+    const copies = await onTo([one.id, two.id]);
+    expect(copies.map((copy) => copy.name)).toEqual(["one.md", "two.md"]);
+  });
+
+  it("carries nothing when there was nothing to carry", async () => {
+    expect(await onTo([])).toEqual([]);
+  });
+
+  it("skips one that has since been taken off the desk, and carries the rest", async () => {
+    // Work crossing departments matters more than one document somebody
+    // removed while it was in flight.
+    const filed = unwrap(await fileDocument(stores, input({ tray: "out" }), deps));
+    const copies = await onTo(["doc-gone" as DocumentId, filed.id]);
+
+    expect(copies.map((copy) => copy.name)).toEqual(["brief.md"]);
+  });
+
+  it("says when each copy arrived, not when the original was written", async () => {
+    const filed = unwrap(await fileDocument(stores, input({ tray: "out" }), deps));
+    const [copied] = await onTo([filed.id]);
+
+    expect(copied?.addedAt).toEqual(new Date("2026-09-30T11:00:00Z"));
+    expect(filed.addedAt).toEqual(T0_FILED);
+  });
+
+  it("keeps the body while the copy still names it, and lets it go with the last", async () => {
+    // This is the rule the delete path was written for, now exercised against a
+    // copy this code actually made rather than one built by hand in a test.
+    const filed = unwrap(await fileDocument(stores, input({ tray: "out" }), deps));
+    const [copied] = await onTo([filed.id]);
+
+    await removeDocument(stores, filed.id);
+    expect(await blobs.exists(filed.blobRef)).toBe(true);
+
+    await removeDocument(stores, copied?.id ?? ("x" as DocumentId));
     expect(await blobs.exists(filed.blobRef)).toBe(false);
   });
 });
