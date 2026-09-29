@@ -42,7 +42,7 @@ export function readableSize(bytes: number): string {
  * Deliberately not a link to the office: the office wants a token on every
  * request, and a token in a URL is a token in a log.
  */
-function offerToSave(name: string, body: Uint8Array): void {
+export function offerToSave(name: string, body: Uint8Array): void {
   const url = URL.createObjectURL(new Blob([body as BlobPart]));
   const anchor = document.createElement("a");
   anchor.href = url;

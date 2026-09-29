@@ -17,6 +17,7 @@ import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { PriorityField } from "./PriorityField.js";
+import { Produced } from "./Produced.js";
 import { Tray } from "./Tray.js";
 
 interface ModelRef {
@@ -416,6 +417,8 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
 
       <Tray store={store} owner={{ kind: "employee", id: employee.id }} tray="in" />
       <Tray store={store} owner={{ kind: "employee", id: employee.id }} tray="out" />
+      <Produced store={store} owner={{ kind: "employee", id: employee.id }} tray="in" />
+      <Produced store={store} owner={{ kind: "employee", id: employee.id }} tray="out" />
 
       <div className="mt-auto flex gap-2 pt-2">
         <Button variant="primary" onClick={save}>

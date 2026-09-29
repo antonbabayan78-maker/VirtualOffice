@@ -277,3 +277,50 @@ describe("what is on their desk", () => {
     expect(tray).not.toHaveTextContent("the-rooms.md");
   });
 });
+
+describe("what their work has produced", () => {
+  const filed = (taskId: string, name: string) => ({
+    id: `doc-${name}` as never,
+    officeId: "office-acme" as never,
+    ownerKind: "task" as const,
+    ownerId: taskId,
+    tray: "out" as const,
+    name,
+    mediaType: "text/markdown",
+    size: 4,
+    blobRef: `office-acme/documents/doc-${name}`,
+    addedBy: null,
+    addedAt: new Date("2026-09-29T09:00:00Z"),
+  });
+
+  it("shows nothing when they have produced nothing, rather than an empty box", () => {
+    expect(screen.queryByRole("group", { name: /produced/i })).toBeNull();
+  });
+
+  it("surfaces documents that belong to their work, which no tray would show", () => {
+    // Everything an agent files is owned by the task, so without this the
+    // canvas shows none of what the office actually produced.
+    act(() => {
+      store.getState().load(
+        store.getState().departments,
+        store.getState().employees,
+        [
+          {
+            id: "task-1",
+            officeId: "office-acme",
+            departmentId: eng.id,
+            title: "Write the parser",
+            assigneeId: ada.id,
+            status: "in_progress",
+          } as never,
+        ],
+        [],
+      );
+      store.getState().loadDocuments([filed("task-1", "parser-notes.md")]);
+    });
+
+    const produced = screen.getByRole("group", { name: /produced by their work/i });
+    expect(produced).toHaveTextContent("parser-notes.md");
+    expect(produced).toHaveTextContent("Write the parser");
+  });
+});
