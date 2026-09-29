@@ -18,6 +18,7 @@
  * worker cannot come to different conclusions about any of it.
  */
 import {
+  copyDocument,
   createDocument,
   isErr,
   type Document,
@@ -138,4 +139,37 @@ export async function removeDocument(stores: DocumentStores, id: DocumentId): Pr
   const stillHeld = await stores.documents.count({ blobRef: document.blobRef });
   if (stillHeld === 0) await stores.blobs.delete(document.blobRef);
   return true;
+}
+
+/**
+ * The same documents, on another desk.
+ *
+ * Takes the repository alone rather than both stores, because no body is
+ * written: a copy names the body the original already named. That is what makes
+ * carrying a document across a handoff cost one row and nothing else, and it is
+ * why the delete path counts the rows naming a body before removing it.
+ *
+ * An id that no longer resolves is skipped rather than failing the lot. Work
+ * crossing into another department matters more than one document somebody took
+ * off a desk while it was in flight, and a handoff refused for that reason would
+ * leave the next department with nothing at all.
+ */
+export async function copyIntoTray(
+  documents: EntityRepository<Document>,
+  ids: readonly DocumentId[],
+  to: DocumentOwnerRef,
+  tray: DocumentTray,
+  deps: DocumentDeps,
+): Promise<readonly Document[]> {
+  const copies: Document[] = [];
+  for (const id of ids) {
+    const source = await documents.get(id);
+    if (source === null) continue;
+
+    const copy = copyDocument(source, to, tray, deps);
+    if (isErr(copy)) continue;
+    await documents.put(copy.value);
+    copies.push(copy.value);
+  }
+  return copies;
 }
