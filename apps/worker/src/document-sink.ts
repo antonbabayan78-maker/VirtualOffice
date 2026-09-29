@@ -19,7 +19,7 @@ export function apiDocumentSink(api: ApiClient): DocumentSink {
       const filed = await api.uploadDocument(request.officeId, {
         ownerKind: "task",
         ownerId: request.taskId,
-        tray: "out",
+        tray: request.tray,
         name: request.name,
         mediaType: request.mediaType,
         body: encoder.encode(request.content),

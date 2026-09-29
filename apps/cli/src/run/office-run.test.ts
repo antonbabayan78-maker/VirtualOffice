@@ -316,3 +316,35 @@ describe("work that needs a person", () => {
     expect(result.ticks).toBeLessThanOrEqual(10);
   });
 });
+
+describe("which tray a headless run files into", () => {
+  /** Files one document, then submits. */
+  const writes = () => {
+    let filed = false;
+    return new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        if (isReview(request)) return toolCall("review_verdict", { approved: true });
+        if (!filed) {
+          filed = true;
+          return toolCall("file_document", { name: "notes.md", content: "# Notes\n" });
+        }
+        return toolCall("submit_work", { summary: "written" });
+      },
+    });
+  };
+
+  it("puts what the employee wrote in the out-tray of its work", async () => {
+    // The tray is now the caller's to say rather than hard-coded in the sink,
+    // so the ordinary case is worth pinning: filing is still filing.
+    const result = await runOffice({
+      config: office(),
+      tasks: [brief()],
+      provider: writes(),
+      maxTicks: 20,
+    });
+
+    expect(result.documents.map((one) => one.document.tray)).toEqual(["out"]);
+    expect(result.documents[0]?.document.ownerKind).toBe("task");
+  });
+});
