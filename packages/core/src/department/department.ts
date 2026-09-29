@@ -6,6 +6,7 @@ import type { OfficeId } from "../office/office.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
+import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
 declare const departmentIdBrand: unique symbol;
@@ -48,6 +49,12 @@ export interface Department {
   readonly definitionOfDone: readonly string[];
   /** When this department works; the office's hours gate it too. */
   readonly schedule: Schedule;
+  /**
+   * What everyone in this room may call. Granted here rather than per person so
+   * that "designers get Figma" is said once; an employee's own grants are added
+   * to these, never subtracted from them.
+   */
+  readonly toolGrants: readonly ToolGrant[];
   readonly createdAt: Date;
 }
 
@@ -64,6 +71,7 @@ export interface CreateDepartmentInput {
   /** Defaults to normal. Loose on the way in, narrow on the entity. */
   readonly priority?: string;
   readonly definitionOfDone?: readonly string[];
+  readonly toolGrants?: readonly ToolGrant[];
   readonly schedule?: unknown;
 }
 
@@ -159,6 +167,7 @@ export interface UpdateDepartmentInput {
   readonly schedule?: unknown;
   readonly priority?: string;
   readonly definitionOfDone?: readonly string[];
+  readonly toolGrants?: readonly ToolGrant[];
 }
 
 /**
@@ -219,6 +228,12 @@ export function updateDepartment(
   const definitionOfDone = changes.definitionOfDone ?? department.definitionOfDone;
   errors.push(...validateDefinitionOfDone(definitionOfDone));
 
+  const toolGrants =
+    changes.toolGrants === undefined
+      ? ok(department.toolGrants)
+      : validateGrantShape(changes.toolGrants);
+  if (!toolGrants.ok) errors.push(...toolGrants.error);
+
   const priority = changes.priority ?? department.priority;
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -245,6 +260,7 @@ export function updateDepartment(
     schedule: schedule.value,
     priority,
     definitionOfDone: [...definitionOfDone],
+    toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
   });
 }
 
@@ -286,6 +302,9 @@ export function createDepartment(
   const definitionOfDone = input.definitionOfDone ?? [];
   errors.push(...validateDefinitionOfDone(definitionOfDone));
 
+  const toolGrants = validateGrantShape(input.toolGrants);
+  if (!toolGrants.ok) errors.push(...toolGrants.error);
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -315,6 +334,7 @@ export function createDepartment(
     schedule: schedule.value,
     priority,
     definitionOfDone: [...definitionOfDone],
+    toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
     createdAt: deps.now(),
   });
 }

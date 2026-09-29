@@ -6,7 +6,7 @@
  *
  * Budget arrives with the telemetry budgets task.
  */
-import type { ToolGrant } from "../connector/connector.js";
+import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { normalizeHexColor, type DepartmentId } from "../department/department.js";
 import type { OfficeId } from "../office/office.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
@@ -80,10 +80,6 @@ export interface EmployeeDeps {
 
 export const EMPLOYEE_TEXT_MAX_LENGTH = 80;
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
 function validateText(raw: unknown, path: string): Result<string> {
   if (typeof raw !== "string") return err([{ path, message: "must be a string" }]);
   const value = raw.trim();
@@ -107,26 +103,6 @@ function validateSkillIds(raw: readonly string[] | undefined): Result<readonly s
     seen.add(id);
   }
   return ok([...ids]);
-}
-
-function validateToolGrants(raw: readonly ToolGrant[] | undefined): Result<readonly ToolGrant[]> {
-  const grants = raw ?? [];
-  const errors: ValidationError[] = [];
-  grants.forEach((g: unknown, i) => {
-    const path = `toolGrants[${String(i)}]`;
-    if (!isRecord(g)) {
-      errors.push({ path, message: "must be an object with connectorId and tool" });
-      return;
-    }
-    if (typeof g["connectorId"] !== "string" || g["connectorId"].length === 0) {
-      errors.push({ path: `${path}.connectorId`, message: "must be a non-empty string" });
-    }
-    if (typeof g["tool"] !== "string" || g["tool"].length === 0) {
-      errors.push({ path: `${path}.tool`, message: 'must be a tool name or "*"' });
-    }
-  });
-  if (errors.length > 0) return err(errors);
-  return ok(grants.map((g) => ({ connectorId: g.connectorId, tool: g.tool })));
 }
 
 function validateSupervisor(
@@ -170,7 +146,7 @@ export function createEmployee(
 
   const skillIds = validateSkillIds(input.skillIds);
   if (!skillIds.ok) errors.push(...skillIds.error);
-  const toolGrants = validateToolGrants(input.toolGrants);
+  const toolGrants = validateGrantShape(input.toolGrants);
   if (!toolGrants.ok) errors.push(...toolGrants.error);
 
   let schedule: Schedule | null = null;
@@ -279,7 +255,7 @@ export function updateEmployee(
   const toolGrants =
     changes.toolGrants === undefined
       ? ok(employee.toolGrants)
-      : validateToolGrants(changes.toolGrants);
+      : validateGrantShape(changes.toolGrants);
   if (!toolGrants.ok) errors.push(...toolGrants.error);
 
   let schedule: Schedule | null = employee.schedule;
