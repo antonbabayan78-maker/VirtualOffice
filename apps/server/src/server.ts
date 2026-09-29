@@ -18,6 +18,8 @@ import {
   createDepartment,
   createEmployee,
   createOffice,
+  isDocumentOwnerKind,
+  isDocumentTray,
   openTaskCounts,
   updateConnection,
   updateOffice,
@@ -27,6 +29,8 @@ import {
   updateEmployee,
   type ConnectionId,
   type DepartmentId,
+  type DocumentId,
+  type DocumentOwnerKind,
   type EmployeeId,
   type OfficeId,
   type Result,
@@ -40,12 +44,25 @@ import {
   type WorkflowContext,
   type WorkflowEvent,
 } from "@vo/orchestrator";
-import type { RelationalStore } from "@vo/storage";
+import {
+  fileDocument,
+  listTray,
+  readDocument,
+  removeDocument,
+  type BlobStore,
+  type RelationalStore,
+} from "@vo/storage";
 import { bearerToken, type TokenVerifier } from "./auth.js";
 import { OfficeEventLog } from "./events.js";
 
 export interface ServerOptions {
   readonly store: RelationalStore;
+  /**
+   * Where document bodies are kept. An office without one has no trays at all
+   * and the document routes are simply not there, so every deployment that ran
+   * before documents existed keeps running unchanged.
+   */
+  readonly blobs?: BlobStore;
   readonly verifyToken: TokenVerifier;
   readonly events?: OfficeEventLog;
   readonly id?: () => string;
@@ -122,6 +139,48 @@ function text(body: Record<string, unknown>, field: string, errors: ValidationEr
     return "";
   }
   return value;
+}
+
+/** Base64 as a client is allowed to send it: the alphabet, and nothing else. */
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * Bytes out of an untrusted body.
+ *
+ * Node's decoder ignores what it does not recognise, so text that is not base64
+ * at all decodes to something shorter rather than failing — and the office would
+ * store the difference and call it a document. The round trip is what catches it.
+ */
+function bytes(
+  body: Record<string, unknown>,
+  field: string,
+  errors: ValidationError[],
+): Uint8Array {
+  const before = errors.length;
+  const raw = text(body, field, errors);
+  if (errors.length > before) return new Uint8Array();
+
+  const compact = raw.replace(/\s+/g, "");
+  if (compact.length === 0) return new Uint8Array();
+  const refuse = (): Uint8Array => {
+    errors.push({ path: field, message: "must be base64" });
+    return new Uint8Array();
+  };
+  if (!BASE64.test(compact) || compact.length % 4 !== 0) return refuse();
+  const decoded = Buffer.from(compact, "base64");
+  const unpadded = (value: string): string => value.replace(/=+$/, "");
+  if (unpadded(decoded.toString("base64")) !== unpadded(compact)) return refuse();
+  return new Uint8Array(decoded);
+}
+
+/**
+ * A filename a header can carry. The name itself is never a path — core refuses
+ * one — but it may hold a quote or a character no header may, so the readable
+ * form is stripped and the true name travels encoded beside it.
+ */
+function contentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 export function buildServer(options: ServerOptions): FastifyInstance {
@@ -655,6 +714,168 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     events.publish(connection.officeId, { kind: "connection.deleted", id });
     return reply.code(204).send();
   });
+
+  // -- documents -------------------------------------------------------------
+
+  /**
+   * Trays exist only when there is somewhere to keep a body, so these routes
+   * are registered with the blob store rather than checking for it one by one.
+   */
+  const blobs = options.blobs;
+  if (blobs !== undefined) {
+    const trays = { documents: store.documents, blobs };
+
+    /** Who is asking. Re-read rather than stashed: the hook has already proved it. */
+    const personOf = (request: FastifyRequest): string => {
+      const token = bearerToken(request.headers.authorization);
+      return (token === null ? null : options.verifyToken(token))?.ownerId ?? "unknown";
+    };
+
+    /** A tray belongs to something this office actually has. */
+    const ownerIsHere = async (
+      officeId: string,
+      kind: DocumentOwnerKind,
+      id: string,
+    ): Promise<boolean> => {
+      if (kind === "office") return id === officeId;
+      if (kind === "department") return (await store.departments.get(id))?.officeId === officeId;
+      if (kind === "employee") return (await store.employees.get(id))?.officeId === officeId;
+      return (await store.tasks.get(id))?.officeId === officeId;
+    };
+
+    app.get("/offices/:officeId/documents", async (request, reply) => {
+      const { officeId } = request.params as { officeId: string };
+      if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+      const query = request.query as { ownerKind?: string; ownerId?: string; tray?: string };
+
+      if (
+        isDocumentOwnerKind(query.ownerKind) &&
+        isDocumentTray(query.tray) &&
+        query.ownerId !== undefined
+      ) {
+        return {
+          items: await listTray(
+            store.documents,
+            { kind: query.ownerKind, id: query.ownerId },
+            query.tray,
+          ),
+        };
+      }
+
+      // Everything the office holds, so a canvas can derive every tray from one
+      // request rather than one per desk.
+      const page = await store.documents.list({
+        where: { officeId: officeId as OfficeId },
+        orderBy: { field: "addedAt", direction: "asc" },
+      });
+      return { items: page.items };
+    });
+
+    app.post(
+      "/offices/:officeId/documents",
+      // A body arrives base64, which is a third larger than the document, and
+      // Fastify would otherwise refuse a document at the cap before core saw it.
+      { bodyLimit: 4 * 1024 * 1024 },
+      async (request, reply) => {
+        const { officeId } = request.params as { officeId: string };
+        if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+        const body = request.body as Record<string, unknown>;
+
+        const problems: ValidationError[] = [];
+        const ownerKind = text(body, "ownerKind", problems);
+        const ownerId = text(body, "ownerId", problems);
+        const tray = text(body, "tray", problems);
+        const name = text(body, "name", problems);
+        const mediaType =
+          body["mediaType"] === undefined ? undefined : text(body, "mediaType", problems);
+        const content = bytes(body, "contentBase64", problems);
+        const addedBy = body["addedBy"] === undefined ? undefined : text(body, "addedBy", problems);
+        if (problems.length > 0) return fail(reply, problems);
+
+        // Owner kind is core's to judge; whether that owner is here is not.
+        if (isDocumentOwnerKind(ownerKind) && !(await ownerIsHere(officeId, ownerKind, ownerId))) {
+          return missing(reply, "the owner of this tray");
+        }
+        if (addedBy !== undefined) {
+          const employee = await store.employees.get(addedBy);
+          if (employee?.officeId !== officeId) {
+            return fail(reply, [
+              { path: "addedBy", message: "must be somebody who works in this office" },
+            ]);
+          }
+        }
+
+        const filed = await fileDocument(
+          trays,
+          {
+            officeId: officeId as OfficeId,
+            owner: { kind: ownerKind, id: ownerId },
+            tray,
+            name,
+            ...(mediaType === undefined ? {} : { mediaType }),
+            body: content,
+            ...(addedBy === undefined ? {} : { addedBy: addedBy as EmployeeId }),
+          },
+          { id: () => newId() as DocumentId, now },
+        );
+        if (isErr(filed)) return fail(reply, filed.error);
+
+        const document = filed.value;
+        events.publish(officeId, {
+          kind: "document.added",
+          id: document.id,
+          ownerKind: document.ownerKind,
+          ownerId: document.ownerId,
+          tray: document.tray,
+          // Named so an audit log can tell an employee filing its work from a
+          // person dropping something off.
+          by: document.addedBy ?? personOf(request),
+          byKind: document.addedBy === null ? "person" : "employee",
+        });
+        return reply.code(201).send(document);
+      },
+    );
+
+    app.get("/documents/:id", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const document = await store.documents.get(id);
+      if (document === null) return missing(reply, "document");
+      return document;
+    });
+
+    app.get("/documents/:id/content", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const found = await readDocument(trays, id as DocumentId);
+      if (found === null) return missing(reply, "document");
+
+      // Whoever uploaded it chose the media type, so echoing it back would let
+      // an uploaded page be a page this origin serves. It is always something to
+      // save, never something to run.
+      return reply
+        .header("content-type", "application/octet-stream")
+        .header("content-disposition", contentDisposition(found.document.name))
+        .header("x-content-type-options", "nosniff")
+        .send(Buffer.from(found.body));
+    });
+
+    app.delete("/documents/:id", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const document = await store.documents.get(id);
+      if (document === null) return missing(reply, "document");
+
+      await removeDocument(trays, id as DocumentId);
+      events.publish(document.officeId, {
+        kind: "document.removed",
+        id,
+        ownerKind: document.ownerKind,
+        ownerId: document.ownerId,
+        tray: document.tray,
+        by: personOf(request),
+        byKind: "person",
+      });
+      return reply.code(204).send();
+    });
+  }
 
   return app;
 }
