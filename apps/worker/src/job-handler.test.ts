@@ -33,7 +33,8 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     patchDepartment: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     getDocument: () => Promise.reject(new Error("not used here")),
-    listDocuments: () => Promise.reject(new Error("not used here")),
+    // Every turn asks what is in its in-tray, so this one is always used.
+    listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),
     deleteDocument: () => Promise.reject(new Error("not used here")),
@@ -102,7 +103,46 @@ describe("doing a piece of an office's work", () => {
       actor: ada,
       kind: AGENT_RUN_JOB,
       acceptanceCriteria: [],
+      documents: [],
     });
+  });
+
+  it("gives the agent what is in the work's in-tray, as text it can read", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const listDocuments = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: [
+          { id: "doc-1", name: "the-brief.md", mediaType: "text/markdown" },
+          // Nothing to show a model: left out rather than described.
+          { id: "doc-2", name: "logo.png", mediaType: "image/png" },
+        ] as never,
+      }),
+    );
+    const downloadDocument = vi.fn(() =>
+      Promise.resolve({ ok: true as const, value: new TextEncoder().encode("Make it obvious.") }),
+    );
+
+    await officeJobHandler({ api: api({ listDocuments, downloadDocument }), agent })(job());
+
+    expect(listDocuments).toHaveBeenCalledWith("office-1", {
+      ownerKind: "task",
+      ownerId: "task-1",
+      tray: "in",
+    });
+    expect(agent).toHaveBeenCalledWith(
+      expect.objectContaining({ documents: [{ name: "the-brief.md", text: "Make it obvious." }] }),
+    );
+  });
+
+  it("works on without an in-tray it cannot read, rather than stopping", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const listDocuments = vi.fn(() =>
+      Promise.resolve({ ok: false as const, kind: "transport" as const, message: "no trays" }),
+    );
+
+    await officeJobHandler({ api: api({ listDocuments }), agent })(job());
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ documents: [] }));
   });
 
   it("tells the agent it is reviewing, not working, when that is the job", async () => {

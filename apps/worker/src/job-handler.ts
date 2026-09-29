@@ -22,6 +22,7 @@ import {
   AGENT_RUN_JOB,
   AGENT_REVIEW_JOB,
   type AgentTurn,
+  type HandedOver,
   type Job,
 } from "@vo/orchestrator";
 
@@ -33,6 +34,38 @@ export interface JobHandlerOptions {
 }
 
 const AGENT_JOBS: readonly string[] = [AGENT_RUN_JOB, AGENT_REVIEW_JOB];
+
+/**
+ * What this work was handed, as text a prompt can carry.
+ *
+ * Only what can be read as text: a model cannot be shown bytes, and a document
+ * it cannot read is better left out than described. An office that cannot say
+ * what is in a tray leaves the turn with nothing rather than stopping it — the
+ * work is still doable, just less informed.
+ */
+async function handedOver(
+  api: ApiClient,
+  officeId: string,
+  taskId: string,
+): Promise<readonly HandedOver[]> {
+  const held = await api.listDocuments(officeId, {
+    ownerKind: "task",
+    ownerId: taskId,
+    tray: "in",
+  });
+  if (!held.ok) return [];
+
+  const decoder = new TextDecoder();
+  const read = await Promise.all(
+    held.value
+      .filter((document) => document.mediaType.startsWith("text/"))
+      .map(async (document) => {
+        const body = await api.downloadDocument(document.id);
+        return body.ok ? { name: document.name, text: decoder.decode(body.value) } : null;
+      }),
+  );
+  return read.filter((one): one is HandedOver => one !== null);
+}
 
 export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Promise<void> {
   return async (job) => {
@@ -71,6 +104,7 @@ export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Prom
       actor: actor.value,
       kind: job.kind as typeof AGENT_RUN_JOB | typeof AGENT_REVIEW_JOB,
       acceptanceCriteria,
+      documents: await handedOver(options.api, task.value.officeId, taskId),
     });
 
     for (const event of events) {

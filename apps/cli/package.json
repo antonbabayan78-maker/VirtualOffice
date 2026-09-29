@@ -26,6 +26,7 @@
     "@vo/core": "workspace:*",
     "@vo/llm": "workspace:*",
     "@vo/orchestrator": "workspace:*",
+    "@vo/storage": "workspace:*",
     "@vo/telemetry": "workspace:*"
   },
   "bin": {
