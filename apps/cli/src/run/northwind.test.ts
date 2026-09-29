@@ -25,6 +25,7 @@ import {
   type Task,
   type TaskId,
 } from "@vo/core";
+import { HANDED_OVER_PREFIX } from "@vo/orchestrator";
 import { runOffice, type GateDecider, type OfficeRunResult } from "./office-run.js";
 
 const YAML = readFileSync(
@@ -704,5 +705,93 @@ describe("what the studio actually produced", () => {
     // empty out-tray rather than a document padded out of the summary.
     const result = await run(approveEverything);
     expect(result.documents).toEqual([]);
+  });
+});
+
+describe("work carrying its documents next door", () => {
+  /**
+   * The point of a tray, proved where it has to be true.
+   *
+   * A document that arrives in a tray nobody reads has not actually travelled,
+   * so the assertion is on what Engineering was told, not on a row in a store.
+   */
+  function handingOver(): { provider: FakeLlmProvider; prompts: string[] } {
+    const prompts: string[] = [];
+    const filed = new Set<string>();
+    const provider = new FakeLlmProvider({
+      id: "anthropic",
+      handler: (request) => {
+        prompts.push(systemText(request.system));
+        if (isReview(request)) {
+          return toolCall("review_verdict", { approved: true, met: criteriaAsked(request) });
+        }
+        const what = about(request);
+        // Design writes the thing down; everybody else just gets on with it.
+        if (departmentOf(person(speaker(request))) === "dept-design" && !filed.has(what)) {
+          filed.add(what);
+          return toolCall("file_document", {
+            name: "export-screen.md",
+            mediaType: "text/markdown",
+            content: "# Export screen\n\nThree states: idle, exporting, done.\n",
+          });
+        }
+        return toolCall("submit_work", {
+          summary: `${speaker(request)}: ${what}`,
+          met: criteriaAsked(request),
+        });
+      },
+    });
+    return { provider, prompts };
+  }
+
+  const day = async () => {
+    const { provider, prompts } = handingOver();
+    const result = await runOffice({
+      config,
+      tasks: [brief("task-screen", "Draw the export screen", "Theo")],
+      provider,
+      decide: approveEverything,
+      maxTicks: 60,
+    });
+    return { result, prompts };
+  };
+
+  it("puts Design's document in the tray of the work Engineering was handed", async () => {
+    const { result } = await day();
+    const handedOn = result.tasks.find((task) => task.departmentId === "dept-engineering");
+    const carried = result.documents.filter(
+      (one) => one.document.ownerId === handedOn?.id && one.document.tray === "in",
+    );
+
+    expect(carried.map((one) => one.document.name)).toEqual(["export-screen.md"]);
+  });
+
+  it("shows it to the employee who picks the work up", async () => {
+    const { prompts } = await day();
+    const engineering = prompts.filter((said) => said.includes("export-screen.md"));
+
+    expect(engineering.length).toBeGreaterThan(0);
+    expect(engineering[0]).toContain("Three states: idle, exporting, done.");
+  });
+
+  it("tells them it is something they were handed, not something telling them what to do", async () => {
+    const { prompts } = await day();
+    const handed = prompts.find((said) => said.includes("export-screen.md")) ?? "";
+    expect(handed).toContain(HANDED_OVER_PREFIX);
+  });
+
+  it("leaves Design holding it too, so the work is not moved off their desk", async () => {
+    const { result } = await day();
+    const kept = result.documents.filter((one) => one.document.tray === "out");
+
+    expect(kept.map((one) => one.document.ownerId)).toEqual(["task-screen"]);
+  });
+
+  it("writes the body once, however many desks are holding it", async () => {
+    const { result } = await day();
+    const bodies = new Set(result.documents.map((one) => one.document.blobRef));
+
+    expect(result.documents.length).toBeGreaterThan(1);
+    expect(bodies.size).toBe(1);
   });
 });

@@ -45,6 +45,7 @@ import {
   type WorkflowEvent,
 } from "@vo/orchestrator";
 import {
+  copyIntoTray,
   fileDocument,
   listTray,
   readDocument,
@@ -586,8 +587,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       openTasks: load[employee.id] ?? 0,
     }));
 
+    // What this work produced, resolved here rather than reached for: the engine
+    // decides what travels, and this is what holds the store that can say what it is.
+    const produced = await listTray(store.documents, { kind: "task", id }, "out");
+
     const context: WorkflowContext = {
       policy: department?.reviewPolicy ?? { kind: "direct" },
+      documents: produced.map((document) => document.id),
       acceptanceCriteria: acceptanceCriteriaFor(
         task.acceptanceCriteria,
         department?.definitionOfDone ?? [],
@@ -641,6 +647,27 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       }
       await store.tasks.put(placed.value.task);
       events.publish(task.officeId, { kind: "task.created", id: placed.value.task.id });
+
+      // The documents come across as copies naming one body, so both desks hold
+      // the work and neither can take the other's away.
+      const carried = await copyIntoTray(
+        store.documents,
+        effect.documents,
+        { kind: "task", id: placed.value.task.id },
+        "in",
+        { id: () => newId() as DocumentId, now },
+      );
+      for (const document of carried) {
+        events.publish(task.officeId, {
+          kind: "document.added",
+          id: document.id,
+          ownerKind: document.ownerKind,
+          ownerId: document.ownerId,
+          tray: document.tray,
+          by: document.addedBy,
+          byKind: document.addedBy === null ? "person" : "employee",
+        });
+      }
     }
 
     return outcome.value.task;

@@ -1585,3 +1585,173 @@ describe("documents in and out of trays", () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe("work crossing a department taking its documents with it", () => {
+  let app: FastifyInstance;
+  let log: OfficeEventLog;
+  let officeId: string;
+  let from: string;
+  let to: string;
+  let ravi: string;
+  let taskId: string;
+
+  const send = (
+    method: "POST" | "GET" | "DELETE",
+    url: string,
+    payload?: Body,
+  ): Promise<LightMyRequestResponse> =>
+    app.inject({ method, url, headers: auth, ...(payload === undefined ? {} : { payload }) });
+
+  beforeEach(async () => {
+    let n = 0;
+    log = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs: new InMemoryBlobStore(),
+      events: log,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++n)}`,
+      now: () => new Date("2026-09-30T09:00:00.000Z"),
+    });
+    await app.ready();
+
+    officeId = (await send("POST", "/offices", { name: "Acme" })).json<{ id: string }>().id;
+    const make = async (name: string): Promise<string> =>
+      (
+        await send("POST", `/offices/${officeId}/departments`, {
+          name,
+          color: "#3366ff",
+          position: { x: 0, y: 0 },
+          reviewPolicy: { kind: "direct" },
+        })
+      ).json<{ id: string }>().id;
+    from = await make("Design");
+    to = await make("Engineering");
+
+    ravi = (
+      await send("POST", `/offices/${officeId}/employees`, {
+        name: "Ravi",
+        role: "Designer",
+        color: "#00aa66",
+        department: from,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    await send("POST", `/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Engineer",
+      color: "#00aa66",
+      department: to,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+
+    await send("POST", `/offices/${officeId}/connections`, {
+      fromId: from,
+      toId: to,
+      kind: "handoff",
+    });
+
+    taskId = (
+      await send("POST", `/offices/${officeId}/tasks`, {
+        departmentId: from,
+        title: "Draw the export screen",
+        assigneeId: ravi,
+      })
+    ).json<{ id: string }>().id;
+  });
+
+  const fileOnTheWork = (name = "export-screen.md", text = "# Export screen\n") =>
+    send("POST", `/offices/${officeId}/documents`, {
+      ownerKind: "task",
+      ownerId: taskId,
+      tray: "out",
+      name,
+      mediaType: "text/markdown",
+      contentBase64: Buffer.from(text).toString("base64"),
+      addedBy: ravi,
+    });
+
+  const finish = async () => {
+    await send("POST", `/tasks/${taskId}/events`, { type: "start", actorId: ravi });
+    await send("POST", `/tasks/${taskId}/events`, { type: "submit", actorId: ravi });
+  };
+
+  const handedOn = async (): Promise<string> => {
+    const all = await send("GET", `/offices/${officeId}/tasks`);
+    const next = all
+      .json<{ items: { id: string; departmentId: string }[] }>()
+      .items.find((task) => task.departmentId === to);
+    return next?.id ?? "";
+  };
+
+  const trayOf = async (taskId: string, tray: string) =>
+    (
+      await send(
+        "GET",
+        `/offices/${officeId}/documents?ownerKind=task&ownerId=${taskId}&tray=${tray}`,
+      )
+    ).json<{ items: { id: string; name: string }[] }>().items;
+
+  it("puts what the first department produced in the second's in-tray", async () => {
+    await fileOnTheWork();
+    await finish();
+
+    expect((await trayOf(await handedOn(), "in")).map((one) => one.name)).toEqual([
+      "export-screen.md",
+    ]);
+  });
+
+  it("hands over the document itself, byte for byte", async () => {
+    await fileOnTheWork();
+    await finish();
+
+    const [carried] = await trayOf(await handedOn(), "in");
+    const body = await send("GET", `/documents/${carried?.id ?? ""}/content`);
+    expect(body.rawPayload.toString("utf8")).toBe("# Export screen\n");
+  });
+
+  it("leaves the original on the first department's desk", async () => {
+    await fileOnTheWork();
+    await finish();
+
+    expect((await trayOf(taskId, "out")).map((one) => one.name)).toEqual(["export-screen.md"]);
+  });
+
+  it("is a copy of its own, not the same document on two desks", async () => {
+    await fileOnTheWork();
+    await finish();
+
+    const [original] = await trayOf(taskId, "out");
+    const [carried] = await trayOf(await handedOn(), "in");
+    expect(carried?.id).not.toBe(original?.id);
+  });
+
+  it("says on the log that a document arrived, so a canvas sees it", async () => {
+    await fileOnTheWork();
+    await finish();
+
+    const kinds = log.since(officeId, 0).map((event) => event.data["kind"]);
+    // The first is the filing; the second is the copy landing next door.
+    expect(kinds.filter((kind) => kind === "document.added")).toHaveLength(2);
+  });
+
+  it("hands work on with an empty tray when the work produced nothing", async () => {
+    await finish();
+    expect(await trayOf(await handedOn(), "in")).toEqual([]);
+  });
+
+  it("does not hand anything on at all when the arrow is switched off", async () => {
+    const connections = await send("GET", `/offices/${officeId}/connections`);
+    const arrow = connections.json<{ items: { id: string }[] }>().items[0];
+    await app.inject({
+      method: "PATCH",
+      url: `/connections/${arrow?.id ?? ""}`,
+      headers: auth,
+      payload: { enabled: false },
+    });
+
+    await fileOnTheWork();
+    await finish();
+    expect(await handedOn()).toBe("");
+  });
+});

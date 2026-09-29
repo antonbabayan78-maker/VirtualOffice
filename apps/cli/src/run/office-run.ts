@@ -48,6 +48,7 @@ import {
 import {
   InMemoryBlobStore,
   InMemoryRelationalStore,
+  copyIntoTray,
   fileDocument,
   listTray,
   readDocument,
@@ -173,7 +174,11 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       }));
   };
 
-  const contextFor = (task: Task, employeeId: EmployeeId | null): WorkflowContext => {
+  const contextFor = (
+    task: Task,
+    employeeId: EmployeeId | null,
+    documents: readonly DocumentId[] = [],
+  ): WorkflowContext => {
     const department = departments.get(task.departmentId);
     const employee = employeeId === null ? undefined : employees.get(employeeId);
     const assignee = task.assigneeId === null ? undefined : employees.get(task.assigneeId);
@@ -189,6 +194,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     }));
     return {
       policy: department?.reviewPolicy ?? { kind: "direct" },
+      documents,
       acceptanceCriteria: acceptanceCriteriaFor(
         task.acceptanceCriteria,
         department?.definitionOfDone ?? [],
@@ -203,8 +209,22 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     };
   };
 
-  const dispatch = (task: Task, event: WorkflowEvent, actor: EmployeeId | null): Task => {
-    const outcome = engine.handle(task, event, contextFor(task, actor));
+  const dispatch = async (
+    task: Task,
+    event: WorkflowEvent,
+    actor: EmployeeId | null,
+  ): Promise<Task> => {
+    // What this work produced, so the engine can say what travels with it.
+    const produced = await listTray(store.documents, { kind: "task", id: task.id }, "out");
+    const outcome = engine.handle(
+      task,
+      event,
+      contextFor(
+        task,
+        actor,
+        produced.map((document) => document.id),
+      ),
+    );
     if (!outcome.ok) {
       // A refused transition is the engine telling us the office is not in the
       // state we thought; leave the task alone and let the next tick decide.
@@ -237,6 +257,15 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
         continue;
       }
       tasks.set(placed.value.task.id, placed.value.task);
+
+      // Copies naming one body, so the department that made it still holds it.
+      await copyIntoTray(
+        store.documents,
+        effect.documents,
+        { kind: "task", id: placed.value.task.id },
+        "in",
+        { id: documentId, now },
+      );
     }
     return outcome.value.task;
   };
@@ -313,7 +342,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     })) {
       // Each event is applied to where the last one left the task; a refused
       // one leaves it untouched and the next is judged against that.
-      current = dispatch(current, event, job.employeeId);
+      current = await dispatch(current, event, job.employeeId);
     }
   };
 
@@ -341,7 +370,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   };
 
   /** Puts every waiting task to the owner. True when any of them was answered. */
-  const answerGates = (): boolean => {
+  const answerGates = async (): Promise<boolean> => {
     const decide = options.decide;
     if (decide === undefined) return false;
     let answered = false;
@@ -350,7 +379,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       if (gates.length === 0) continue;
       const decision = decide({ task, gates });
       if (decision === null) continue;
-      dispatch(
+      await dispatch(
         task,
         {
           type: "gate_decided",
@@ -382,7 +411,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     const quiet = report.enqueued === 0 && report.processed === 0 && pending.pending === 0;
     // Quiet may only mean the office is waiting on a person. Ask, and carry on
     // if somebody answered; an unanswered gate ends the run rather than spins.
-    if (quiet && !answerGates()) break;
+    if (quiet && !(await answerGates())) break;
   }
 
   const finished = [...tasks.values()];
