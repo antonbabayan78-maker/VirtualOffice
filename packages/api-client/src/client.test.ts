@@ -463,3 +463,186 @@ describe("changing an arrow", () => {
     if (result.ok) expect(result.value.connections[0]?.enabled).toBe(true);
   });
 });
+
+const documentRow = {
+  id: "doc-1",
+  officeId: "office-1",
+  ownerKind: "employee",
+  ownerId: "emp-ada",
+  tray: "in",
+  name: "brief.md",
+  mediaType: "text/markdown",
+  size: 8,
+  blobRef: "office-1/documents/doc-1",
+  addedBy: null,
+  addedAt: "2026-09-29T09:00:00.000Z",
+};
+
+describe("documents", () => {
+  it("lists what an office is holding, with real dates", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/documents`, () =>
+        HttpResponse.json({ items: [documentRow] }),
+      ),
+    );
+
+    const result = await client().listDocuments("office-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]?.name).toBe("brief.md");
+      expect(result.value[0]?.addedAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it("asks for one tray when told which", async () => {
+    let asked = "";
+    server.use(
+      http.get(`${BASE}/offices/office-1/documents`, ({ request }) => {
+        asked = new URL(request.url).search;
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    await client().listDocuments("office-1", {
+      ownerKind: "employee",
+      ownerId: "emp-ada",
+      tray: "out",
+    });
+    expect(asked).toBe("?ownerKind=employee&ownerId=emp-ada&tray=out");
+  });
+
+  it("escapes an owner id rather than pasting it into a query", async () => {
+    let asked = "";
+    server.use(
+      http.get(`${BASE}/offices/office-1/documents`, ({ request }) => {
+        asked = new URL(request.url).searchParams.get("ownerId") ?? "";
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    await client().listDocuments("office-1", {
+      ownerKind: "task",
+      ownerId: "a&b=c",
+      tray: "in",
+    });
+    expect(asked).toBe("a&b=c");
+  });
+
+  it("sends a document as base64 and gets the filed document back", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/offices/office-1/documents`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(documentRow, { status: 201 });
+      }),
+    );
+
+    const result = await client().uploadDocument("office-1", {
+      ownerKind: "employee",
+      ownerId: "emp-ada",
+      tray: "in",
+      name: "brief.md",
+      mediaType: "text/markdown",
+      body: new TextEncoder().encode("# Brief\n"),
+    });
+
+    expect(sent["contentBase64"]).toBe(Buffer.from("# Brief\n").toString("base64"));
+    expect(sent["name"]).toBe("brief.md");
+    expect(result.ok).toBe(true);
+  });
+
+  it("encodes bytes that are not text, and does not choke on a large one", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/offices/office-1/documents`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(documentRow, { status: 201 });
+      }),
+    );
+
+    // Spreading a megabyte into String.fromCharCode overflows the stack, which
+    // is exactly the size of document this is for.
+    const big = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < big.length; i += 1) big[i] = i % 256;
+    await client().uploadDocument("office-1", {
+      ownerKind: "task",
+      ownerId: "task-1",
+      tray: "out",
+      name: "dump.bin",
+      body: big,
+    });
+
+    expect(sent["contentBase64"]).toBe(Buffer.from(big).toString("base64"));
+  });
+
+  it("says which field an office refused", async () => {
+    server.use(
+      http.post(`${BASE}/offices/office-1/documents`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "name", message: "must be a file name" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const result = await client().uploadDocument("office-1", {
+      ownerKind: "employee",
+      ownerId: "emp-ada",
+      tray: "in",
+      name: "../x",
+      body: new Uint8Array(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.path).toBe("name");
+    }
+  });
+
+  it("brings a body back as bytes, not as text somebody has to decode", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    server.use(
+      http.get(`${BASE}/documents/doc-1/content`, () =>
+        HttpResponse.arrayBuffer(png.buffer, {
+          headers: { "content-type": "application/octet-stream" },
+        }),
+      ),
+    );
+
+    const result = await client().downloadDocument("doc-1");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toEqual(png);
+  });
+
+  it("reports a body the office has not got", async () => {
+    server.use(
+      http.get(`${BASE}/documents/doc-1/content`, () =>
+        HttpResponse.json({ error: "document not found" }, { status: 404 }),
+      ),
+    );
+
+    const result = await client().downloadDocument("doc-1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("transport");
+  });
+
+  it("takes a document off a desk, which answers with nothing at all", async () => {
+    server.use(
+      http.delete(`${BASE}/documents/doc-1`, () => new HttpResponse(null, { status: 204 })),
+    );
+
+    // An empty body is this route working, not this route failing.
+    const result = await client().deleteDocument("doc-1");
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports a document that was already gone", async () => {
+    server.use(
+      http.delete(`${BASE}/documents/doc-1`, () =>
+        HttpResponse.json({ error: "document not found" }, { status: 404 }),
+      ),
+    );
+
+    const result = await client().deleteDocument("doc-1");
+    expect(result.ok).toBe(false);
+  });
+});

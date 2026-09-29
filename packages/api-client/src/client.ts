@@ -11,7 +11,15 @@
  * the edge. A Date that is secretly a string survives right up until something
  * compares or formats it.
  */
-import type { Connection, Department, Employee, Office, Task, ValidationError } from "@vo/core";
+import type {
+  Connection,
+  Department,
+  Document,
+  Employee,
+  Office,
+  Task,
+  ValidationError,
+} from "@vo/core";
 
 export type ApiResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -42,6 +50,15 @@ export interface ApiClient {
    * the move.
    */
   postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
+  /** A whole office's documents, or one tray of them. */
+  listDocuments(officeId: string, tray?: DocumentFilter): Promise<ApiResult<readonly Document[]>>;
+  uploadDocument(officeId: string, input: UploadDocument): Promise<ApiResult<Document>>;
+  /**
+   * The body itself, as bytes. Not a URL: a link would have to carry the token,
+   * and a token in a URL is a token in a log.
+   */
+  downloadDocument(id: string): Promise<ApiResult<Uint8Array>>;
+  deleteDocument(id: string): Promise<ApiResult<true>>;
   patchOffice(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -64,6 +81,22 @@ export interface ApiClient {
   ): Promise<ApiResult<Employee>>;
 }
 
+export interface DocumentFilter {
+  readonly ownerKind: string;
+  readonly ownerId: string;
+  readonly tray: string;
+}
+
+export interface UploadDocument {
+  readonly ownerKind: string;
+  readonly ownerId: string;
+  readonly tray: string;
+  readonly name: string;
+  readonly mediaType?: string;
+  readonly body: Uint8Array;
+  readonly addedBy?: string;
+}
+
 export interface ApiClientOptions {
   readonly baseUrl: string;
   readonly token: string;
@@ -74,6 +107,10 @@ export interface ApiClientOptions {
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
 const asDate = (value: unknown): Date => new Date(String(value));
+
+function reviveDocument(raw: Record<string, unknown>): Document {
+  return { ...raw, addedAt: asDate(raw["addedAt"]) } as unknown as Document;
+}
 
 function reviveOffice(raw: Record<string, unknown>): Office {
   return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Office;
@@ -128,6 +165,16 @@ function reviveEmployee(raw: Record<string, unknown>): Employee {
   } as unknown as Employee;
 }
 
+/** Bytes as JSON can carry them. Chunked: spreading a megabyte overflows the stack. */
+function toBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
+  }
+  return btoa(binary);
+}
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -173,6 +220,37 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     }
   };
 
+  /**
+   * A call that answers with bytes rather than JSON. Its own function because
+   * `call` reads the body as text and parses it, which a document is not.
+   */
+  const callBytes = async (
+    path: string,
+  ): Promise<{ ok: true; status: number; bytes: Uint8Array } | { ok: false; message: string }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const response = await doFetch(`${options.baseUrl}${path}`, {
+        signal: controller.signal,
+        headers: { authorization: `Bearer ${options.token}` },
+      });
+      return {
+        ok: true,
+        status: response.status,
+        bytes: new Uint8Array(await response.arrayBuffer()),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: `could not reach the office: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   /** One reading of a response, so every route treats failure the same way. */
   const interpret = <T>(
     response: Awaited<ReturnType<typeof call>>,
@@ -207,6 +285,22 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       };
     }
     return { ok: true, value: revive(body) };
+  };
+
+  /**
+   * A response that says nothing when it worked. `interpret` reads an empty body
+   * as a failure, which is right everywhere else and wrong for a delete.
+   */
+  const nothing = (response: Awaited<ReturnType<typeof call>>): ApiResult<true> => {
+    if (!response.ok) return { ok: false, kind: "transport", message: response.message };
+    if (response.status >= 300) {
+      return {
+        ok: false,
+        kind: "transport",
+        message: `the office answered ${String(response.status)}`,
+      };
+    }
+    return { ok: true, value: true };
   };
 
   const patch = async <T>(
@@ -265,6 +359,53 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await call(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify(event) }),
         reviveTask,
       ),
+
+    listDocuments: async (officeId, tray) => {
+      // Built rather than pasted: an owner id is somebody else's string.
+      const query =
+        tray === undefined
+          ? ""
+          : `?${new URLSearchParams({
+              ownerKind: tray.ownerKind,
+              ownerId: tray.ownerId,
+              tray: tray.tray,
+            }).toString()}`;
+      return interpret(await call(`/offices/${officeId}/documents${query}`), (raw) =>
+        ((raw["items"] ?? []) as Record<string, unknown>[]).map(reviveDocument),
+      );
+    },
+
+    uploadDocument: async (officeId, input) =>
+      interpret(
+        await call(`/offices/${officeId}/documents`, {
+          method: "POST",
+          body: JSON.stringify({
+            ownerKind: input.ownerKind,
+            ownerId: input.ownerId,
+            tray: input.tray,
+            name: input.name,
+            ...(input.mediaType === undefined ? {} : { mediaType: input.mediaType }),
+            contentBase64: toBase64(input.body),
+            ...(input.addedBy === undefined ? {} : { addedBy: input.addedBy }),
+          }),
+        }),
+        reviveDocument,
+      ),
+
+    downloadDocument: async (id) => {
+      const response = await callBytes(`/documents/${id}/content`);
+      if (!response.ok) return { ok: false, kind: "transport", message: response.message };
+      if (response.status >= 300) {
+        return {
+          ok: false,
+          kind: "transport",
+          message: `the office answered ${String(response.status)}`,
+        };
+      }
+      return { ok: true, value: response.bytes };
+    },
+
+    deleteDocument: async (id) => nothing(await call(`/documents/${id}`, { method: "DELETE" })),
 
     patchOffice: (id, changes, sinceOffset) =>
       patch(`/offices/${id}`, changes, sinceOffset, reviveOffice),
