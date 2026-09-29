@@ -78,6 +78,92 @@ function isKind(v: unknown): v is ConnectorKind {
   return typeof v === "string" && (CONNECTOR_KINDS as readonly string[]).includes(v);
 }
 
+/**
+ * What may be changed about a connector after it exists. Absent leaves a field
+ * alone; there is no way to unset one, because every field here has a meaning
+ * when empty rather than when missing.
+ */
+export interface UpdateConnectorInput {
+  readonly name?: string;
+  readonly config?: Record<string, unknown>;
+  readonly tools?: readonly string[];
+  readonly enabled?: boolean;
+  readonly secretRef?: string | null;
+}
+
+/**
+ * Changes a connector, keeping it the same connector.
+ *
+ * Switching one off is the reason this exists. Deleting a connector loses every
+ * grant that names it, and pausing a service for an afternoon should not cost
+ * that — the grants stay, resolve to nothing while it is off, and work again
+ * when it comes back.
+ *
+ * `existing` is the office's other connectors, for the name check, and excludes
+ * this one: a connector does not collide with itself.
+ */
+export function updateConnector(
+  connector: Connector,
+  changes: UpdateConnectorInput,
+  existing: readonly { readonly name: string }[],
+): Result<Connector> {
+  const errors: ValidationError[] = [];
+
+  const name = (changes.name ?? connector.name).trim();
+  if (!NAME.test(name)) {
+    errors.push({ path: "name", message: "must be a kebab-case identifier of 1-64 characters" });
+  } else if (
+    existing.some(
+      (other) => other.name.toLowerCase() === name.toLowerCase() && other.name !== connector.name,
+    )
+  ) {
+    errors.push({
+      path: "name",
+      message: `a connector named "${name}" already exists in this office`,
+    });
+  }
+
+  const tools = changes.tools ?? connector.tools;
+  errors.push(...validateToolNames(tools));
+
+  const config = changes.config ?? connector.config;
+  if (!isRecord(config)) errors.push({ path: "config", message: "must be an object" });
+
+  const enabled = changes.enabled ?? connector.enabled;
+  if (typeof enabled !== "boolean") {
+    errors.push({ path: "enabled", message: "must be true or false" });
+  }
+
+  if (errors.length > 0 || !isRecord(config) || typeof enabled !== "boolean") return err(errors);
+  return ok({
+    ...connector,
+    name,
+    tools: [...tools],
+    config: { ...config },
+    enabled,
+    ...(changes.secretRef === undefined ? {} : { secretRef: changes.secretRef }),
+  });
+}
+
+/** What a connector may call its tools, shared by creating one and changing one. */
+function validateToolNames(tools: readonly string[]): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const seen = new Set<string>();
+  tools.forEach((tool, index) => {
+    const path = `tools[${String(index)}]`;
+    if (tool.length === 0 || tool === WILDCARD_TOOL)
+      errors.push({ path, message: 'must be a non-empty tool name other than "*"' });
+    else if (tool.includes(TOOL_WIRE_SEPARATOR))
+      errors.push({
+        path,
+        message: `must not contain "${TOOL_WIRE_SEPARATOR}", which separates a connector from its tool`,
+      });
+    else if (seen.has(tool)) errors.push({ path, message: `duplicate tool "${tool}"` });
+    seen.add(tool);
+  });
+  return errors;
+}
+
 export function createConnector(
   input: CreateConnectorInput,
   existing: readonly { readonly name: string }[],
@@ -97,19 +183,7 @@ export function createConnector(
     });
   }
 
-  const seen = new Set<string>();
-  input.tools.forEach((tool, i) => {
-    const path = `tools[${String(i)}]`;
-    if (tool.length === 0 || tool === WILDCARD_TOOL)
-      errors.push({ path, message: 'must be a non-empty tool name other than "*"' });
-    else if (tool.includes(TOOL_WIRE_SEPARATOR))
-      errors.push({
-        path,
-        message: `must not contain "${TOOL_WIRE_SEPARATOR}", which separates a connector from its tool`,
-      });
-    else if (seen.has(tool)) errors.push({ path, message: `duplicate tool "${tool}"` });
-    seen.add(tool);
-  });
+  errors.push(...validateToolNames(input.tools));
 
   const config = input.config ?? {};
   if (!isRecord(config)) errors.push({ path: "config", message: "must be an object" });

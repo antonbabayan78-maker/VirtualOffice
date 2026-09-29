@@ -7,6 +7,7 @@ import {
   createConnector,
   resolveToolAccess,
   splitToolWireName,
+  updateConnector,
   toolWireName,
   validateToolGrants,
   type Connector,
@@ -266,5 +267,85 @@ describe("a connector that reads the web", () => {
       { id: () => "conn-web" as ConnectorId, now: () => new Date("2026-09-30T09:00:00Z") },
     );
     expect(unwrap(made).kind).toBe("web");
+  });
+});
+
+describe("changing a connector without redrawing it", () => {
+  const web = () =>
+    unwrap(
+      createConnector(
+        {
+          officeId,
+          kind: "web",
+          name: "design-web",
+          tools: ["fetch_url"],
+          config: { hosts: ["help.figma.com"] },
+        },
+        [],
+        { id: () => "conn-web" as ConnectorId, now: () => new Date("2026-09-30T09:00:00Z") },
+      ),
+    );
+
+  it("switches one off without losing anything that names it", () => {
+    // Deleting a connector loses every grant pointing at it. Pausing should not.
+    const off = unwrap(updateConnector(web(), { enabled: false }, []));
+    expect(off).toMatchObject({ enabled: false, name: "design-web", tools: ["fetch_url"] });
+  });
+
+  it("switches one back on", () => {
+    const off = unwrap(updateConnector(web(), { enabled: false }, []));
+    expect(unwrap(updateConnector(off, { enabled: true }, [])).enabled).toBe(true);
+  });
+
+  it("adds a host without retyping the connector", () => {
+    const wider = unwrap(
+      updateConnector(web(), { config: { hosts: ["help.figma.com", "*.w3.org"] } }, []),
+    );
+    expect(wider.config["hosts"]).toEqual(["help.figma.com", "*.w3.org"]);
+  });
+
+  it("leaves alone everything the change does not mention", () => {
+    const changed = unwrap(updateConnector(web(), { enabled: false }, []));
+    expect(changed.config).toEqual({ hosts: ["help.figma.com"] });
+    expect(changed.id).toBe(web().id);
+    expect(changed.createdAt).toEqual(web().createdAt);
+    expect(changed.kind).toBe("web");
+  });
+
+  it("renames one", () => {
+    expect(unwrap(updateConnector(web(), { name: "figma-web" }, [])).name).toBe("figma-web");
+  });
+
+  it("refuses a name another connector in this office already has", () => {
+    const refused = updateConnector(web(), { name: "ops-web" }, [{ name: "ops-web" }]);
+    if (!isErr(refused)) throw new Error("expected this change to be refused");
+    expect(refused.error[0]?.path).toBe("name");
+  });
+
+  it("does not think a connector collides with itself", () => {
+    expect(isOk(updateConnector(web(), { name: "design-web" }, [{ name: "design-web" }]))).toBe(
+      true,
+    );
+  });
+
+  it("refuses a name that is not one", () => {
+    expect(isErr(updateConnector(web(), { name: "Not Kebab Case" }, []))).toBe(true);
+  });
+
+  it("changes what it offers, refusing a tool name a catalogue could not tell apart", () => {
+    expect(
+      unwrap(updateConnector(web(), { tools: ["fetch_url", "check_status"] }, [])).tools,
+    ).toEqual(["fetch_url", "check_status"]);
+    expect(isErr(updateConnector(web(), { tools: ["fetch__url"] }, []))).toBe(true);
+  });
+
+  it("refuses configuration that is not an object", () => {
+    expect(isErr(updateConnector(web(), { config: ["hosts"] as never }, []))).toBe(true);
+  });
+
+  it("says everything wrong at once", () => {
+    const refused = updateConnector(web(), { name: "Bad Name", tools: ["a__b"] }, []);
+    if (!isErr(refused)) throw new Error("expected this change to be refused");
+    expect(refused.error.map((problem) => problem.path).sort()).toEqual(["name", "tools[0]"]);
   });
 });
