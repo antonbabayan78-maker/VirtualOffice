@@ -8,6 +8,7 @@ import {
   DOCUMENT_SIZE_MAX,
   DOCUMENT_TRAYS,
   blobRefFor,
+  copyDocument,
   createDocument,
   isDocumentOwnerKind,
   isDocumentTray,
@@ -172,5 +173,74 @@ describe("knowing a tray and an owner kind when you see one", () => {
   it("does not recognise anything else", () => {
     expect(isDocumentTray("archive")).toBe(false);
     expect(isDocumentOwnerKind("office ")).toBe(false);
+  });
+});
+
+describe("a copy of a document on somebody else's desk", () => {
+  const source = unwrap(
+    createDocument(input({ owner: { kind: "task", id: "task-design" }, tray: "out" }), deps),
+  );
+  const later = { id: () => "doc-2" as DocumentId, now: () => new Date("2026-09-30T11:00:00Z") };
+  const copy = () =>
+    unwrap(copyDocument(source, { kind: "task", id: "task-engineering" }, "in", later));
+
+  it("points at the very same body", () => {
+    // The whole reason a copy is a copy: two desks, one document, written once.
+    expect(copy().blobRef).toBe(source.blobRef);
+  });
+
+  it("is its own document, not the same one twice", () => {
+    expect(copy().id).toBe("doc-2");
+    expect(copy().id).not.toBe(source.id);
+  });
+
+  it("lands on the desk it was given to, in the tray it was put in", () => {
+    expect(copy()).toMatchObject({ ownerKind: "task", ownerId: "task-engineering", tray: "in" });
+  });
+
+  it("arrived when it arrived, not when the original was written", () => {
+    // What makes the audit log readable: this is when it landed on this desk.
+    expect(copy().addedAt).toEqual(new Date("2026-09-30T11:00:00Z"));
+  });
+
+  it("is still the same document to read: same name, kind and size", () => {
+    expect(copy()).toMatchObject({
+      name: source.name,
+      mediaType: source.mediaType,
+      size: source.size,
+    });
+  });
+
+  it("stays in the office the original belonged to", () => {
+    expect(copy().officeId).toBe(source.officeId);
+  });
+
+  it("says who handed it over, when somebody did", () => {
+    const handed = unwrap(
+      copyDocument(source, { kind: "task", id: "task-engineering" }, "in", later, {
+        addedBy: "emp-iris" as EmployeeId,
+      }),
+    );
+    expect(handed.addedBy).toBe("emp-iris");
+  });
+
+  it("carries the original's filer when nobody is named", () => {
+    const from = unwrap(
+      createDocument(input({ addedBy: "emp-theo" as EmployeeId, tray: "out" }), deps),
+    );
+    expect(unwrap(copyDocument(from, { kind: "task", id: "t" }, "in", later)).addedBy).toBe(
+      "emp-theo",
+    );
+  });
+
+  it("refuses a desk the office does not have", () => {
+    const refused = copyDocument(source, { kind: "manager" as never, id: "x" }, "in", later);
+    if (!isErr(refused)) throw new Error("expected this copy to be refused");
+    expect(refused.error.map((problem) => problem.path)).toContain("owner.kind");
+  });
+
+  it("refuses a tray that is not a tray", () => {
+    const refused = copyDocument(source, { kind: "task", id: "t" }, "pending" as never, later);
+    expect(isErr(refused)).toBe(true);
   });
 });

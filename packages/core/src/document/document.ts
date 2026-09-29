@@ -176,3 +176,55 @@ export function createDocument(input: CreateDocumentInput, deps: DocumentDeps): 
     addedAt: deps.now(),
   });
 }
+
+/** Who is handing a document on, when it is not whoever filed it. */
+export interface CopyDocumentInput {
+  readonly addedBy?: EmployeeId | null;
+}
+
+/**
+ * The same document, on another desk.
+ *
+ * A copy keeps the source's `blobRef` rather than deriving its own, which is the
+ * whole point: two desks holding one document that was written once. That is
+ * also why removing a document counts the rows still naming its body before
+ * deleting it — a rule written before anything could make a copy, for this.
+ *
+ * Its own id and its own arrival time, though, because the audit log has to be
+ * able to say when this landed here rather than when the original was written.
+ * Sharing a row between two owners would make that unanswerable, which is the
+ * argument against sharing rather than copying.
+ */
+export function copyDocument(
+  source: Document,
+  to: DocumentOwnerRef,
+  tray: DocumentTray,
+  deps: DocumentDeps,
+  input: CopyDocumentInput = {},
+): Result<Document> {
+  const errors: ValidationError[] = [];
+  if (!isDocumentOwnerKind(to.kind)) {
+    errors.push({
+      path: "owner.kind",
+      message: `must be one of ${DOCUMENT_OWNER_KINDS.join(", ")}`,
+    });
+  }
+  const ownerId = typeof to.id === "string" ? to.id.trim() : "";
+  if (ownerId.length === 0) errors.push({ path: "owner.id", message: "must not be empty" });
+  if (!isDocumentTray(tray)) {
+    errors.push({ path: "tray", message: `must be one of ${DOCUMENT_TRAYS.join(", ")}` });
+  }
+  if (errors.length > 0 || !isDocumentOwnerKind(to.kind) || !isDocumentTray(tray)) {
+    return err(errors);
+  }
+
+  return ok({
+    ...source,
+    id: deps.id(),
+    ownerKind: to.kind,
+    ownerId,
+    tray,
+    addedBy: input.addedBy ?? source.addedBy,
+    addedAt: deps.now(),
+  });
+}
