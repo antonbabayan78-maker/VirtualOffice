@@ -6,6 +6,7 @@ import {
   createConnection,
   createConnector,
   createDepartment,
+  createDocument,
   createEmployee,
   createMemoryItem,
   createOffice,
@@ -18,6 +19,8 @@ import {
   type ConnectorId,
   type Department,
   type DepartmentId,
+  type Document,
+  type DocumentId,
   type Employee,
   type EmployeeId,
   type MemoryItem,
@@ -194,4 +197,27 @@ export function snapshot(id: string, officeId: string): OfficeSnapshot {
       connectors: [connector("k1", officeId)],
     },
   };
+}
+
+export function document(
+  id: string,
+  officeId: string,
+  ownerId: string,
+  tray: "in" | "out" = "in",
+  ownerKind: "office" | "department" | "employee" | "task" = "employee",
+): Document {
+  return unwrap(
+    createDocument(
+      {
+        officeId: officeId as OfficeId,
+        owner: { kind: ownerKind, id: ownerId },
+        tray,
+        name: `${id}.md`,
+        mediaType: "text/markdown",
+        size: 12,
+        addedBy: "e1" as EmployeeId,
+      },
+      { id: () => id as DocumentId, now: () => T0 },
+    ),
+  );
 }

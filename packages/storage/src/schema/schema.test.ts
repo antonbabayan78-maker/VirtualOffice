@@ -43,8 +43,28 @@ describe("canonical schema", () => {
     }
   });
 
+  it("promotes what a tray listing filters on, because a nested owner would never match", () => {
+    // The repository matches on equality of top-level fields, so the owner and
+    // the tray have to be columns of their own. Listing one tray is the only
+    // reason documents are stored at all.
+    const documents = CANONICAL_TABLES.find((t) => t.name === "documents");
+    const columns = (documents?.columns ?? []).map((c) => c.name);
+    for (const column of ["owner_kind", "owner_id", "tray", "blob_ref"]) {
+      expect(columns).toContain(column);
+    }
+    expect(
+      (documents?.indexes ?? []).some(
+        (i) => i.columns.includes("owner_id") && i.columns.includes("tray"),
+      ),
+    ).toBe(true);
+  });
+
   it("creates every canonical table across its migrations and can drop them all", () => {
-    expect(CANONICAL_MIGRATIONS.map((m) => m.id)).toEqual(["0001_initial", "0002_snapshots"]);
+    expect(CANONICAL_MIGRATIONS.map((m) => m.id)).toEqual([
+      "0001_initial",
+      "0002_snapshots",
+      "0003_documents",
+    ]);
     const created = CANONICAL_MIGRATIONS.flatMap((m) =>
       m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),
     );

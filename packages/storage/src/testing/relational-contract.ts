@@ -4,7 +4,7 @@
  * Every RelationalStore adapter (in-memory, SQLite, Postgres, MySQL, ...) must pass
  * this suite unchanged. Adapter tests call `relationalStoreContract(name, factory)`.
  */
-import type { OfficeId } from "@vo/core";
+import type { Document, OfficeId } from "@vo/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RelationalStore } from "../relational/types.js";
 import * as fx from "./fixtures.js";
@@ -42,6 +42,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         const k = fx.connector("k1", "o1");
         const s = fx.skill("tdd");
         const m = fx.memory("m1", "o1", "e1");
+        const doc = fx.document("doc1", "o1", "e1");
         const snap = fx.snapshot("snap-1", "o1");
         await store.snapshots.put(snap);
         await store.offices.put(o);
@@ -52,6 +53,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         await store.connectors.put(k);
         await store.skills.put(s);
         await store.memories.put(m);
+        await store.documents.put(doc);
 
         expect(await store.offices.get(o.id)).toEqual(o);
         expect(await store.departments.get(d.id)).toEqual(d);
@@ -61,6 +63,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         expect(await store.connectors.get(k.id)).toEqual(k);
         expect(await store.skills.get(s.id)).toEqual(s);
         expect(await store.memories.get(m.id)).toEqual(m);
+        expect(await store.documents.get(doc.id)).toEqual(doc);
         expect(await store.snapshots.get(snap.id)).toEqual(snap);
 
         const back = await store.offices.get(o.id);
@@ -89,6 +92,39 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         expect(await store.offices.delete("o1")).toBe(true);
         expect(await store.offices.delete("o1")).toBe(false);
         expect(await store.offices.get("o1")).toBeNull();
+      });
+    });
+
+    describe("trays", () => {
+      beforeEach(async () => {
+        await store.documents.put(fx.document("in-1", "o1", "e1", "in"));
+        await store.documents.put(fx.document("in-2", "o1", "e1", "in"));
+        await store.documents.put(fx.document("out-1", "o1", "e1", "out"));
+        await store.documents.put(fx.document("theirs", "o1", "e2", "in"));
+        await store.documents.put(fx.document("task-1", "o1", "t1", "out", "task"));
+      });
+
+      const ids = async (where: Partial<Document>): Promise<string[]> =>
+        (await store.documents.list({ where })).items.map((d) => d.id).sort();
+
+      it("lists one owner's in-tray and nobody else's", async () => {
+        expect(await ids({ ownerKind: "employee", ownerId: "e1", tray: "in" })).toEqual([
+          "in-1",
+          "in-2",
+        ]);
+      });
+
+      it("keeps the two trays apart", async () => {
+        expect(await ids({ ownerKind: "employee", ownerId: "e1", tray: "out" })).toEqual(["out-1"]);
+      });
+
+      it("does not confuse an owner of one kind with an id of another", async () => {
+        expect(await ids({ ownerKind: "task", ownerId: "t1", tray: "out" })).toEqual(["task-1"]);
+      });
+
+      it("counts the documents sharing one body, which is what makes deleting safe", async () => {
+        const doc = fx.document("in-1", "o1", "e1", "in");
+        expect(await store.documents.count({ blobRef: doc.blobRef })).toBe(1);
       });
     });
 

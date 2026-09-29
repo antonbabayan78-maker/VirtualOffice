@@ -7,6 +7,7 @@ import type {
   Connection,
   Connector,
   Department,
+  Document,
   Employee,
   MemoryItem,
   Office,
@@ -84,6 +85,7 @@ function collections(tables: () => Tables, maxPageSize: number): RelationalColle
     departments: repo<Department>("departments"),
     employees: repo<Employee>("employees"),
     tasks: repo<Task>("tasks"),
+    documents: repo<Document>("documents"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -109,6 +111,7 @@ export class InMemoryRelationalStore implements RelationalStore {
   readonly departments: EntityRepository<Department>;
   readonly employees: EntityRepository<Employee>;
   readonly tasks: EntityRepository<Task>;
+  readonly documents: EntityRepository<Document>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -125,6 +128,7 @@ export class InMemoryRelationalStore implements RelationalStore {
     this.departments = c.departments;
     this.employees = c.employees;
     this.tasks = c.tasks;
+    this.documents = c.documents;
     this.connections = c.connections;
     this.connectors = c.connectors;
     this.skills = c.skills;

@@ -112,13 +112,35 @@ const INITIAL_TABLES: readonly TableDef[] = [
   ),
 ];
 
+export const DOCUMENTS_TABLE: TableDef = table(
+  "documents",
+  [
+    id,
+    officeId,
+    // Flat, and indexed together: listing one tray is what this table is for,
+    // and a repository filters on equality of top-level fields.
+    { name: "owner_kind", type: "text" },
+    { name: "owner_id", type: "text" },
+    { name: "tray", type: "text" },
+    // Promoted so "is anybody else holding this body?" is a count, not a scan.
+    { name: "blob_ref", type: "text" },
+    { name: "added_at", type: "timestamp" },
+    data,
+  ],
+  [["office_id"], ["owner_kind", "owner_id", "tray"], ["blob_ref"]],
+);
+
 export const SNAPSHOTS_TABLE: TableDef = table(
   "snapshots",
   [id, officeId, { name: "version", type: "integer" }, createdAt, data],
   [["office_id", "version"]],
 );
 
-export const CANONICAL_TABLES: readonly TableDef[] = [...INITIAL_TABLES, SNAPSHOTS_TABLE];
+export const CANONICAL_TABLES: readonly TableDef[] = [
+  ...INITIAL_TABLES,
+  SNAPSHOTS_TABLE,
+  DOCUMENTS_TABLE,
+];
 
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
   {
@@ -130,5 +152,10 @@ export const CANONICAL_MIGRATIONS: readonly Migration[] = [
     id: "0002_snapshots",
     up: [{ op: "createTable", table: SNAPSHOTS_TABLE }],
     down: [{ op: "dropTable", name: SNAPSHOTS_TABLE.name }],
+  },
+  {
+    id: "0003_documents",
+    up: [{ op: "createTable", table: DOCUMENTS_TABLE }],
+    down: [{ op: "dropTable", name: DOCUMENTS_TABLE.name }],
   },
 ];
