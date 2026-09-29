@@ -97,6 +97,7 @@ export function watchEffects(
         `where the task "${after.title}" is now ${after.status}.`,
       // Not handed the work, only told about it.
       artifacts: [],
+      documents: [],
       priority: after.priority,
       // Carries where the causing work has been, so the same rule that stops a
       // handoff going in circles stops a pair of watchers doing it too.

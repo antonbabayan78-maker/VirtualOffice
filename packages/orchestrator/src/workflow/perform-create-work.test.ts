@@ -19,6 +19,7 @@ const effect = (overrides: Partial<CreateWorkEffect> = {}): CreateWorkEffect => 
   title: "Draw the export screen",
   brief: "Handed on from Product.",
   artifacts: ["the brief"],
+  documents: [],
   priority: "high",
   route: ["dept-product" as DepartmentId],
   assign: { kind: "anyone" },

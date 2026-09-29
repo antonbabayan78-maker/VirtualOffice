@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Connection, ConnectionId, DepartmentId, OfficeId, TaskStatus } from "@vo/core";
+import type {
+  Connection,
+  ConnectionId,
+  DepartmentId,
+  DocumentId,
+  OfficeId,
+  TaskStatus,
+} from "@vo/core";
 import { momentOf, watchEffects } from "./watch.js";
 import type { WorkflowContext, WorkflowEffect } from "./workflow-types.js";
 
@@ -153,6 +160,20 @@ describe("a department watching another", () => {
     // A watcher is not handed the artifacts; it is told something happened.
     const [effect] = raised(fired("in_review", "done", [watcher({ for: ["work_finished"] })]));
     expect(effect).toMatchObject({ artifacts: [] });
+  });
+
+  it("does not carry the documents either, however many the work produced", () => {
+    // The same rule as the artifacts, and it needs saying separately: a handoff
+    // carries documents now, and a watcher reading the same context must not.
+    const context: WorkflowContext = {
+      policy: { kind: "direct" },
+      now: at,
+      documents: ["doc-brief" as DocumentId],
+      escalationGraph: { employees: [], connections: [watcher({ for: ["work_finished"] })] },
+    };
+    const [effect] = raised(watchEffects(task("in_review"), task("done"), [], context));
+
+    expect(effect).toMatchObject({ documents: [] });
   });
 
   it("lets several departments watch the same thing", () => {

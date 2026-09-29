@@ -7,6 +7,7 @@ import {
   transitionTask,
   type ConnectionId,
   type DepartmentId,
+  type DocumentId,
   type EmployeeId,
   type EmployeeStatus,
   type GatedAction,
@@ -55,6 +56,12 @@ export interface WorkflowContext {
    * department is.
    */
   readonly acceptanceCriteria?: readonly string[];
+  /**
+   * What this work produced: the documents in its out-tray, already resolved by
+   * the caller. Ids rather than bodies — the engine decides what travels, and
+   * whoever holds a store does the carrying.
+   */
+  readonly documents?: readonly DocumentId[];
   /** Who work escalates to. Absent means everything escalates to the owner. */
   readonly escalationGraph?: EscalationGraph;
 }
@@ -131,6 +138,12 @@ export type WorkflowEffect =
       readonly brief: string;
       /** What is being handed on. Never the transcript. */
       readonly artifacts: readonly string[];
+      /**
+       * The documents to put in the new work's in-tray, as ids. Copied rather
+       * than moved by whoever performs this, so both desks hold one, and both
+       * copies name the one body that was written.
+       */
+      readonly documents: readonly DocumentId[];
       readonly priority: TaskPriority;
       /** Where this work has been, including the department handing it on. */
       readonly route: readonly DepartmentId[];

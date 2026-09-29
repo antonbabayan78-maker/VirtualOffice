@@ -11,9 +11,10 @@
  * testable to the minute without a database, and it is why a handoff can be
  * reported when it cannot be placed instead of half-happening.
  *
- * Only artifacts and a brief travel. A transcript is the department's own
- * working, and handing it on would make every downstream prompt longer than the
- * last until the chain could not be afforded.
+ * What travels is the brief, the artifacts and the documents the work produced.
+ * Not the transcript: that is the department's own working, and handing it on
+ * would make every downstream prompt longer than the last until the chain could
+ * not be afforded.
  */
 import { parseHandoffRules, type Connection, type DepartmentId, type Task } from "@vo/core";
 import { resolveEscalationTarget } from "../escalation/escalation.js";
@@ -45,7 +46,12 @@ function visits(route: readonly DepartmentId[], department: DepartmentId): numbe
 export function handoffEffects(task: Task, context: WorkflowContext): readonly WorkflowEffect[] {
   const connections = context.escalationGraph?.connections ?? [];
   const outgoing = connections.filter(
-    (connection) => connection.kind === "handoff" && connection.fromId === task.departmentId,
+    (connection) =>
+      connection.kind === "handoff" &&
+      // An arrow switched off is an arrow the office does not act on, which is
+      // what the canvas has been promising and this is the arrow it matters on.
+      connection.enabled &&
+      connection.fromId === task.departmentId,
   );
   if (outgoing.length === 0) return [];
 
@@ -80,6 +86,7 @@ export function handoffEffects(task: Task, context: WorkflowContext): readonly W
       title: task.title,
       brief: `Handed on from ${task.departmentId}, which finished "${task.title}".`,
       artifacts: task.artifacts,
+      documents: context.documents ?? [],
       priority: task.priority,
       route,
       assign: assignmentOf(connection),
