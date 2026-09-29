@@ -13,6 +13,27 @@ office:
   name: Northwind Studio
   schedule: { kind: always }
 
+# What this office can reach outside itself. Each connector names the hosts it
+# may read, so granting one is granting exactly that much of the internet —
+# Design can look at Figma's help, Operations can read the status page, and
+# neither can read the other's.
+connectors:
+  - id: conn-web-design
+    kind: web
+    name: design-web
+    tools: [fetch_url]
+    config:
+      hosts:
+        - help.figma.com
+        - "*.w3.org"
+  - id: conn-web-ops
+    kind: web
+    name: ops-web
+    tools: [fetch_url]
+    config:
+      hosts:
+        - www.githubstatus.com
+
 departments:
   # A brief is not work until the head of product agrees it is the right work.
   - id: dept-product
@@ -34,6 +55,9 @@ departments:
     definitionOfDone:
       - every state is drawn, including the empty one
       - it works at phone width
+    # Granted to the room: hiring another designer does not mean granting again.
+    tools:
+      - { connector: conn-web-design, tool: fetch_url }
 
   # Engineers review each other. The manager runs the department, not the diff.
   - id: dept-engineering
@@ -57,6 +81,8 @@ departments:
     definitionOfDone:
       - the rollback was rehearsed
       - the release notes are written
+    tools:
+      - { connector: conn-web-ops, tool: fetch_url }
 
 employees:
   - id: emp-vera

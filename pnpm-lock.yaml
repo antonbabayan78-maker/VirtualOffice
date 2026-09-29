@@ -214,6 +214,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@vo/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core

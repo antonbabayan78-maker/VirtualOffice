@@ -23,6 +23,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@vo/connectors": "workspace:*",
     "@vo/core": "workspace:*",
     "@vo/llm": "workspace:*",
     "@vo/orchestrator": "workspace:*",

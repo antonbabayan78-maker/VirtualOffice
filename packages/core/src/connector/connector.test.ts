@@ -26,7 +26,7 @@ function connector(name: string, tools: string[], overrides: Partial<Connector> 
 
 describe("createConnector", () => {
   it("lists the connector kinds", () => {
-    expect(CONNECTOR_KINDS).toEqual(["mcp", "rest", "webhook", "plugin"]);
+    expect(CONNECTOR_KINDS).toEqual(["web", "mcp", "rest", "webhook", "plugin"]);
   });
 
   it("creates an enabled connector with defaults", () => {
@@ -247,5 +247,24 @@ describe("how a tool is named on the wire", () => {
 
   it("splits on the first separator, since only the connector name is guarded", () => {
     expect(splitToolWireName("web__a__b")).toEqual({ connector: "web", tool: "a__b" });
+  });
+});
+
+describe("a connector that reads the web", () => {
+  it("is a kind of its own, so an office says what it means", () => {
+    // Not "rest with some configuration": what an office is granting when it
+    // grants this is the ability to reach outside, and that deserves a name.
+    const made = createConnector(
+      {
+        officeId,
+        kind: "web",
+        name: "web",
+        tools: ["fetch_url"],
+        config: { hosts: ["acme.test"] },
+      },
+      [],
+      { id: () => "conn-web" as ConnectorId, now: () => new Date("2026-09-30T09:00:00Z") },
+    );
+    expect(unwrap(made).kind).toBe("web");
   });
 });

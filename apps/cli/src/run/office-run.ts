@@ -17,6 +17,7 @@ import {
   isErr,
   openTaskCounts,
   transitionTask,
+  type Employee,
   type EmployeeId,
   type GatedAction,
   type Document,
@@ -32,6 +33,7 @@ import {
   InProcessJobQueue,
   Worker,
   defaultWorkflowEngine,
+  catalogFor,
   llmAgentTurn,
   type DocumentSink,
   type HandedOver,
@@ -45,6 +47,7 @@ import {
   type WorkflowEffect,
   type WorkflowEvent,
 } from "@vo/orchestrator";
+import { officeBroker, type WebFetch } from "@vo/connectors";
 import {
   InMemoryBlobStore,
   InMemoryRelationalStore,
@@ -77,6 +80,11 @@ export interface OfficeRunOptions {
    * waits, which is the honest headless behaviour: nobody is at the desk.
    */
   readonly decide?: GateDecider;
+  /**
+   * How this run reaches the web. Injected so a test is offline and a rehearsal
+   * can answer without a network, exactly as the provider is.
+   */
+  readonly fetch?: WebFetch;
 }
 
 /** What a person is being asked to decide, and what they decided. */
@@ -304,11 +312,39 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       ),
   };
 
+  // What this office can reach, built once: it holds the HTTP client.
+  const broker = officeBroker(
+    config.connectors,
+    options.fetch === undefined ? {} : { fetch: options.fetch },
+  );
+  const describedTools = await broker.describe();
+
   const turn = llmAgentTurn({
     provider: options.provider,
     wrapProvider: (provider, attribution) => meterProvider(provider, { recorder, attribution }),
     documents: documentSink,
+    tools: broker,
   });
+
+  /**
+   * What one employee may call: the office's connectors, narrowed by the grants
+   * on its department and on itself. Resolved here because it needs the office,
+   * which the turn deliberately does not have.
+   */
+  const toolsFor = (employee: Employee) => {
+    const department = departments.get(employee.departmentId);
+    return {
+      grants: [...(department?.toolGrants ?? []), ...employee.toolGrants],
+      catalog: catalogFor(
+        {
+          connectors: config.connectors,
+          departmentGrants: department?.toolGrants ?? [],
+          employeeGrants: employee.toolGrants,
+        },
+        describedTools,
+      ),
+    };
+  };
 
   /** What this work was handed, as text a prompt can carry. */
   const handedOver = async (task: Task): Promise<readonly HandedOver[]> => {
@@ -333,12 +369,16 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       current.acceptanceCriteria,
       departments.get(current.departmentId)?.definitionOfDone ?? [],
     );
+    const reachable = toolsFor(actor);
     for (const event of await turn({
       task: current,
       actor,
       kind: job.kind,
       acceptanceCriteria: criteria,
       documents: await handedOver(current),
+      toolCatalog: reachable.catalog,
+      connectors: config.connectors,
+      toolGrants: reachable.grants,
     })) {
       // Each event is applied to where the last one left the task; a refused
       // one leaves it untouched and the next is judged against that.
