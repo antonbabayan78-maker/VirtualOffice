@@ -106,6 +106,7 @@ describe("reaching the office's own settings", () => {
         name: "Acme Robotics",
         schedule: { kind: "always" },
         priority: "normal",
+        runState: "running",
         configVersion: 1,
         createdAt: at,
       });
@@ -125,6 +126,7 @@ describe("reaching the office's own settings", () => {
         name: "Acme Robotics",
         schedule: { kind: "always" },
         priority: "normal",
+        runState: "running",
         configVersion: 1,
         createdAt: at,
       });

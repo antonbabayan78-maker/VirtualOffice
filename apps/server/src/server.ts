@@ -19,9 +19,15 @@ import {
   createEmployee,
   createConnector,
   createOffice,
+  EMPLOYEE_STATUSES,
   isDocumentOwnerKind,
   isDocumentTray,
+  isEmployeeStatus,
+  isRunState,
   openTaskCounts,
+  RUN_STATES,
+  setRunState,
+  transitionEmployee,
   updateConnection,
   updateConnector,
   updateOffice,
@@ -126,6 +132,21 @@ function claimedOffset(request: FastifyRequest): number | null {
   if (raw === undefined) return null;
   const offset = Number(raw);
   return Number.isFinite(offset) ? offset : null;
+}
+
+/**
+ * The run state a PUT body asks for, or null when it does not name one.
+ *
+ * These routes are PUTs because each says what the state should be rather than
+ * what to change it from - which is also why none of them checks
+ * `x-vo-since-offset`: an instruction to be paused has nothing to conflict
+ * with, and refusing it because somebody else also paused it would be absurd.
+ */
+function runStateFrom(body: unknown, errors: ValidationError[]): "running" | "paused" | null {
+  const value = (body as Record<string, unknown> | null)?.["runState"];
+  if (isRunState(value)) return value;
+  errors.push({ path: "runState", message: `must be one of ${RUN_STATES.join(", ")}` });
+  return null;
 }
 
 function missing(reply: FastifyReply, what: string): FastifyReply {
@@ -371,6 +392,25 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return office ?? missing(reply, "office");
   });
 
+  /**
+   * The switch. Separate from PATCH because stopping an office is not editing
+   * one: a rename must never start it, which is the rule core already holds.
+   */
+  app.put("/offices/:officeId/run-state", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    const office = await store.offices.get(officeId);
+    if (office === null) return missing(reply, "office");
+
+    const problems: ValidationError[] = [];
+    const runState = runStateFrom(request.body, problems);
+    if (runState === null) return fail(reply, problems);
+
+    const changed = setRunState(office, runState);
+    await store.offices.put(changed);
+    events.publish(office.id, { kind: "office.updated", id: officeId });
+    return changed;
+  });
+
   // -- departments -----------------------------------------------------------
 
   app.get("/offices/:officeId/departments", async (request) => {
@@ -458,6 +498,22 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.departments.put(updated.value);
     events.publish(department.officeId, { kind: "department.updated", id });
     return updated.value;
+  });
+
+  app.put("/departments/:id/run-state", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const department = await store.departments.get(id);
+    if (department === null) return missing(reply, "department");
+
+    const problems: ValidationError[] = [];
+    const runState = runStateFrom(request.body, problems);
+    if (runState === null) return fail(reply, problems);
+
+    // Its own switch: stopping a room says nothing about the office around it.
+    const changed = setRunState(department, runState);
+    await store.departments.put(changed);
+    events.publish(department.officeId, { kind: "department.updated", id });
+    return changed;
   });
 
   app.delete("/departments/:id", async (request, reply) => {
@@ -569,6 +625,35 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.employees.put(updated.value);
     events.publish(employee.officeId, { kind: "employee.updated", id });
     return updated.value;
+  });
+
+  /**
+   * Pausing somebody, and putting them back.
+   *
+   * Through `transitionEmployee`, which has held "termination is final" since
+   * it was written and until now had no caller outside its own tests. The rule
+   * is not restated here: a second copy of it is a second thing to get wrong.
+   */
+  app.put("/employees/:id/status", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    if (employee === null) return missing(reply, "employee");
+
+    const status = (request.body as Record<string, unknown> | null)?.["status"];
+    if (!isEmployeeStatus(status)) {
+      return fail(reply, [
+        { path: "status", message: `must be one of ${EMPLOYEE_STATUSES.join(", ")}` },
+      ]);
+    }
+    // Already there is not an error here, whatever core says about it: this
+    // route states a destination, and arriving twice is not a failure.
+    if (employee.status === status) return employee;
+
+    const moved = transitionEmployee(employee, status, now());
+    if (isErr(moved)) return fail(reply, moved.error);
+    await store.employees.put(moved.value);
+    events.publish(employee.officeId, { kind: "employee.updated", id });
+    return moved.value;
   });
 
   // -- tasks -----------------------------------------------------------------

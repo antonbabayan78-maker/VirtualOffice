@@ -54,6 +54,9 @@ function scriptedApi(): Scripted {
     createConnector: unused,
     patchConnector: unused,
     deleteConnector: unused,
+    setOfficeRunState: unused,
+    setDepartmentRunState: unused,
+    setEmployeeStatus: unused,
     listDocuments: unused,
     uploadDocument: (_officeId, input) => {
       uploads.push({ ...input });

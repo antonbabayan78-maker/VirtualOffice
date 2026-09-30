@@ -405,6 +405,7 @@ describe("the office itself", () => {
     name: "Acme",
     schedule: { kind: "always" as const },
     priority: "normal" as const,
+    runState: "running" as const,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };
@@ -459,6 +460,7 @@ describe("being told where the office actually lives", () => {
     name: "Acme",
     schedule: { kind: "always" as const },
     priority: "normal" as const,
+    runState: "running" as const,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };
@@ -642,6 +644,7 @@ describe("wiring an office up from the canvas", () => {
     name: "Acme",
     schedule: { kind: "always" as const },
     priority: "normal" as const,
+    runState: "running" as const,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };

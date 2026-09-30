@@ -775,3 +775,87 @@ describe("connectors", () => {
     expect(result.value.connectors.map((one) => one.name)).toEqual(["design-web"]);
   });
 });
+
+describe("stopping and starting work from a client", () => {
+  it("asks the office to stop, and says where", async () => {
+    let seen: { url: string; body: unknown } | null = null;
+    server.use(
+      http.put(`${BASE}/offices/office-acme/run-state`, async ({ request }) => {
+        seen = { url: request.url, body: await request.json() };
+        return HttpResponse.json({ id: "office-acme", runState: "paused" });
+      }),
+    );
+
+    const result = await client().setOfficeRunState("office-acme", "paused");
+    expect(result.ok && result.value.runState).toBe("paused");
+    expect(seen).toMatchObject({ body: { runState: "paused" } });
+  });
+
+  it("asks a room to stop", async () => {
+    server.use(
+      http.put(`${BASE}/departments/dept-eng/run-state`, () =>
+        HttpResponse.json({ id: "dept-eng", runState: "paused" }),
+      ),
+    );
+    const result = await client().setDepartmentRunState("dept-eng", "paused");
+    expect(result.ok && result.value.runState).toBe("paused");
+  });
+
+  it("pauses a person", async () => {
+    let body: unknown = null;
+    server.use(
+      http.put(`${BASE}/employees/emp-ada/status`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "emp-ada", status: "paused" });
+      }),
+    );
+
+    const result = await client().setEmployeeStatus("emp-ada", "paused");
+    expect(result.ok && result.value.status).toBe("paused");
+    expect(body).toEqual({ status: "paused" });
+  });
+
+  it("brings back what the office refused rather than swallowing it", async () => {
+    server.use(
+      http.put(`${BASE}/employees/emp-ada/status`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "status", message: "employee is terminated" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+    const result = await client().setEmployeeStatus("emp-ada", "active");
+    expect(result.ok).toBe(false);
+  });
+
+  it("calls an office that says nothing about a switch running", async () => {
+    // Every office stored before this existed says nothing, and is running.
+    server.use(
+      http.get(`${BASE}/offices/office-acme`, () =>
+        HttpResponse.json({ id: "office-acme", name: "Acme" }),
+      ),
+    );
+    const result = await client().getOffice("office-acme");
+    expect(result.ok && result.value.runState).toBe("running");
+  });
+
+  it("calls a department that says nothing about a switch running too", async () => {
+    server.use(
+      http.get(`${BASE}/departments/dept-eng`, () =>
+        HttpResponse.json({ id: "dept-eng", name: "Engineering" }),
+      ),
+    );
+    const result = await client().getDepartment("dept-eng");
+    expect(result.ok && result.value.runState).toBe("running");
+  });
+
+  it("leaves a stopped one stopped", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-acme`, () =>
+        HttpResponse.json({ id: "office-acme", runState: "paused" }),
+      ),
+    );
+    const result = await client().getOffice("office-acme");
+    expect(result.ok && result.value.runState).toBe("paused");
+  });
+});

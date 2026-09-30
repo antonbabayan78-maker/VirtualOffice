@@ -4,6 +4,8 @@ import type { OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
 import {
   createEmployee,
+  EMPLOYEE_STATUSES,
+  isEmployeeStatus,
   updateEmployee,
   transitionEmployee,
   type CreateEmployeeContext,
@@ -399,5 +401,19 @@ describe("an employee's standing priority", () => {
     const employee = unwrap(createEmployee({ ...base, priority: "high" }, ctx, deps));
     const after = unwrap(updateEmployee(employee, { name: "Ada L" }, { supervisor: null }));
     expect(after.priority).toBe("high");
+  });
+});
+
+describe("the statuses a person can be in", () => {
+  it("names them, so a caller can check one without a second list", () => {
+    // Every other closed set in core is exported this way; a route that spelt
+    // these out again would be a second list to keep in step.
+    expect(EMPLOYEE_STATUSES).toEqual(["active", "paused", "terminated"]);
+  });
+
+  it("recognises one, and refuses anything else", () => {
+    expect(isEmployeeStatus("paused")).toBe(true);
+    expect(isEmployeeStatus("napping")).toBe(false);
+    expect(isEmployeeStatus(undefined)).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ const acme: Office = {
   name: "Acme Robotics",
   schedule: { kind: "always" },
   priority: "normal",
+  runState: "running",
   configVersion: 1,
   createdAt: at,
 };
