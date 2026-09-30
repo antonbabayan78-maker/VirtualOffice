@@ -17,14 +17,20 @@ import {
   createDepartment,
   createEmployee,
   err,
+  TOOLS_BY_KIND,
   isErr,
   updateDepartment,
   updateConnection,
+  updateConnector,
   updateEmployee,
   updateOffice,
   type Connection,
   type ConnectionId,
   type UpdateConnectionInput,
+  type Connector,
+  type ConnectorId,
+  type ConnectorKind,
+  type UpdateConnectorInput,
   type Department,
   type DepartmentId,
   type Document,
@@ -95,6 +101,13 @@ export interface OfficeStoreState {
    */
   readonly documents: readonly Document[];
   /**
+   * What this office can reach outside itself, granted to anybody or not. Flat
+   * like `documents` rather than paired with a derived companion the way
+   * `connections` is with `links`: a connector has no geometry, and nothing on
+   * the canvas is recomputed from one.
+   */
+  readonly connectors: readonly Connector[];
+  /**
    * Whether a document is on its way to the office. The only thing the canvas
    * does that is not instant: bytes have to travel before the office can name
    * what arrived, so there is nothing to show optimistically.
@@ -140,6 +153,19 @@ export interface OfficeStoreState {
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
   removeTask(id: TaskId): void;
+  loadConnectors(connectors: readonly Connector[]): void;
+  /** Told about one, from the office's event stream. */
+  putConnector(connector: Connector): void;
+  dropConnector(id: ConnectorId): void;
+  /**
+   * Adds one at the office. Not optimistic: the office names it, and a connector
+   * with an id this canvas invented could be neither granted nor switched off.
+   */
+  addConnector(input: AddConnectorInput): Promise<SaveOutcome>;
+  /** Changes one here and then at the office, like any other save. */
+  saveConnector(id: ConnectorId, changes: UpdateConnectorInput): Promise<SaveOutcome>;
+  /** Takes one off the canvas first, and puts it back if the office refuses. */
+  removeConnector(id: ConnectorId): Promise<SaveOutcome>;
   loadDocuments(documents: readonly Document[]): void;
   /** Told about one, from the office's event stream. */
   putDocument(document: Document): void;
@@ -191,6 +217,13 @@ export const DEFAULT_GRID_SIZE = 20;
 /** What a save came to in the end, for the drawer that asked for it. */
 export type SaveOutcome =
   { readonly ok: true } | { readonly ok: false; readonly problems: readonly ValidationError[] };
+
+export interface AddConnectorInput {
+  readonly kind: ConnectorKind;
+  readonly name: string;
+  /** Whatever the kind needs; for the web, the hosts it may read. */
+  readonly config?: Record<string, unknown>;
+}
 
 export interface FileDocumentInput {
   readonly owner: DocumentOwnerRef;
@@ -245,6 +278,16 @@ function drawable(
       (connection) => present.has(connection.fromId) && present.has(connection.toId),
     ),
   );
+}
+
+/**
+ * Connectors read in name order, which is also how they are granted and how a
+ * tool is named on the wire. Creation order is whatever the office happened to
+ * answer with, and a settings panel that rearranges itself while somebody is
+ * using it is worse than one that loads slowly.
+ */
+function byName(connectors: readonly Connector[]): readonly Connector[] {
+  return [...connectors].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -347,6 +390,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
 
       documents: [],
       uploading: false,
+      connectors: [],
 
       load: (departments, employees = [], tasks = [], connections = []) => {
         const layout = deps.storage.readLayout();
@@ -536,6 +580,99 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       removeTask: (id) => {
         const tasks = get().tasks.filter((candidate) => candidate.id !== id);
         set({ tasks, activity: activityFromTasks(tasks) });
+      },
+
+      loadConnectors: (connectors) => {
+        set({ connectors: byName(connectors) });
+      },
+
+      putConnector: (connector) => {
+        const existing = get().connectors;
+        set({
+          connectors: byName(
+            existing.some((candidate) => candidate.id === connector.id)
+              ? existing.map((candidate) => (candidate.id === connector.id ? connector : candidate))
+              : [...existing, connector],
+          ),
+        });
+      },
+
+      dropConnector: (id) => {
+        set({ connectors: get().connectors.filter((candidate) => candidate.id !== id) });
+      },
+
+      addConnector: async (input) => {
+        // The office this canvas is showing, for the same reason filing a
+        // document asks: the app builds its store before reading its config.
+        const officeId = get().office?.id ?? deps.officeId;
+        if (connected === undefined || officeId === undefined) {
+          return { ok: false, problems: [{ path: "", message: "this canvas has no office yet" }] };
+        }
+
+        const answer = await connected.createConnector(officeId, {
+          kind: input.kind,
+          name: input.name,
+          // What the kind offers, rather than nothing: a connector with no tools
+          // is one the office can grant nothing of.
+          tools: TOOLS_BY_KIND[input.kind],
+          config: input.config ?? {},
+        });
+        if (answer.ok) {
+          get().putConnector(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveConnector: async (id, changes) => {
+        const before = get().connectors.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such connector" }] };
+        }
+
+        // The office's other connectors, for the name check: a connector does
+        // not collide with itself.
+        const applied = updateConnector(
+          before,
+          changes,
+          get().connectors.filter((candidate) => candidate.id !== id),
+        );
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        get().putConnector(applied.value);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.patchConnector(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        if (answer.ok) {
+          get().putConnector(answer.value);
+          return { ok: true };
+        }
+        get().putConnector(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      removeConnector: async (id) => {
+        const before = get().connectors.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such connector" }] };
+        }
+
+        // Grants naming it are left alone. They resolve to nothing without it,
+        // and rewriting every department and employee from here is a change
+        // nobody asked this panel to make.
+        get().dropConnector(id);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.deleteConnector(id);
+        if (answer.ok) return { ok: true };
+        get().putConnector(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 
       loadDocuments: (documents) => {

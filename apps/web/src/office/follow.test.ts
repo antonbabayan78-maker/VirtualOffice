@@ -5,6 +5,8 @@ import {
   createEmployee,
   unwrap,
   type Department,
+  type Connector,
+  type ConnectorId,
   type DepartmentId,
   type DocumentId,
   type Employee,
@@ -476,5 +478,102 @@ describe("documents arriving and leaving", () => {
 
     expect(store.getState().departments).toHaveLength(1);
     expect(store.getState().documents).toEqual([]);
+  });
+});
+
+describe("what the office can reach changing under you", () => {
+  const web = {
+    id: "conn-web" as ConnectorId,
+    officeId,
+    kind: "web" as const,
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: at,
+  };
+
+  const withConnectors = (connectors: readonly Connector[], listed = connectors) =>
+    fakeApi({
+      loadOffice: () =>
+        Promise.resolve({
+          ok: true,
+          value: {
+            office: { id: officeId } as never,
+            departments: [eng],
+            employees: [ada],
+            tasks: [],
+            connections: [],
+            connectors,
+          },
+        }),
+      listConnectors: () => Promise.resolve({ ok: true, value: listed }),
+    });
+
+  it("shows what the office reaches when it is loaded", async () => {
+    await follow(withConnectors([web])).reload();
+    expect(store.getState().connectors.map((one) => one.name)).toEqual(["design-web"]);
+  });
+
+  it("asks again when one is added", async () => {
+    const listConnectors = vi.fn(() => Promise.resolve({ ok: true as const, value: [web] }));
+    await follow(fakeApi({ listConnectors })).apply({
+      offset: 7,
+      officeId,
+      at: 0,
+      data: { kind: "connector.created", id: web.id },
+    });
+
+    expect(listConnectors).toHaveBeenCalledWith(officeId);
+    expect(store.getState().connectors).toHaveLength(1);
+  });
+
+  it("asks again when one is switched off, rather than guessing", async () => {
+    await follow(withConnectors([web])).reload();
+    await follow(withConnectors([web], [{ ...web, enabled: false }])).apply({
+      offset: 8,
+      officeId,
+      at: 0,
+      data: { kind: "connector.updated", id: web.id },
+    });
+
+    expect(store.getState().connectors[0]?.enabled).toBe(false);
+  });
+
+  it("takes one away when the office says it has gone", async () => {
+    await follow(withConnectors([web])).reload();
+    await follow(withConnectors([web], [])).apply({
+      offset: 9,
+      officeId,
+      at: 0,
+      data: { kind: "connector.deleted", id: web.id },
+    });
+
+    expect(store.getState().connectors).toEqual([]);
+  });
+
+  it("moves on when the office cannot say, rather than asking forever", async () => {
+    await follow(
+      fakeApi({
+        listConnectors: () =>
+          Promise.resolve({ ok: false, kind: "transport", message: "unreachable" }),
+      }),
+    ).apply({ offset: 11, officeId, at: 0, data: { kind: "connector.updated", id: web.id } });
+
+    expect(store.getState().seenOffset).toBe(11);
+  });
+
+  it("does not lose the departments when only a connector changed", async () => {
+    // The arrow branch reloads the whole office and puts departments back; this
+    // one must not take them away while doing less.
+    await follow(withConnectors([web])).apply({
+      offset: 12,
+      officeId,
+      at: 0,
+      data: { kind: "connector.updated", id: web.id },
+    });
+
+    expect(store.getState().departments).toHaveLength(1);
   });
 });
