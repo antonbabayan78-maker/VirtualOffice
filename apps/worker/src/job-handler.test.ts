@@ -47,6 +47,8 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     setOfficeRunState: () => Promise.reject(new Error("not used here")),
     setDepartmentRunState: () => Promise.reject(new Error("not used here")),
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),
+    recordUsage: () => Promise.reject(new Error("not used here")),
+    listUsage: () => Promise.reject(new Error("not used here")),
     // Every turn asks what is in its in-tray, so this one is always used.
     listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),

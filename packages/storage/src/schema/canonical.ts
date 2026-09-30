@@ -136,10 +136,29 @@ export const SNAPSHOTS_TABLE: TableDef = table(
   [["office_id", "version"]],
 );
 
+export const USAGE_TABLE: TableDef = table(
+  "usage",
+  [
+    id,
+    officeId,
+    // Promoted out of the event: "what did this piece of work cost" and "what
+    // does this person spend" are the two questions asked of this table, and a
+    // repository filters on equality of top-level columns. Both are nullable
+    // because not every call is spent on a task, or by anybody in particular.
+    { name: "task_id", type: "text", nullable: true },
+    { name: "employee_id", type: "text", nullable: true },
+    // The moment the call finished, not the moment the row arrived.
+    { name: "at", type: "timestamp" },
+    data,
+  ],
+  [["office_id"], ["task_id"], ["office_id", "at"]],
+);
+
 export const CANONICAL_TABLES: readonly TableDef[] = [
   ...INITIAL_TABLES,
   SNAPSHOTS_TABLE,
   DOCUMENTS_TABLE,
+  USAGE_TABLE,
 ];
 
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
@@ -157,5 +176,10 @@ export const CANONICAL_MIGRATIONS: readonly Migration[] = [
     id: "0003_documents",
     up: [{ op: "createTable", table: DOCUMENTS_TABLE }],
     down: [{ op: "dropTable", name: DOCUMENTS_TABLE.name }],
+  },
+  {
+    id: "0004_usage",
+    up: [{ op: "createTable", table: USAGE_TABLE }],
+    down: [{ op: "dropTable", name: USAGE_TABLE.name }],
   },
 ];

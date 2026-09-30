@@ -21,6 +21,7 @@ export * from "./document/document.js";
 export * from "./skill/semver.js";
 export * from "./skill/skill.js";
 export * from "./memory/memory.js";
+export * from "./usage/usage-record.js";
 export * from "./connector/connector.js";
 export * from "./snapshot/snapshot.js";
 export * from "./office-file/office-file.js";

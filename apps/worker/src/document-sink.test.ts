@@ -37,6 +37,8 @@ function api(answer: ApiResult<Document>, sent: { value?: UploadDocument } = {})
     setOfficeRunState: unused,
     setDepartmentRunState: unused,
     setEmployeeStatus: unused,
+    recordUsage: unused,
+    listUsage: unused,
     listDocuments: unused,
     downloadDocument: unused,
     deleteDocument: unused,

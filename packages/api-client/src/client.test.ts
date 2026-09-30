@@ -871,3 +871,86 @@ describe("stopping and starting work from a client", () => {
     expect(result.ok && result.value.runState).toBe("paused");
   });
 });
+
+describe("telling the office what a call cost", () => {
+  const event = {
+    id: "ev-1",
+    kind: "llm_call",
+    at: Date.parse("2026-10-01T09:00:00Z"),
+    attribution: { officeId: "office-acme", taskId: "task-1", employeeId: "emp-iris" },
+    durationMs: 1200,
+    ok: true,
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    usage: { inputTokens: 100, outputTokens: 50 },
+    cost: { totalUsd: 0.004 },
+    streamed: false,
+  };
+
+  it("posts the event as it stands", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post(`${BASE}/offices/office-acme/usage`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "usage-1" }, { status: 201 });
+      }),
+    );
+
+    const result = await client().recordUsage("office-acme", event);
+    expect(result.ok).toBe(true);
+    expect(body).toEqual(event);
+  });
+
+  it("reads back what a piece of work cost", async () => {
+    let asked = "";
+    server.use(
+      http.get(`${BASE}/offices/office-acme/usage`, ({ request }) => {
+        asked = new URL(request.url).search;
+        return HttpResponse.json({
+          items: [
+            { id: "usage-1", officeId: "office-acme", taskId: "task-1", at: event.at, event },
+          ],
+        });
+      }),
+    );
+
+    const result = await client().listUsage("office-acme", "task-1");
+    expect(asked).toContain("taskId=task-1");
+    expect(result.ok && result.value[0]?.taskId).toBe("task-1");
+  });
+
+  it("turns the moment back into a date", async () => {
+    // It arrives as a string over JSON, and anything comparing or formatting it
+    // would be working with text that looks like a date.
+    server.use(
+      http.get(`${BASE}/offices/office-acme/usage`, () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: "usage-1",
+              officeId: "office-acme",
+              at: "2026-10-01T09:00:00.000Z",
+              event,
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await client().listUsage("office-acme");
+    expect(result.ok && result.value[0]?.at).toBeInstanceOf(Date);
+  });
+
+  it("asks for the whole office when no piece of work is named", async () => {
+    let asked = "";
+    server.use(
+      http.get(`${BASE}/offices/office-acme/usage`, ({ request }) => {
+        asked = new URL(request.url).search;
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    await client().listUsage("office-acme");
+    expect(asked).not.toContain("taskId");
+  });
+});

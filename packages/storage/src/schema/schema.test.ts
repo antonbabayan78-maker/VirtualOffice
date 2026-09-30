@@ -64,6 +64,7 @@ describe("canonical schema", () => {
       "0001_initial",
       "0002_snapshots",
       "0003_documents",
+      "0004_usage",
     ]);
     const created = CANONICAL_MIGRATIONS.flatMap((m) =>
       m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),
@@ -196,5 +197,38 @@ describe("validateMigrations", () => {
     const errors = validateMigrations([noPk]);
     expect(errors.map((e) => e.path)).toContain("migrations[0].up[0].table");
     expect(errors.map((e) => e.path)).toContain("migrations[0].down");
+  });
+});
+
+describe("the table usage events land in", () => {
+  const usage = CANONICAL_TABLES.find((table) => table.name === "usage");
+
+  it("exists", () => {
+    expect(usage).toBeDefined();
+  });
+
+  it("promotes the task, so what a piece of work cost is a filter and not a scan", () => {
+    expect(usage?.columns.some((column) => column.name === "task_id")).toBe(true);
+    expect((usage?.indexes ?? []).some((index) => index.columns.includes("task_id"))).toBe(true);
+  });
+
+  it("promotes the person the spend is attributed to", () => {
+    expect(usage?.columns.some((column) => column.name === "employee_id")).toBe(true);
+  });
+
+  it("lets both of those be missing, since not every call is on a task", () => {
+    for (const name of ["task_id", "employee_id"]) {
+      expect(usage?.columns.find((column) => column.name === name)?.nullable, name).toBe(true);
+    }
+  });
+
+  it("arrives in a migration of its own, not by rewriting the first one", () => {
+    // Every office that already exists has run 0001; changing it now would
+    // mean a table that appears on new installs and nowhere else.
+    const added = CANONICAL_MIGRATIONS.find((migration) =>
+      migration.up.some((step) => step.op === "createTable" && step.table.name === "usage"),
+    );
+    expect(added?.id).toBe("0004_usage");
+    expect(CANONICAL_MIGRATIONS[0]?.id).toBe("0001_initial");
   });
 });

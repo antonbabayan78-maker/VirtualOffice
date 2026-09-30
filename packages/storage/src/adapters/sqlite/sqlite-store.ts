@@ -18,6 +18,7 @@ import type {
   OfficeSnapshot,
   Skill,
   Task,
+  UsageRecord,
 } from "@vo/core";
 import {
   CANONICAL_MIGRATIONS,
@@ -368,6 +369,7 @@ function collections(
     employees: repo<Employee>("employees"),
     tasks: repo<Task>("tasks"),
     documents: repo<Document>("documents"),
+    usage: repo<UsageRecord>("usage"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -386,6 +388,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly employees: EntityRepository<Employee>;
   readonly tasks: EntityRepository<Task>;
   readonly documents: EntityRepository<Document>;
+  readonly usage: EntityRepository<UsageRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -426,6 +429,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.employees = this.all.employees;
     this.tasks = this.all.tasks;
     this.documents = this.all.documents;
+    this.usage = this.all.usage;
     this.connections = this.all.connections;
     this.connectors = this.all.connectors;
     this.skills = this.all.skills;
