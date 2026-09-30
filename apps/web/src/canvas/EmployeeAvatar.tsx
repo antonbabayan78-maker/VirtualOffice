@@ -59,7 +59,10 @@ export function EmployeeAvatar({
       height={size}
       role="img"
       aria-label={`${name}: ${DESCRIPTION[state]}`}
-      className={cn("overflow-visible", className)}
+      // A very slight drop shadow, so a figure sits on the room rather than
+      // being printed on it. `drop-shadow` follows the silhouette itself; a box
+      // shadow would draw a rectangle round a person.
+      className={cn("overflow-visible drop-shadow-[0_1px_1.5px_rgb(0_0_0/0.28)]", className)}
     >
       <path
         d={EMPLOYEE_BODY_PATH}

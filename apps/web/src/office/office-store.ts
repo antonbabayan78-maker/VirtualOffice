@@ -17,6 +17,7 @@ import {
   createDepartment,
   createEmployee,
   err,
+  setRunState,
   TOOLS_BY_KIND,
   isErr,
   updateDepartment,
@@ -30,6 +31,8 @@ import {
   type Connector,
   type ConnectorId,
   type ConnectorKind,
+  type EmployeeStatus,
+  type RunState,
   type UpdateConnectorInput,
   type Department,
   type DepartmentId,
@@ -204,6 +207,15 @@ export interface OfficeStoreState {
    */
   saveDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Promise<SaveOutcome>;
   saveEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Promise<SaveOutcome>;
+  /**
+   * The switches: stopping work and starting it again. Apart from the `save*`
+   * pair above because stopping something is not editing it — and because
+   * these are pressed rather than drafted, so they carry no field changes and
+   * nothing to cancel.
+   */
+  saveOfficeRunState(to: RunState): Promise<SaveOutcome>;
+  saveDepartmentRunState(id: DepartmentId, to: RunState): Promise<SaveOutcome>;
+  saveEmployeeStatus(id: EmployeeId, to: EmployeeStatus): Promise<SaveOutcome>;
   /** The last event offset this client has seen, which a save is judged against. */
   readonly seenOffset: number;
   setSeenOffset(offset: number): void;
@@ -863,6 +875,81 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           return { ok: false, problems: [] };
         }
         restore(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveOfficeRunState: async (to) => {
+        const before = get().office;
+        if (before === null) {
+          return { ok: false, problems: [{ path: "office", message: "no office is open" }] };
+        }
+
+        set({ office: setRunState(before, to) });
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.setOfficeRunState(before.id, to);
+        if (answer.ok) {
+          set({ office: answer.value });
+          return { ok: true };
+        }
+        set({ office: before });
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveDepartmentRunState: async (id, to) => {
+        const before = get().departments.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such department" }] };
+        }
+
+        const show = (department: Department): void => {
+          set({
+            departments: get().departments.map((candidate) =>
+              candidate.id === id ? department : candidate,
+            ),
+          });
+        };
+
+        show(setRunState(before, to));
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.setDepartmentRunState(id, to);
+        if (answer.ok) {
+          show(answer.value);
+          return { ok: true };
+        }
+        show(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveEmployeeStatus: async (id, to) => {
+        const before = get().employees.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
+        }
+
+        const show = (employee: Employee): void => {
+          set({
+            employees: get().employees.map((candidate) =>
+              candidate.id === id ? employee : candidate,
+            ),
+          });
+        };
+
+        // Their tasks are not touched: pausing somebody is not reassigning
+        // their desk, and their open work waits for them.
+        show({ ...before, status: to });
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.setEmployeeStatus(id, to);
+        if (answer.ok) {
+          show(answer.value);
+          return { ok: true };
+        }
+        show(before);
         if (answer.kind === "transport") set({ notice: answer.message });
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },

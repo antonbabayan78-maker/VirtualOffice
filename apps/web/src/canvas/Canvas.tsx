@@ -44,6 +44,8 @@ function CanvasSurface({
   const settings = store((state) => state.settings);
   const selectedId = store((state) => state.selectedId);
   const links = store((state) => state.links);
+  const office = store((state) => state.office);
+  const officeStopped = office?.runState === "paused";
 
   const boxes = useMemo(
     () =>
@@ -69,6 +71,13 @@ function CanvasSurface({
         data: {
           name: department.name,
           color: department.color,
+          // The office's switch marks every room: a room whose own switch is
+          // on still picks nothing up while the office is stopped.
+          stopped: officeStopped
+            ? ("the whole office" as const)
+            : department.runState === "paused"
+              ? ("this department" as const)
+              : null,
           employees: employees
             .filter((employee) => employee.departmentId === department.id)
             .map((employee) => ({
@@ -87,7 +96,7 @@ function CanvasSurface({
           },
         },
       })),
-    [departments, employees, tasks, activity, selectedId, store],
+    [departments, employees, tasks, activity, selectedId, officeStopped, store],
   );
 
   const onNodesChange = useCallback(
@@ -169,6 +178,7 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
   const [menu, setMenu] = useState<DepartmentMenuTarget | null>(null);
   const settings = store((state) => state.settings);
   const notice = store((state) => state.notice);
+  const officeStopped = store((state) => state.office?.runState) === "paused";
   // Actions are called through getState rather than selected: selecting a
   // method hands its reference around, separated from the store it belongs to.
   const onSnapChange = (event: { readonly target: { readonly checked: boolean } }): void => {
@@ -177,7 +187,7 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
 
   return (
     <div className="relative h-full w-full">
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-3 rounded-panel border border-border bg-surface px-3 py-1.5 shadow-sm">
+      <div className="absolute top-3 right-3 left-3 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-panel border border-border bg-surface px-3 py-1.5 shadow-sm">
         <label className="flex items-center gap-2 text-xs text-ink-muted">
           <input
             type="checkbox"
@@ -189,6 +199,23 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
         </label>
         <span className="h-4 w-px bg-border" />
         <ActivityLegend />
+
+        {/* In the strip rather than floating over the canvas: a banner of its
+            own would sit on top of this one on a narrow canvas, and on top of
+            the notice below it. Every room carries the mark too, so this is the
+            sentence that explains them rather than the only signal. */}
+        {officeStopped && (
+          <>
+            <span className="h-4 w-px bg-border" />
+            <span
+              role="status"
+              aria-label="This office is stopped"
+              className="text-xs font-medium text-ink"
+            >
+              Stopped. Nothing in this office is being picked up.
+            </span>
+          </>
+        )}
       </div>
 
       {notice !== null && (

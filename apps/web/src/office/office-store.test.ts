@@ -844,3 +844,161 @@ describe("wiring an office up from the canvas", () => {
     expect(store.getState().departments[0]?.toolGrants).toEqual([]);
   });
 });
+
+describe("stopping and starting work from the canvas", () => {
+  const acme = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    runState: "running" as const,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  function spyApi(answers: Readonly<Record<string, unknown>> = {}) {
+    const sent: { what: string; id: string; to: string }[] = [];
+    return {
+      sent,
+      api: {
+        setOfficeRunState: (id: string, runState: string) => {
+          sent.push({ what: "office", id, to: runState });
+          return Promise.resolve(answers["office"] ?? { ok: true, value: { ...acme, runState } });
+        },
+        setDepartmentRunState: (id: string, runState: string) => {
+          sent.push({ what: "department", id, to: runState });
+          return Promise.resolve(
+            answers["department"] ?? { ok: true, value: { ...eng, runState } },
+          );
+        },
+        setEmployeeStatus: (id: string, status: string) => {
+          sent.push({ what: "employee", id, to: status });
+          return Promise.resolve(answers["employee"] ?? { ok: true, value: { ...ada, status } });
+        },
+      } as never,
+    };
+  }
+
+  it("stops the office, and shows it stopped at once", async () => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store.getState().saveOfficeRunState("paused");
+    expect(result.ok).toBe(true);
+    expect(store.getState().office?.runState).toBe("paused");
+    expect(spy.sent).toEqual([{ what: "office", id: officeId, to: "paused" }]);
+  });
+
+  it("puts the office back when the office refuses", async () => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    store.getState().connect({
+      setOfficeRunState: () =>
+        Promise.resolve({ ok: false, kind: "transport", message: "unreachable" }),
+    } as never);
+
+    const result = await store.getState().saveOfficeRunState("paused");
+    expect(result.ok).toBe(false);
+    expect(store.getState().office?.runState).toBe("running");
+  });
+
+  it("says so on a canvas with no office", async () => {
+    open([eng]);
+    expect((await store.getState().saveOfficeRunState("paused")).ok).toBe(false);
+  });
+
+  it("stops one room without touching the office", async () => {
+    open([eng, sales]);
+    store.getState().loadOffice(acme);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    await store.getState().saveDepartmentRunState(eng.id, "paused");
+    expect(store.getState().departments[0]?.runState).toBe("paused");
+    expect(store.getState().office?.runState).toBe("running");
+    expect(spy.sent).toEqual([{ what: "department", id: eng.id, to: "paused" }]);
+  });
+
+  it("leaves the other rooms alone", async () => {
+    open([eng, sales]);
+    store.getState().connect(spyApi().api);
+    await store.getState().saveDepartmentRunState(eng.id, "paused");
+
+    expect(store.getState().departments[1]?.runState).toBe("running");
+  });
+
+  it("puts a room back when the office refuses", async () => {
+    open([eng, sales]);
+    store.getState().connect({
+      setDepartmentRunState: () =>
+        Promise.resolve({
+          ok: false,
+          kind: "validation",
+          errors: [{ path: "runState", message: "must be one of running, paused" }],
+        }),
+    } as never);
+
+    const result = await store.getState().saveDepartmentRunState(eng.id, "paused");
+    expect(result.ok).toBe(false);
+    expect(store.getState().departments[0]?.runState).toBe("running");
+  });
+
+  it("pauses a person", async () => {
+    open([eng], [ada]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    await store.getState().saveEmployeeStatus(ada.id, "paused");
+    expect(store.getState().employees[0]?.status).toBe("paused");
+    expect(spy.sent).toEqual([{ what: "employee", id: ada.id, to: "paused" }]);
+  });
+
+  it("leaves their open work where it is", async () => {
+    // Pausing somebody is not reassigning their desk.
+    open([eng], [ada]);
+    store.getState().connect(spyApi().api);
+    store.getState().putTask({
+      id: "task-1",
+      officeId,
+      departmentId: eng.id,
+      assigneeId: ada.id,
+      status: "in_progress",
+      reviewerIds: [],
+      history: [],
+    } as never);
+
+    await store.getState().saveEmployeeStatus(ada.id, "paused");
+    expect(store.getState().tasks[0]?.assigneeId).toBe(ada.id);
+  });
+
+  it("puts somebody back when the office refuses to move them", async () => {
+    open([eng], [ada]);
+    store.getState().connect({
+      setEmployeeStatus: () =>
+        Promise.resolve({
+          ok: false,
+          kind: "validation",
+          errors: [{ path: "status", message: "employee is terminated" }],
+        }),
+    } as never);
+
+    const result = await store.getState().saveEmployeeStatus(ada.id, "active");
+    expect(result.ok).toBe(false);
+    expect(store.getState().employees[0]?.status).toBe("active");
+  });
+
+  it("says so when there is no such person", async () => {
+    open([eng]);
+    expect((await store.getState().saveEmployeeStatus(ada.id, "paused")).ok).toBe(false);
+  });
+
+  it("applies a change with nobody to send it to", async () => {
+    // A canvas with no server still works, as every other save here does.
+    open([eng]);
+    store.getState().loadOffice(acme);
+    expect((await store.getState().saveOfficeRunState("paused")).ok).toBe(true);
+    expect(store.getState().office?.runState).toBe("paused");
+  });
+});

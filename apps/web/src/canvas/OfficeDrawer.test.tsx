@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Office, OfficeId } from "@vo/core";
 import { createOfficeStore, type OfficeStore } from "../office/office-store.js";
@@ -99,5 +99,43 @@ describe("what the office can reach, from the office panel", () => {
       store.getState().openOffice(false);
     });
     expect(screen.queryByRole("group", { name: /what this office can reach/i })).toBeNull();
+  });
+});
+
+describe("stopping the office from its own panel", () => {
+  it("offers the switch", () => {
+    expect(screen.getByRole("group", { name: /whether this office picks up work/i })).toBeTruthy();
+  });
+
+  it("stops the office the moment it is pressed, not when Save is", async () => {
+    // A stop switch that waits for a Save somewhere else reads as one that did
+    // not work — and stopping work is what you most want to be instant.
+    const user = userEvent.setup();
+    const control = screen.getByRole("group", { name: /picks up work/i });
+    await user.click(within(control).getByRole("checkbox"));
+
+    expect(store.getState().office?.runState).toBe("paused");
+  });
+
+  it("stays stopped when the drawer is cancelled", async () => {
+    // Cancel throws away the draft. It must not quietly restart the office.
+    const user = userEvent.setup();
+    const control = screen.getByRole("group", { name: /picks up work/i });
+    await user.click(within(control).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(store.getState().office?.runState).toBe("paused");
+  });
+
+  it("starts it again", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      store.getState().loadOffice({ ...acme, runState: "paused" });
+    });
+    const control = screen.getByRole("group", { name: /picks up work/i });
+    expect(within(control).getByRole("checkbox")).not.toBeChecked();
+
+    await user.click(within(control).getByRole("checkbox"));
+    expect(store.getState().office?.runState).toBe("running");
   });
 });
