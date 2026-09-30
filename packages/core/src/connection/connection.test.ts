@@ -3,6 +3,7 @@ import type { DepartmentId } from "../department/department.js";
 import type { OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
 import {
+  parseHandoffRules,
   CONNECTION_KINDS,
   createConnection,
   hasPath,
@@ -293,6 +294,28 @@ describe("what a handoff says about who picks the work up", () => {
 
   it("takes a skill to match on", () => {
     expect(isOk(handoff({ assign: { skill: "visual-design" } }))).toBe(true);
+  });
+
+  it("hands work to a bench, which decides whose turn it is", () => {
+    const made = unwrap(handoff({ assign: { bench: "bench-1" } }));
+    expect(made.rules).toEqual({ assign: { bench: "bench-1" } });
+    expect(unwrap(parseHandoffRules(made.rules)).assign).toEqual({
+      kind: "bench",
+      benchId: "bench-1",
+    });
+  });
+
+  it("refuses naming a bench and a person at once", () => {
+    // Two answers to who takes the work, and no reason to prefer either.
+    expect(isErr(handoff({ assign: { bench: "bench-1", named: "emp-ada" } }))).toBe(true);
+  });
+
+  it("refuses naming a bench and a skill at once", () => {
+    expect(isErr(handoff({ assign: { bench: "bench-1", skill: "visual" } }))).toBe(true);
+  });
+
+  it("refuses a bench that is not an id", () => {
+    expect(isErr(handoff({ assign: { bench: 7 } }))).toBe(true);
   });
 
   it("refuses an assignment that says nothing usable", () => {

@@ -46,10 +46,17 @@ export interface BenchMember {
   readonly status: EmployeeStatus;
 }
 
-/** A piece of work this bench has already placed. */
+/**
+ * A piece of work, and which bench placed it if any.
+ *
+ * Callers hand over everything in the room and `nextFromBench` picks out its
+ * own: two benches in one department each keep their own turn, and a filter
+ * left to every caller is a rule that gets forgotten in one of them.
+ */
 export interface BenchPlacement {
   readonly id: string;
   readonly assigneeId: EmployeeId | null;
+  readonly benchId: BenchId | null;
   readonly createdAt: Date;
 }
 
@@ -75,7 +82,8 @@ export function nextFromBench(
   // Newest last. Ties on the instant break by id, because two tasks can land in
   // the same millisecond and a rotation that depended on array order would
   // answer differently for the same office twice running.
-  const newest = [...placed]
+  const newest = placed
+    .filter((one) => one.benchId === bench.id)
     .sort((a, b) =>
       a.createdAt.getTime() === b.createdAt.getTime()
         ? a.id.localeCompare(b.id)
@@ -127,7 +135,7 @@ export function validateBenchShape(benches: readonly Bench[]): Result<readonly B
       errors.push(NAMED(`${at}.strategy`, `must be one of ${BENCH_STRATEGIES.join(", ")}`));
     }
 
-    const members = Array.isArray(bench.memberIds) ? bench.memberIds : [];
+    const members: readonly EmployeeId[] = Array.isArray(bench.memberIds) ? bench.memberIds : [];
     members.forEach((memberId, position) => {
       // Two benches over one person means "whose turn" has two answers, and
       // each spends the same person's time without seeing the other.

@@ -185,6 +185,8 @@ export function isWatchableMoment(value: unknown): value is WatchableMoment {
 export type HandoffAssignment =
   | { readonly kind: "named"; readonly employeeId: string }
   | { readonly kind: "skill"; readonly skill: string }
+  /** A box in the receiving department that decides whose turn it is. */
+  | { readonly kind: "bench"; readonly benchId: string }
   | { readonly kind: "anyone" };
 
 export function parseHandoffAssignment(raw: unknown): Result<HandoffAssignment> {
@@ -193,8 +195,19 @@ export function parseHandoffAssignment(raw: unknown): Result<HandoffAssignment> 
 
   const named = raw["named"];
   const skill = raw["skill"];
-  if (named !== undefined && skill !== undefined) {
-    return err([{ path: "assign", message: "name somebody or name a skill, not both" }]);
+  const bench = raw["bench"];
+  // Each of the three is a complete answer to who takes the work, so two of
+  // them is two answers and no reason to prefer either.
+  if ([named, skill, bench].filter((one) => one !== undefined).length > 1) {
+    return err([
+      { path: "assign", message: "name somebody, a skill, or a bench — not more than one" },
+    ]);
+  }
+  if (bench !== undefined) {
+    if (typeof bench !== "string" || bench.length === 0) {
+      return err([{ path: "assign.bench", message: "must be a bench id" }]);
+    }
+    return ok({ kind: "bench", benchId: bench });
   }
   if (named !== undefined) {
     if (typeof named !== "string" || named.length === 0) {
@@ -209,7 +222,10 @@ export function parseHandoffAssignment(raw: unknown): Result<HandoffAssignment> 
     return ok({ kind: "skill", skill });
   }
   return err([
-    { path: "assign", message: "say who takes the work: name somebody, or name a skill" },
+    {
+      path: "assign",
+      message: "say who takes the work: name somebody, a skill, or a bench",
+    },
   ]);
 }
 

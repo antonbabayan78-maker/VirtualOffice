@@ -781,3 +781,64 @@ departments:
     expect(isErr(result) && result.error.some((e) => e.path.includes("departments[0]"))).toBe(true);
   });
 });
+
+describe("a bench in an office file", () => {
+  const YAML = `
+version: 1
+office: { id: office-1, name: Acme }
+departments:
+  - id: dept-design
+    name: Design
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    benches:
+      - { id: bench-draft, name: Drafting, members: [emp-iris, emp-theo] }
+  - { id: dept-eng, name: Engineering, color: "#cc3366", position: { x: 600, y: 0 } }
+employees:
+  - { id: emp-iris, name: Iris, role: Designer, color: "#00aa66", department: dept-design, llm: { provider: anthropic, model: claude-sonnet-5 } }
+  - { id: emp-theo, name: Theo, role: Designer, color: "#7c5cff", department: dept-design, llm: { provider: anthropic, model: claude-opus-5 } }
+`;
+
+  it("reads the bench and who is on it", () => {
+    const design = at(unwrap(importOfficeYaml(YAML, deps)).departments, 0);
+    expect(design.benches).toEqual([
+      {
+        id: "bench-draft",
+        name: "Drafting",
+        memberIds: ["emp-iris", "emp-theo"],
+        strategy: "round_robin",
+      },
+    ]);
+  });
+
+  it("leaves a department that says nothing with no benches", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).departments, 1).benches).toEqual([]);
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+    expect(at(again.departments, 0).benches[0]?.memberIds).toEqual(["emp-iris", "emp-theo"]);
+  });
+
+  it("keeps a department with no benches out of the file", () => {
+    const plain = `
+version: 1
+office: { id: office-1, name: Acme }
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 } }
+`;
+    expect(exportOfficeYaml(unwrap(importOfficeYaml(plain, deps)))).not.toContain("benches");
+  });
+
+  it("refuses a bench holding somebody who works elsewhere", () => {
+    // The cross-check an office file can afford, as it already does for tools.
+    const wrong = YAML.replace("emp-theo]", "emp-nobody]");
+    expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
+  });
+
+  it("refuses a strategy nobody has heard of", () => {
+    const wrong = YAML.replace("name: Drafting,", "name: Drafting, strategy: vibes,");
+    expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
+  });
+});

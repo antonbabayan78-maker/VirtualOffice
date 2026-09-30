@@ -11,11 +11,33 @@
  * same ranking a peer review uses — skill first, then who has least on, then a
  * stable order — so "the right person" means one thing across the office.
  */
-import { createTask, type Result, type Task, type TaskDeps } from "@vo/core";
+import {
+  createTask,
+  nextFromBench,
+  type Bench,
+  type BenchPlacement,
+  type Result,
+  type Task,
+  type TaskDeps,
+} from "@vo/core";
 import { rankPeers } from "./peer-policy.js";
 import type { PeerCandidate, WorkflowEffect } from "./workflow-types.js";
 
 export type CreateWorkEffect = Extract<WorkflowEffect, { type: "create_work" }>;
+
+/**
+ * The receiving department's boxes, and what they have already handed out.
+ *
+ * Empty for a room with none, which is most of them — so an arrow that names
+ * nobody behaves exactly as it did before benches existed.
+ */
+export interface ReceivingRoom {
+  readonly benches: readonly Bench[];
+  /** Everything placed in this room; each bench picks out its own. */
+  readonly placed: readonly BenchPlacement[];
+}
+
+const NO_BENCHES: ReceivingRoom = { benches: [], placed: [] };
 
 /**
  * Who should take this, from the people in the receiving department.
@@ -26,9 +48,18 @@ export type CreateWorkEffect = Extract<WorkflowEffect, { type: "create_work" }>;
 export function chooseRecipient(
   effect: CreateWorkEffect,
   candidates: readonly PeerCandidate[],
+  room: ReceivingRoom = NO_BENCHES,
 ): PeerCandidate["id"] | null {
   const active = candidates.filter((candidate) => candidate.status === "active");
   const assign = effect.assign;
+  if (assign.kind === "bench") {
+    // A bench that has gone, or one nobody on it can work, places nothing.
+    // Dropping the work on whoever is nearest instead would quietly undo what
+    // the arrow asked for — the point of naming a bench is that it decides.
+    const bench = room.benches.find((candidate) => candidate.id === assign.benchId);
+    if (bench === undefined) return null;
+    return nextFromBench(bench, candidates, room.placed);
+  }
   if (assign.kind === "named") {
     // A name that no longer answers is not a reason to drop the work; the
     // department still has it to do.
@@ -50,8 +81,9 @@ export function performCreateWork(
   officeId: Task["officeId"],
   candidates: readonly PeerCandidate[],
   deps: TaskDeps,
+  room: ReceivingRoom = NO_BENCHES,
 ): Result<HandoffPlacement> {
-  const assignedTo = chooseRecipient(effect, candidates);
+  const assignedTo = chooseRecipient(effect, candidates, room);
   const created = createTask(
     {
       officeId,
@@ -62,6 +94,11 @@ export function performCreateWork(
       artifacts: effect.artifacts,
       route: effect.route,
       ...(assignedTo === null ? {} : { assigneeId: assignedTo }),
+      // Recorded only when a bench actually placed it, so the bench's record
+      // is what it handed out rather than what passed through the room.
+      ...(effect.assign.kind === "bench" && assignedTo !== null
+        ? { benchId: effect.assign.benchId as Task["benchId"] & string }
+        : {}),
     },
     deps,
   );

@@ -24,6 +24,8 @@ import {
   isDocumentTray,
   isEmployeeStatus,
   isRunState,
+  nextFromBench,
+  validateBenchMembers,
   openTaskCounts,
   RUN_STATES,
   setRunState,
@@ -38,6 +40,7 @@ import {
   updateEmployee,
   type ConnectionId,
   type ConnectorId,
+  type BenchId,
   type DepartmentId,
   type DocumentId,
   type DocumentOwnerKind,
@@ -487,6 +490,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       connectorsIn,
       refusals,
     );
+    refusals.push(...(await benchProblems(request.body as Record<string, unknown>, id)));
     if (refusals.length > 0) return fail(reply, refusals);
 
     const siblings = await store.departments.list({ where: { officeId: department.officeId } });
@@ -677,6 +681,38 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const brief = body["brief"] === undefined ? undefined : text(body, "brief", problems);
     if (problems.length > 0) return fail(reply, problems);
 
+    /**
+     * Who takes this: named outright, or chosen by a bench.
+     *
+     * Both is two answers and no reason to prefer either. A bench that the
+     * department does not have is refused rather than quietly ignored — work
+     * aimed at a box that is not there should not land on somebody at random.
+     * A bench nobody on can work leaves the task in the backlog, which is what
+     * an unassignable task has always done.
+     */
+    const named =
+      typeof body["assigneeId"] === "string" ? (body["assigneeId"] as EmployeeId) : null;
+    const wantsBench = typeof body["benchId"] === "string" ? (body["benchId"] as BenchId) : null;
+    if (named !== null && wantsBench !== null) {
+      return fail(reply, [{ path: "benchId", message: "name somebody or name a bench, not both" }]);
+    }
+
+    let chosen: EmployeeId | null = named;
+    if (wantsBench !== null) {
+      const department = await store.departments.get(departmentId);
+      const bench = department?.benches.find((candidate) => candidate.id === wantsBench);
+      if (bench === undefined) {
+        return fail(reply, [
+          { path: "benchId", message: `this department has no bench "${wantsBench}"` },
+        ]);
+      }
+      const [staff, placed] = await Promise.all([
+        store.employees.list({ where: { departmentId: departmentId as DepartmentId } }),
+        store.tasks.list({ where: { departmentId: departmentId as DepartmentId } }),
+      ]);
+      chosen = nextFromBench(bench, staff.items, placed.items);
+    }
+
     return created(
       reply,
       createTask(
@@ -688,9 +724,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(Array.isArray(body["acceptanceCriteria"])
             ? { acceptanceCriteria: body["acceptanceCriteria"] as string[] }
             : {}),
-          ...(typeof body["assigneeId"] === "string"
-            ? { assigneeId: body["assigneeId"] as EmployeeId }
-            : {}),
+          ...(chosen === null ? {} : { assigneeId: chosen }),
+          ...(typeof body["benchId"] === "string" ? { benchId: body["benchId"] as BenchId } : {}),
         },
         { id: () => newId() as TaskId, now },
       ),
@@ -782,11 +817,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     // creating it is the store's business, and this is the store.
     for (const effect of outcome.value.effects) {
       if (effect.type !== "create_work") continue;
+      // The receiving room's benches, and what they have already handed out, so
+      // an arrow that names a bench gets whoever's turn it is. Without this the
+      // arrow would place nothing and the work would sit in a backlog.
+      const receiving = await store.departments.get(effect.toDepartmentId);
+      const inRoom = await store.tasks.list({
+        where: { departmentId: effect.toDepartmentId },
+      });
       const placed = performCreateWork(
         effect,
         task.officeId,
         everyone.filter((employee) => employee.departmentId === effect.toDepartmentId),
         { id: () => newId() as TaskId, now },
+        { benches: receiving?.benches ?? [], placed: inRoom.items },
       );
       if (isErr(placed)) {
         // A handoff the office would not accept is said out loud rather than
@@ -899,6 +942,27 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   /** This office's connectors, which every grant is judged against. */
   const connectorsIn = async (officeId: string) =>
     (await store.connectors.list({ where: { officeId: officeId as OfficeId } })).items;
+
+  /**
+   * Whether a department's benches only hold its own people.
+   *
+   * The shape check runs inside core on every change; this is the cross-check
+   * core cannot do, exactly as `validateToolGrants` is to `validateGrantShape`.
+   */
+  const benchProblems = async (
+    body: Record<string, unknown>,
+    departmentId: string,
+  ): Promise<ValidationError[]> => {
+    const benches = body["benches"];
+    if (!Array.isArray(benches)) return [];
+    const staff = await store.employees.list({
+      where: { departmentId: departmentId as DepartmentId },
+    });
+    return validateBenchMembers(
+      benches as never,
+      staff.items.map((one) => one.id),
+    );
+  };
 
   app.get("/offices/:officeId/connectors", async (request, reply) => {
     const { officeId } = request.params as { officeId: string };
