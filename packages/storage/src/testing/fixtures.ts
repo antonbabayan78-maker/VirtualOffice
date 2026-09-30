@@ -32,6 +32,8 @@ import {
   type TaskId,
   type OfficeSnapshot,
   type SnapshotId,
+  usageRecordOf,
+  type UsageRecord,
 } from "@vo/core";
 
 export const T0 = new Date("2026-09-22T00:00:00Z");
@@ -218,6 +220,37 @@ export function document(
         addedBy: "e1" as EmployeeId,
       },
       { id: () => id as DocumentId, now: () => T0 },
+    ),
+  );
+}
+
+/** One priced LLM call, as the office keeps it. */
+export function usage(
+  id: string,
+  officeId: string,
+  taskId: string | null = null,
+  employeeId: string | null = null,
+): UsageRecord {
+  return unwrap(
+    usageRecordOf(
+      {
+        id: `ev-${id}`,
+        kind: "llm_call",
+        at: T0.getTime(),
+        attribution: {
+          officeId,
+          ...(taskId === null ? {} : { taskId }),
+          ...(employeeId === null ? {} : { employeeId }),
+        },
+        durationMs: 1200,
+        ok: true,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usage: { inputTokens: 100, outputTokens: 50 },
+        cost: { totalUsd: 0.004 },
+        streamed: false,
+      },
+      { id: () => id },
     ),
   );
 }

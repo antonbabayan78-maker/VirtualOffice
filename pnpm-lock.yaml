@@ -348,6 +348,9 @@ importers:
       '@vo/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+      '@vo/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
 
   packages/api-client:
     dependencies:

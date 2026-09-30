@@ -43,6 +43,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         const s = fx.skill("tdd");
         const m = fx.memory("m1", "o1", "e1");
         const doc = fx.document("doc1", "o1", "e1");
+        const u = fx.usage("use1", "o1", "t1", "e1");
         const snap = fx.snapshot("snap-1", "o1");
         await store.snapshots.put(snap);
         await store.offices.put(o);
@@ -54,6 +55,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         await store.skills.put(s);
         await store.memories.put(m);
         await store.documents.put(doc);
+        await store.usage.put(u);
 
         expect(await store.offices.get(o.id)).toEqual(o);
         expect(await store.departments.get(d.id)).toEqual(d);
@@ -64,6 +66,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         expect(await store.skills.get(s.id)).toEqual(s);
         expect(await store.memories.get(m.id)).toEqual(m);
         expect(await store.documents.get(doc.id)).toEqual(doc);
+        expect(await store.usage.get(u.id)).toEqual(u);
         expect(await store.snapshots.get(snap.id)).toEqual(snap);
 
         const back = await store.offices.get(o.id);

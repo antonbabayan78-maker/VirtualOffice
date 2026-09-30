@@ -57,6 +57,8 @@ function scriptedApi(): Scripted {
     setOfficeRunState: unused,
     setDepartmentRunState: unused,
     setEmployeeStatus: unused,
+    recordUsage: unused,
+    listUsage: unused,
     listDocuments: unused,
     uploadDocument: (_officeId, input) => {
       uploads.push({ ...input });

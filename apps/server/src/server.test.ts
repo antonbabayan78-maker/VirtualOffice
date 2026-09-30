@@ -2384,3 +2384,86 @@ describe("work handed across to a bench", () => {
     expect(handed.find((one) => one.title === "Handed")?.assigneeId).toBe(office.theo);
   });
 });
+
+describe("what the office was spent on", () => {
+  let officeId: string;
+
+  const event = (overrides: Record<string, unknown> = {}) => ({
+    id: "ev-1",
+    kind: "llm_call",
+    at: Date.parse("2026-10-01T09:00:00Z"),
+    attribution: { officeId, taskId: "task-1", employeeId: "emp-iris" },
+    durationMs: 1200,
+    ok: true,
+    provider: "anthropic",
+    model: "claude-sonnet-5",
+    usage: { inputTokens: 100, outputTokens: 50 },
+    cost: { totalUsd: 0.004 },
+    streamed: false,
+    ...overrides,
+  });
+
+  const record = (body: Record<string, unknown> = event()) =>
+    post(`/offices/${officeId}/usage`, body);
+
+  const listed = async (query = "") =>
+    (await get(`/offices/${officeId}/usage${query}`)).json<{ items: Record<string, unknown>[] }>()
+      .items;
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+  });
+
+  it("keeps a call it is told about", async () => {
+    expect((await record()).statusCode).toBe(201);
+    expect(await listed()).toHaveLength(1);
+  });
+
+  it("keeps the event whole, so nothing is lost on the way in", async () => {
+    await record();
+    const [row] = await listed();
+    expect((row?.["event"] as Record<string, unknown>)["model"]).toBe("claude-sonnet-5");
+    expect((row?.["event"] as Record<string, unknown>)["cost"]).toEqual({ totalUsd: 0.004 });
+  });
+
+  it("answers what one piece of work cost", async () => {
+    await record();
+    await record(event({ attribution: { officeId, taskId: "task-2", employeeId: "emp-theo" } }));
+
+    const mine = await listed("?taskId=task-1");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]?.["taskId"]).toBe("task-1");
+  });
+
+  it("keeps the moment the call finished, not the moment it was told", async () => {
+    await record();
+    expect(String((await listed())[0]?.["at"])).toContain("2026-10-01T09:00:00");
+  });
+
+  it("refuses an event that names no office", async () => {
+    expect((await record(event({ attribution: {} }))).statusCode).toBe(400);
+  });
+
+  it("refuses an event with no moment on it", async () => {
+    expect((await record(event({ at: "lunchtime" }))).statusCode).toBe(400);
+  });
+
+  it("says so when there is no such office", async () => {
+    expect((await post("/offices/id-nope/usage", event())).statusCode).toBe(404);
+  });
+
+  it("does not wake every canvas watching the office", async () => {
+    // A usage row is not a change to the office. Publishing one per model call
+    // would be a stampede down the event stream for something no canvas needs
+    // to react to.
+    const before = events.since(officeId, 0).length;
+    await record();
+    expect(events.since(officeId, 0).length).toBe(before);
+  });
+
+  it("keeps one office's spend out of another's", async () => {
+    await record();
+    const other = await anOffice();
+    expect((await get(`/offices/${other}/usage`)).json<{ items: unknown[] }>().items).toEqual([]);
+  });
+});

@@ -30,6 +30,7 @@ import {
   RUN_STATES,
   setRunState,
   transitionEmployee,
+  usageRecordOf,
   updateConnection,
   updateConnector,
   updateOffice,
@@ -660,6 +661,39 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.employees.put(moved.value);
     events.publish(employee.officeId, { kind: "employee.updated", id });
     return moved.value;
+  });
+
+  // -- usage -----------------------------------------------------------------
+
+  /**
+   * What the office was spent on. One row per metered call.
+   *
+   * Nothing is published: a usage row is not a change to the office, and a
+   * stream event per model call would wake every open canvas for something no
+   * canvas needs to react to.
+   */
+  app.post("/offices/:officeId/usage", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+
+    const record = usageRecordOf(request.body as Record<string, unknown>, { id: () => newId() });
+    if (isErr(record)) return fail(reply, record.error);
+    await store.usage.put(record.value);
+    return reply.code(201).send(record.value);
+  });
+
+  app.get("/offices/:officeId/usage", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const { taskId } = request.query as { taskId?: string };
+
+    const page = await store.usage.list({
+      where: {
+        officeId: officeId as OfficeId,
+        ...(taskId === undefined ? {} : { taskId: taskId as TaskId }),
+      },
+    });
+    return { items: page.items };
   });
 
   // -- tasks -----------------------------------------------------------------

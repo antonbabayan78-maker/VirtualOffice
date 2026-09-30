@@ -14,6 +14,7 @@ import type {
   Office,
   OfficeSnapshot,
   Skill,
+  UsageRecord,
   Task,
 } from "@vo/core";
 
@@ -62,6 +63,8 @@ export interface RelationalCollections {
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
   readonly snapshots: EntityRepository<OfficeSnapshot>;
+  /** One row per metered call. Append-only; VO-93 makes it scale. */
+  readonly usage: EntityRepository<UsageRecord>;
 }
 
 export const COLLECTION_NAMES = [
@@ -75,6 +78,7 @@ export const COLLECTION_NAMES = [
   "skills",
   "memories",
   "snapshots",
+  "usage",
 ] as const satisfies readonly (keyof RelationalCollections)[];
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
 

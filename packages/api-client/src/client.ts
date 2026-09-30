@@ -23,6 +23,7 @@ import type {
   RunState,
   Task,
   ToolGrant,
+  UsageRecord,
   ValidationError,
 } from "@vo/core";
 
@@ -78,6 +79,17 @@ export interface ApiClient {
   setOfficeRunState(id: string, runState: RunState): Promise<ApiResult<Office>>;
   setDepartmentRunState(id: string, runState: RunState): Promise<ApiResult<Department>>;
   setEmployeeStatus(id: string, status: EmployeeStatus): Promise<ApiResult<Employee>>;
+  /**
+   * What a call cost, told to the office as it happens. One post per call: an
+   * event sent when it happens is one a dying worker cannot lose, and a turn
+   * makes a handful of calls rather than thousands.
+   */
+  recordUsage(
+    officeId: string,
+    event: Readonly<Record<string, unknown>>,
+  ): Promise<ApiResult<UsageRecord>>;
+  /** What an office, or one piece of work in it, has been spent on. */
+  listUsage(officeId: string, taskId?: string): Promise<ApiResult<readonly UsageRecord[]>>;
   /** One document, which is what a live canvas fetches when told one arrived. */
   getDocument(id: string): Promise<ApiResult<Document>>;
   /** A whole office's documents, or one tray of them. */
@@ -140,6 +152,10 @@ const asDate = (value: unknown): Date => new Date(String(value));
 
 function reviveDocument(raw: Record<string, unknown>): Document {
   return { ...raw, addedAt: asDate(raw["addedAt"]) } as unknown as Document;
+}
+
+function reviveUsage(raw: Record<string, unknown>): UsageRecord {
+  return { ...raw, at: asDate(raw["at"]) } as unknown as UsageRecord;
 }
 
 function reviveConnector(raw: Record<string, unknown>): Connector {
@@ -456,6 +472,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     setEmployeeStatus: async (id, status) =>
       interpret(await put(`/employees/${id}/status`, { status }), reviveEmployee),
+
+    recordUsage: async (officeId, event) =>
+      interpret(
+        await call(`/offices/${officeId}/usage`, { method: "POST", body: JSON.stringify(event) }),
+        reviveUsage,
+      ),
+
+    listUsage: async (officeId, taskId) =>
+      interpret(
+        await call(
+          `/offices/${officeId}/usage${taskId === undefined ? "" : `?taskId=${encodeURIComponent(taskId)}`}`,
+        ),
+        (raw) => ((raw["items"] ?? []) as Record<string, unknown>[]).map(reviveUsage),
+      ),
 
     getDocument: async (id) => interpret(await call(`/documents/${id}`), reviveDocument),
 

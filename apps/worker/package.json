@@ -27,7 +27,8 @@
     "@vo/connectors": "workspace:*",
     "@vo/core": "workspace:*",
     "@vo/llm": "workspace:*",
-    "@vo/orchestrator": "workspace:*"
+    "@vo/orchestrator": "workspace:*",
+    "@vo/telemetry": "workspace:*"
   },
   "bin": {
     "vo-worker": "./dist/main.js"

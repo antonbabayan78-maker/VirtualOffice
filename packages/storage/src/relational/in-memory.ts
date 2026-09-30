@@ -14,6 +14,7 @@ import type {
   OfficeSnapshot,
   Skill,
   Task,
+  UsageRecord,
 } from "@vo/core";
 import type { StoreCapabilities } from "../stores/capabilities.js";
 import { applyListQuery, matchesWhere } from "./query-memory.js";
@@ -86,6 +87,7 @@ function collections(tables: () => Tables, maxPageSize: number): RelationalColle
     employees: repo<Employee>("employees"),
     tasks: repo<Task>("tasks"),
     documents: repo<Document>("documents"),
+    usage: repo<UsageRecord>("usage"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -112,6 +114,7 @@ export class InMemoryRelationalStore implements RelationalStore {
   readonly employees: EntityRepository<Employee>;
   readonly tasks: EntityRepository<Task>;
   readonly documents: EntityRepository<Document>;
+  readonly usage: EntityRepository<UsageRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -129,6 +132,7 @@ export class InMemoryRelationalStore implements RelationalStore {
     this.employees = c.employees;
     this.tasks = c.tasks;
     this.documents = c.documents;
+    this.usage = c.usage;
     this.connections = c.connections;
     this.connectors = c.connectors;
     this.skills = c.skills;
