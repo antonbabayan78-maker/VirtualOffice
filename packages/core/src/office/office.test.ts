@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isErr, isOk, unwrap } from "../shared/result.js";
+import { setRunState, whyShut } from "./run-state.js";
 import { createOffice, updateOffice, type OfficeId } from "./office.js";
 
 const deps = {
@@ -17,6 +18,7 @@ describe("createOffice", () => {
       name: "Acme Studio",
       schedule: { kind: "always" },
       priority: "normal",
+      runState: "running",
       configVersion: 1,
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
@@ -137,5 +139,39 @@ describe("changing an office", () => {
   it("changes its hours", () => {
     const after = unwrap(updateOffice(office(), { schedule: { kind: "always" } }));
     expect(after.schedule).toEqual({ kind: "always" });
+  });
+});
+
+describe("stopping and starting an office", () => {
+  const now = deps.now();
+  const acme = () => unwrap(createOffice({ name: "Acme" }, deps));
+
+  it("is running when it is made, so nothing that exists changes", () => {
+    expect(acme().runState).toBe("running");
+  });
+
+  it("can be stopped and started again", () => {
+    const stopped = setRunState(acme(), "paused");
+    expect(stopped.runState).toBe("paused");
+    expect(setRunState(stopped, "running").runState).toBe("running");
+  });
+
+  it("is not working while it is paused, whatever its hours say", () => {
+    // Round-the-clock hours: the only thing that can be shutting it is the switch.
+    expect(whyShut(setRunState(acme(), "paused"), now)).toBe("paused");
+    expect(whyShut(acme(), now)).toBeNull();
+  });
+
+  it("is not started by renaming it", () => {
+    // The same rule updateEmployee states for status: editing an office is not
+    // a reason to put it back to work.
+    const stopped = setRunState(acme(), "paused");
+    expect(unwrap(updateOffice(stopped, { name: "Northwind" })).runState).toBe("paused");
+  });
+
+  it("does not take a run state through an ordinary update", () => {
+    const stopped = setRunState(acme(), "paused");
+    const updated = unwrap(updateOffice(stopped, { runState: "running" } as never));
+    expect(updated.runState).toBe("paused");
   });
 });

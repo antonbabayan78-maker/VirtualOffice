@@ -6,6 +6,7 @@ import type { OfficeId } from "../office/office.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
+import { type RunState } from "../office/run-state.js";
 import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
@@ -49,6 +50,12 @@ export interface Department {
   readonly definitionOfDone: readonly string[];
   /** When this department works; the office's hours gate it too. */
   readonly schedule: Schedule;
+  /**
+   * Whether this room is working at all. Its own switch, not the office's:
+   * starting the office must not quietly restart every room somebody stopped
+   * inside it. Changed through `setRunState`, never through `updateDepartment`.
+   */
+  readonly runState: RunState;
   /**
    * What everyone in this room may call. Granted here rather than per person so
    * that "designers get Figma" is said once; an employee's own grants are added
@@ -332,6 +339,7 @@ export function createDepartment(
     config: { ...config },
     reviewPolicy: reviewPolicy.value,
     schedule: schedule.value,
+    runState: "running",
     priority,
     definitionOfDone: [...definitionOfDone],
     toolGrants: toolGrants.ok ? [...toolGrants.value] : [],

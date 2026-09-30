@@ -722,3 +722,62 @@ connections: []
     );
   });
 });
+
+describe("an office or a room stopped, in the office file", () => {
+  const YAML = `
+version: 1
+office:
+  id: office-1
+  name: Acme
+  runState: paused
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 }, runState: paused }
+  - { id: dept-b, name: B, color: "#cc3366", position: { x: 600, y: 0 } }
+`;
+
+  it("reads that the office is stopped", () => {
+    expect(unwrap(importOfficeYaml(YAML, deps)).office.runState).toBe("paused");
+  });
+
+  it("reads that a room is stopped", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).departments, 0).runState).toBe("paused");
+  });
+
+  it("leaves one running when the file says nothing", () => {
+    // Every office file written before this switch existed has to keep working.
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).departments, 1).runState).toBe("running");
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+
+    expect(again.office.runState).toBe("paused");
+    expect(at(again.departments, 0).runState).toBe("paused");
+    expect(at(again.departments, 1).runState).toBe("running");
+  });
+
+  it("keeps something that is simply running out of the file", () => {
+    // A default on every entity in every file says nothing, exactly as with
+    // priority and a switched-on arrow.
+    const running = `
+version: 1
+office: { id: office-1, name: Acme }
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 } }
+`;
+    expect(exportOfficeYaml(unwrap(importOfficeYaml(running, deps)))).not.toContain("runState");
+  });
+
+  it("refuses a run state nobody has heard of", () => {
+    expect(
+      isErr(importOfficeYaml(YAML.replace("runState: paused", "runState: asleep"), deps)),
+    ).toBe(true);
+  });
+
+  it("says which department had the bad run state", () => {
+    const bad = YAML.replace(", runState: paused }", ", runState: dozing }");
+    const result = importOfficeYaml(bad, deps);
+    expect(isErr(result) && result.error.some((e) => e.path.includes("departments[0]"))).toBe(true);
+  });
+});
