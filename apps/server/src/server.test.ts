@@ -31,6 +31,8 @@ const post = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
   server.inject({ method: "POST", url, headers: auth, payload });
 const patch = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
   server.inject({ method: "PATCH", url, headers: auth, payload });
+const put = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
+  server.inject({ method: "PUT", url, headers: auth, payload });
 const get = (url: string): Promise<LightMyRequestResponse> =>
   server.inject({ method: "GET", url, headers: auth });
 
@@ -1970,5 +1972,177 @@ describe("granting tools over the wire", () => {
 
     const department = await get(`/departments/${departmentId}`);
     expect(department.json<{ toolGrants: unknown[] }>().toolGrants).toHaveLength(1);
+  });
+});
+
+describe("stopping and starting work over the wire", () => {
+  let officeId: string;
+  let departmentId: string;
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = await aDepartment(officeId);
+  });
+
+  it("stops an office", async () => {
+    const response = await put(`/offices/${officeId}/run-state`, { runState: "paused" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ runState: "paused" });
+    expect((await get(`/offices/${officeId}`)).json()).toMatchObject({ runState: "paused" });
+  });
+
+  it("starts it again", async () => {
+    await put(`/offices/${officeId}/run-state`, { runState: "paused" });
+    await put(`/offices/${officeId}/run-state`, { runState: "running" });
+
+    expect((await get(`/offices/${officeId}`)).json()).toMatchObject({ runState: "running" });
+  });
+
+  it("takes the same instruction twice without complaining", async () => {
+    // Two people pressing Pause is not an error, unlike a lifecycle transition.
+    await put(`/offices/${officeId}/run-state`, { runState: "paused" });
+    expect((await put(`/offices/${officeId}/run-state`, { runState: "paused" })).statusCode).toBe(
+      200,
+    );
+  });
+
+  it("refuses a state nobody has heard of rather than storing it", async () => {
+    const response = await put(`/offices/${officeId}/run-state`, { runState: "asleep" });
+
+    expect(response.statusCode).toBe(400);
+    expect((await get(`/offices/${officeId}`)).json()).toMatchObject({ runState: "running" });
+  });
+
+  it("refuses a body that names no state at all", async () => {
+    expect((await put(`/offices/${officeId}/run-state`, {})).statusCode).toBe(400);
+  });
+
+  it("says so when there is no such office", async () => {
+    expect((await put("/offices/id-nope/run-state", { runState: "paused" })).statusCode).toBe(404);
+  });
+
+  it("tells everyone watching that the office changed", async () => {
+    const before = events.since(officeId, 0).length;
+    await put(`/offices/${officeId}/run-state`, { runState: "paused" });
+
+    expect(events.since(officeId, 0).length).toBeGreaterThan(before);
+  });
+
+  it("does not start an office when its name is edited", async () => {
+    // The rule core states, held at the wire too: a PATCH carrying runState
+    // must not be a way round the switch.
+    await put(`/offices/${officeId}/run-state`, { runState: "paused" });
+    await patch(`/offices/${officeId}`, { name: "Northwind", runState: "running" });
+
+    expect((await get(`/offices/${officeId}`)).json()).toMatchObject({
+      name: "Northwind",
+      runState: "paused",
+    });
+  });
+
+  it("stops one room without stopping the office", async () => {
+    await put(`/departments/${departmentId}/run-state`, { runState: "paused" });
+
+    expect((await get(`/departments/${departmentId}`)).json()).toMatchObject({
+      runState: "paused",
+    });
+    expect((await get(`/offices/${officeId}`)).json()).toMatchObject({ runState: "running" });
+  });
+
+  it("says so when there is no such department", async () => {
+    expect((await put("/departments/id-nope/run-state", { runState: "paused" })).statusCode).toBe(
+      404,
+    );
+  });
+});
+
+describe("pausing a person over the wire", () => {
+  let officeId: string;
+  let departmentId: string;
+  let employeeId: string;
+
+  const hire = async (name = "Ada") => {
+    const created = await post(`/offices/${officeId}/employees`, {
+      name,
+      role: "Engineer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+    return created.json<{ id: string }>().id;
+  };
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = await aDepartment(officeId);
+    employeeId = await hire();
+  });
+
+  it("pauses somebody", async () => {
+    const response = await put(`/employees/${employeeId}/status`, { status: "paused" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "paused" });
+  });
+
+  it("leaves their open work assigned to them", async () => {
+    const task = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Write the parser",
+      assigneeId: employeeId,
+    });
+    const taskId = task.json<{ id: string }>().id;
+    await put(`/employees/${employeeId}/status`, { status: "paused" });
+
+    // Pausing is not reassignment: their desk is untouched and waiting.
+    expect((await get(`/tasks/${taskId}`)).json()).toMatchObject({ assigneeId: employeeId });
+  });
+
+  it("puts them back to work", async () => {
+    await put(`/employees/${employeeId}/status`, { status: "paused" });
+    await put(`/employees/${employeeId}/status`, { status: "active" });
+
+    expect((await get(`/employees/${employeeId}`)).json()).toMatchObject({ status: "active" });
+  });
+
+  it("records when their status last changed", async () => {
+    const before = (await get(`/employees/${employeeId}`)).json<{ statusChangedAt: string }>();
+    const after = (await put(`/employees/${employeeId}/status`, { status: "paused" })).json<{
+      statusChangedAt: string;
+    }>();
+
+    expect(after.statusChangedAt).not.toBe(undefined);
+    expect(before.statusChangedAt).not.toBe(undefined);
+  });
+
+  it("will not bring back somebody who was terminated", async () => {
+    // The rule lives in transitionEmployee; the route must go through it
+    // rather than restating it.
+    await put(`/employees/${employeeId}/status`, { status: "terminated" });
+    const response = await put(`/employees/${employeeId}/status`, { status: "active" });
+
+    expect(response.statusCode).toBe(400);
+    expect((await get(`/employees/${employeeId}`)).json()).toMatchObject({ status: "terminated" });
+  });
+
+  it("refuses a status nobody has heard of", async () => {
+    expect((await put(`/employees/${employeeId}/status`, { status: "napping" })).statusCode).toBe(
+      400,
+    );
+  });
+
+  it("says so when there is no such person", async () => {
+    expect((await put("/employees/id-nope/status", { status: "paused" })).statusCode).toBe(404);
+  });
+
+  it("is not reachable through an ordinary edit", async () => {
+    await put(`/employees/${employeeId}/status`, { status: "paused" });
+    await patch(`/employees/${employeeId}`, { role: "Staff engineer", status: "active" });
+
+    expect((await get(`/employees/${employeeId}`)).json()).toMatchObject({
+      role: "Staff engineer",
+      status: "paused",
+    });
   });
 });

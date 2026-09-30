@@ -11,13 +11,16 @@
  * the edge. A Date that is secretly a string survives right up until something
  * compares or formats it.
  */
+import { isRunState } from "@vo/core";
 import type {
   Connection,
   Connector,
   Department,
   Document,
   Employee,
+  EmployeeStatus,
   Office,
+  RunState,
   Task,
   ToolGrant,
   ValidationError,
@@ -66,6 +69,15 @@ export interface ApiClient {
     sinceOffset: number,
   ): Promise<ApiResult<Connector>>;
   deleteConnector(id: string): Promise<ApiResult<true>>;
+  /**
+   * The switch: stopping work, and starting it again. Separate from `patch*`
+   * because stopping an office is not editing one, and because an instruction
+   * that states a destination has nothing to conflict with — so these carry no
+   * `sinceOffset`.
+   */
+  setOfficeRunState(id: string, runState: RunState): Promise<ApiResult<Office>>;
+  setDepartmentRunState(id: string, runState: RunState): Promise<ApiResult<Department>>;
+  setEmployeeStatus(id: string, status: EmployeeStatus): Promise<ApiResult<Employee>>;
   /** One document, which is what a live canvas fetches when told one arrived. */
   getDocument(id: string): Promise<ApiResult<Document>>;
   /** A whole office's documents, or one tray of them. */
@@ -142,7 +154,11 @@ function reviveConnector(raw: Record<string, unknown>): Connector {
 }
 
 function reviveOffice(raw: Record<string, unknown>): Office {
-  return { ...raw, createdAt: asDate(raw["createdAt"]) } as unknown as Office;
+  return {
+    ...raw,
+    runState: runStateOr(raw["runState"]),
+    createdAt: asDate(raw["createdAt"]),
+  } as unknown as Office;
 }
 
 /**
@@ -155,6 +171,9 @@ function reviveOffice(raw: Record<string, unknown>): Office {
  */
 const listOr = (raw: unknown): readonly string[] => (Array.isArray(raw) ? (raw as string[]) : []);
 
+/** An office stored before the switch existed says nothing, and is running. */
+const runStateOr = (raw: unknown): RunState => (isRunState(raw) ? raw : "running");
+
 /** The same promise, for the one list that is not a list of strings. */
 const grantsOr = (raw: unknown): readonly ToolGrant[] =>
   Array.isArray(raw) ? (raw as ToolGrant[]) : [];
@@ -164,6 +183,7 @@ function reviveDepartment(raw: Record<string, unknown>): Department {
     ...raw,
     definitionOfDone: listOr(raw["definitionOfDone"]),
     toolGrants: grantsOr(raw["toolGrants"]),
+    runState: runStateOr(raw["runState"]),
     createdAt: asDate(raw["createdAt"]),
   } as unknown as Department;
 }
@@ -341,6 +361,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return { ok: true, value: true };
   };
 
+  const put = (path: string, body: Readonly<Record<string, unknown>>) =>
+    call(path, { method: "PUT", body: JSON.stringify(body) });
+
   const patch = async <T>(
     path: string,
     changes: Readonly<Record<string, unknown>>,
@@ -423,6 +446,15 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       patch(`/connectors/${id}`, changes, sinceOffset, reviveConnector),
 
     deleteConnector: async (id) => nothing(await call(`/connectors/${id}`, { method: "DELETE" })),
+
+    setOfficeRunState: async (id, runState) =>
+      interpret(await put(`/offices/${id}/run-state`, { runState }), reviveOffice),
+
+    setDepartmentRunState: async (id, runState) =>
+      interpret(await put(`/departments/${id}/run-state`, { runState }), reviveDepartment),
+
+    setEmployeeStatus: async (id, status) =>
+      interpret(await put(`/employees/${id}/status`, { status }), reviveEmployee),
 
     getDocument: async (id) => interpret(await call(`/documents/${id}`), reviveDocument),
 

@@ -17,7 +17,12 @@ import { parseLlmConfig, type LlmConfig } from "./llm-config.js";
 declare const employeeIdBrand: unique symbol;
 export type EmployeeId = string & { readonly [employeeIdBrand]: true };
 
-export type EmployeeStatus = "active" | "paused" | "terminated";
+export const EMPLOYEE_STATUSES = ["active", "paused", "terminated"] as const;
+export type EmployeeStatus = (typeof EMPLOYEE_STATUSES)[number];
+
+export function isEmployeeStatus(value: unknown): value is EmployeeStatus {
+  return typeof value === "string" && (EMPLOYEE_STATUSES as readonly string[]).includes(value);
+}
 
 export interface Employee {
   readonly id: EmployeeId;

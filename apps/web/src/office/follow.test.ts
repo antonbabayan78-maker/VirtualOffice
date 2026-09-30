@@ -86,6 +86,9 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     createConnector: () => Promise.reject(new Error("not used here")),
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
+    setOfficeRunState: () => Promise.reject(new Error("not used here")),
+    setDepartmentRunState: () => Promise.reject(new Error("not used here")),
+    setEmployeeStatus: () => Promise.reject(new Error("not used here")),
     // Reloading an office asks what it is holding, so this one is always used.
     listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
