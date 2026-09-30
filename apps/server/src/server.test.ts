@@ -490,6 +490,27 @@ describe("being called from a canvas in a browser", () => {
     expect(String(allowed)).toContain("DELETE");
   });
 
+  it("lets a browser through with every method this server actually serves", async () => {
+    // Derived from the route table rather than listed by hand: the list below
+    // was right for every verb that existed when it was written, and the next
+    // route with a new one would be refused in a browser while every injected
+    // test passed. That is exactly how PUT was missed.
+    const app = await withOrigins(["http://localhost:5173"]);
+    const served = new Set(
+      [...app.printRoutes({ commonPrefix: false }).matchAll(/\(([A-Z, ]+)\)/g)].flatMap((match) =>
+        (match[1] ?? "").split(", "),
+      ),
+    );
+    served.delete("OPTIONS");
+    await app.close();
+
+    expect(served.size).toBeGreaterThan(3);
+    for (const method of served) {
+      const allowed = String((await preflight(method)).headers["access-control-allow-methods"]);
+      expect(allowed, method).toContain(method);
+    }
+  });
+
   it("still lets a browser read and create", async () => {
     const allowed = String((await preflight("POST")).headers["access-control-allow-methods"]);
     expect(allowed).toContain("GET");
