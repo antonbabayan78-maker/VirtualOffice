@@ -270,7 +270,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       credentials: true,
       // Named rather than left to default: the default is GET, HEAD and POST,
       // which refuses every save the canvas makes before it is even sent.
-      methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
+      // Kept in step with the routes by a test that reads the route table —
+      // this list was correct until PUT arrived, and nothing injected noticed.
+      methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
       allowedHeaders: ["authorization", "content-type", "x-vo-since-offset"],
     });
   }
