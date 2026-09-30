@@ -7,6 +7,8 @@ import {
   unwrap,
   type Connection,
   type ConnectionId,
+  type Connector,
+  type ConnectorId,
   type Department,
   type DepartmentId,
   type Employee,
@@ -581,5 +583,261 @@ describe("changing an arrow from the canvas", () => {
   it("says so when there is no such arrow", async () => {
     open([eng, sales]);
     expect((await store.getState().saveConnection(arrow.id, { enabled: false })).ok).toBe(false);
+  });
+});
+
+describe("what the office can reach", () => {
+  const web = (overrides: Partial<Connector> = {}): Connector => ({
+    id: "conn-web" as ConnectorId,
+    officeId,
+    kind: "web",
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+    ...overrides,
+  });
+
+  it("knows about none of them until it is told", () => {
+    open([eng]);
+    expect(store.getState().connectors).toEqual([]);
+  });
+
+  it("holds the ones the office listed", () => {
+    open([eng]);
+    store.getState().loadConnectors([web()]);
+    expect(store.getState().connectors.map((c) => c.name)).toEqual(["design-web"]);
+  });
+
+  it("lists them by name, so a panel does not reorder itself", () => {
+    // Creation order is whatever the office happens to answer with; a settings
+    // panel that rearranges while you use it is worse than a slow one.
+    open([eng]);
+    store.getState().loadConnectors([web({ id: "conn-z" as ConnectorId, name: "ops-web" }), web()]);
+    expect(store.getState().connectors.map((c) => c.name)).toEqual(["design-web", "ops-web"]);
+  });
+
+  it("replaces one it already knows rather than listing it twice", () => {
+    open([eng]);
+    store.getState().loadConnectors([web()]);
+    store.getState().putConnector(web({ enabled: false }));
+
+    expect(store.getState().connectors).toHaveLength(1);
+    expect(store.getState().connectors[0]?.enabled).toBe(false);
+  });
+
+  it("takes one it is told has gone", () => {
+    open([eng]);
+    store.getState().loadConnectors([web()]);
+    store.getState().dropConnector("conn-web" as ConnectorId);
+    expect(store.getState().connectors).toEqual([]);
+  });
+});
+
+describe("wiring an office up from the canvas", () => {
+  const acme = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  const web = (overrides: Partial<Connector> = {}): Connector => ({
+    id: "conn-web" as ConnectorId,
+    officeId,
+    kind: "web",
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+    ...overrides,
+  });
+
+  function spyApi(answers: Readonly<Record<string, unknown>> = {}) {
+    const sent: { what: string; body: unknown }[] = [];
+    return {
+      sent,
+      api: {
+        createConnector: (_officeId: string, input: Record<string, unknown>) => {
+          sent.push({ what: "create", body: input });
+          return Promise.resolve(
+            answers["create"] ?? { ok: true as const, value: web({ name: String(input["name"]) }) },
+          );
+        },
+        patchConnector: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "patch", body: { id, changes } });
+          return Promise.resolve(
+            answers["patch"] ?? { ok: true as const, value: { ...web(), ...changes } },
+          );
+        },
+        deleteConnector: (id: string) => {
+          sent.push({ what: "delete", body: id });
+          return Promise.resolve(answers["delete"] ?? { ok: true as const, value: true as const });
+        },
+      } as never,
+    };
+  }
+
+  const opened = (connectors: readonly Connector[] = []) => {
+    open([eng]);
+    store.getState().loadOffice(acme);
+    store.getState().loadConnectors(connectors);
+  };
+
+  it("refuses to add one on a canvas that has no office yet", async () => {
+    open([eng]);
+    const result = await store.getState().addConnector({ kind: "web", name: "design-web" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("adds one at the office and shows what came back", async () => {
+    opened();
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store.getState().addConnector({ kind: "web", name: "design-web" });
+    expect(result.ok).toBe(true);
+    expect(store.getState().connectors.map((c) => c.name)).toEqual(["design-web"]);
+  });
+
+  it("names the tools the kind offers, so what it adds can be granted", async () => {
+    // A connector with no tools is one the office can grant nothing of, which
+    // is how adding one from the canvas would otherwise achieve nothing.
+    opened();
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+    await store.getState().addConnector({ kind: "web", name: "design-web" });
+
+    expect((spy.sent[0]?.body as Record<string, unknown>)["tools"]).toEqual(["fetch_url"]);
+  });
+
+  it("does not put one on the canvas the office never made", async () => {
+    // Nothing optimistic here: the office decides the id, and a connector with
+    // an invented one cannot be switched off or granted.
+    opened();
+    store.getState().connect({
+      createConnector: () =>
+        Promise.resolve({
+          ok: false as const,
+          kind: "validation" as const,
+          errors: [{ path: "name", message: "must be a kebab-case identifier" }],
+        }),
+    } as never);
+
+    const result = await store.getState().addConnector({ kind: "web", name: "Design Web" });
+    expect(result.ok).toBe(false);
+    expect(store.getState().connectors).toEqual([]);
+  });
+
+  it("switches one off, and shows it off at once", async () => {
+    opened([web()]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store.getState().saveConnector("conn-web" as ConnectorId, {
+      enabled: false,
+    });
+    expect(result.ok).toBe(true);
+    expect(store.getState().connectors[0]?.enabled).toBe(false);
+    expect(spy.sent).toEqual([
+      { what: "patch", body: { id: "conn-web", changes: { enabled: false } } },
+    ]);
+  });
+
+  it("refuses a change core would refuse, without asking the office", async () => {
+    opened([web()]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store
+      .getState()
+      .saveConnector("conn-web" as ConnectorId, { name: "Design Web" });
+    expect(result.ok).toBe(false);
+    expect(spy.sent).toEqual([]);
+  });
+
+  it("refuses a name another connector already has", async () => {
+    // The office would refuse it too; refusing here says so while the panel is
+    // still open rather than after a round trip.
+    opened([web(), web({ id: "conn-ops" as ConnectorId, name: "ops-web" })]);
+    store.getState().connect(spyApi().api);
+
+    const result = await store
+      .getState()
+      .saveConnector("conn-web" as ConnectorId, { name: "ops-web" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("lets a connector keep its own name", async () => {
+    opened([web()]);
+    store.getState().connect(spyApi().api);
+    const result = await store
+      .getState()
+      .saveConnector("conn-web" as ConnectorId, { name: "design-web", config: { hosts: [] } });
+    expect(result.ok).toBe(true);
+  });
+
+  it("puts it back when the office refuses the change", async () => {
+    opened([web()]);
+    store.getState().connect({
+      patchConnector: () =>
+        Promise.resolve({
+          ok: false as const,
+          kind: "validation" as const,
+          errors: [{ path: "config", message: "must be an object" }],
+        }),
+    } as never);
+
+    const result = await store
+      .getState()
+      .saveConnector("conn-web" as ConnectorId, { enabled: false });
+    expect(result.ok).toBe(false);
+    expect(store.getState().connectors[0]?.enabled).toBe(true);
+  });
+
+  it("says so when there is no such connector", async () => {
+    opened();
+    expect(
+      (await store.getState().saveConnector("conn-web" as ConnectorId, { enabled: false })).ok,
+    ).toBe(false);
+  });
+
+  it("removes one, and puts it back if the office refuses", async () => {
+    opened([web()]);
+    store.getState().connect({
+      deleteConnector: () =>
+        Promise.resolve({ ok: false as const, kind: "transport" as const, message: "offline" }),
+    } as never);
+
+    const result = await store.getState().removeConnector("conn-web" as ConnectorId);
+    expect(result.ok).toBe(false);
+    expect(store.getState().connectors).toHaveLength(1);
+  });
+
+  it("removes one for good when the office agrees", async () => {
+    opened([web()]);
+    const spy = spyApi();
+    store.getState().connect(spy.api);
+
+    const result = await store.getState().removeConnector("conn-web" as ConnectorId);
+    expect(result.ok).toBe(true);
+    expect(store.getState().connectors).toEqual([]);
+    expect(spy.sent).toEqual([{ what: "delete", body: "conn-web" }]);
+  });
+
+  it("leaves grants that named a removed connector alone", async () => {
+    // They resolve to nothing without it, and pruning grants across two other
+    // entities from here would be a change nobody asked this panel to make.
+    opened([web()]);
+    store.getState().connect(spyApi().api);
+    await store.getState().removeConnector("conn-web" as ConnectorId);
+
+    expect(store.getState().departments[0]?.toolGrants).toEqual([]);
   });
 });

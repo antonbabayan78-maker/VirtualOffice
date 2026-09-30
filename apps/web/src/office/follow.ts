@@ -97,6 +97,17 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
               snapshot.value.connections,
             );
         }
+      } else if (
+        kind === "connector.created" ||
+        kind === "connector.updated" ||
+        kind === "connector.deleted"
+      ) {
+        // Re-listed rather than fetched one at a time, as arrows are: there are
+        // a handful of them, this is a rare event, and a deletion has nothing to
+        // fetch. Only the connectors are replaced, so a connector switched off
+        // does not cost the canvas its departments.
+        const listed = await api.listConnectors(officeId);
+        if (listed.ok) store.getState().loadConnectors(listed.value);
       } else if (kind === "document.added") {
         const fetched = await api.getDocument(id);
         if (fetched.ok) store.getState().putDocument(fetched.value);
@@ -131,6 +142,8 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         snapshot.value.tasks,
         snapshot.value.connections,
       );
+
+    store.getState().loadConnectors(snapshot.value.connectors);
 
     // Every tray in one request, since a tray is a filter over these. An office
     // that cannot answer is an office with no trays rather than one that fails
