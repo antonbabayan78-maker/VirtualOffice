@@ -272,6 +272,20 @@ describe("what each member's work cost", () => {
     expect(panel()).not.toHaveTextContent("7.5");
   });
 
+  it("shows a few tenths of a cent without rounding them to nothing", () => {
+    // Two decimals would render $0.008 as "$0.01", which overstates it, and a
+    // cheap model's whole point is that it is cheap.
+    const mine = work("One", iris.id);
+    openWithSpend([mine], [spend("u1", mine.id, iris.id, 0.008)]);
+    expect(panel()).toHaveTextContent("$0.008");
+  });
+
+  it("does not pad a small figure with zeros it does not have", () => {
+    const mine = work("One", iris.id);
+    openWithSpend([mine], [spend("u1", mine.id, iris.id, 0.008)]);
+    expect(panel()).not.toHaveTextContent("$0.0080");
+  });
+
   it("shows a total containing an unpriced call as a floor, not a number", () => {
     // cost is null when the registry has no price for a model, deliberately,
     // so that nothing can quietly add it to a total and call it free.
