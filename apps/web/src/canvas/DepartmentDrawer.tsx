@@ -10,10 +10,11 @@
  * offered is one the workflow engine can actually run.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Department, GatedAction, TaskPriority, ValidationError } from "@vo/core";
+import type { Department, GatedAction, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
 import { Produced } from "./Produced.js";
 import { Tray } from "./Tray.js";
@@ -53,6 +54,7 @@ interface Draft {
   readonly definitionOfDone: readonly string[];
   readonly policy: PolicyDraft;
   readonly hours: HoursDraft;
+  readonly toolGrants: readonly ToolGrant[];
 }
 
 function draftOf(department: Department): Draft {
@@ -63,6 +65,7 @@ function draftOf(department: Department): Draft {
     priority: department.priority,
     definitionOfDone: department.definitionOfDone,
     policy: policyDraftOf(department.reviewPolicy),
+    toolGrants: department.toolGrants,
     hours:
       department.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -83,6 +86,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
   const selectedId = store((state) => state.selectedId);
   const departments = store((state) => state.departments);
   const employees = store((state) => state.employees);
+  const connectors = store((state) => state.connectors);
 
   const department = departments.find((candidate) => candidate.id === selectedId) ?? null;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -120,6 +124,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
         priority: draft.priority,
         definitionOfDone: draft.definitionOfDone,
         reviewPolicy: policyFromDraft(draft.policy),
+        toolGrants: draft.toolGrants,
         schedule: draft.hours.own
           ? {
               kind: "windows",
@@ -450,6 +455,15 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           </Button>
         </div>
       </div>
+
+      <Grants
+        connectors={connectors}
+        grants={draft.toolGrants}
+        owner="department"
+        onChange={(toolGrants) => {
+          edit({ toolGrants });
+        }}
+      />
 
       <Tray store={store} owner={{ kind: "department", id: department.id }} tray="in" />
       <Tray store={store} owner={{ kind: "department", id: department.id }} tray="out" />

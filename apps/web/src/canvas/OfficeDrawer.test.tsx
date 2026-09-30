@@ -85,3 +85,18 @@ describe("the office drawer", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
+
+describe("what the office can reach, from the office panel", () => {
+  it("is on the office's own panel, because a connector belongs to the office", () => {
+    // Not on a department's: two departments granted the same web connector are
+    // reaching the same place under the same allowlist.
+    expect(screen.getByRole("group", { name: /what this office can reach/i })).toBeTruthy();
+  });
+
+  it("is not there on a canvas that has no office", () => {
+    act(() => {
+      store.getState().openOffice(false);
+    });
+    expect(screen.queryByRole("group", { name: /what this office can reach/i })).toBeNull();
+  });
+});

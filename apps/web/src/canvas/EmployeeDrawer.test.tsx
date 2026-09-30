@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
   createEmployee,
   unwrap,
+  type Connector,
+  type ConnectorId,
   type Department,
   type DepartmentId,
   type Employee,
@@ -322,5 +324,63 @@ describe("what their work has produced", () => {
     const produced = screen.getByRole("group", { name: /produced by their work/i });
     expect(produced).toHaveTextContent("parser-notes.md");
     expect(produced).toHaveTextContent("Write the parser");
+  });
+});
+
+describe("what one person may use", () => {
+  const web: Connector = {
+    id: "conn-web" as ConnectorId,
+    officeId,
+    kind: "web",
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: at,
+  };
+
+  const opened = (department: Department = eng) => {
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([department], [ada, grace]);
+    store.getState().loadConnectors([web]);
+    store.getState().selectEmployee(ada.id);
+    view = render(<EmployeeDrawer store={store} />);
+    return screen.getByRole("group", { name: /what they may use/i });
+  };
+
+  const mine = (): readonly { connectorId: string; tool: string }[] =>
+    store.getState().employees.find((one) => one.id === ada.id)?.toolGrants ?? [];
+
+  it("grants one to this person alone, and saves it", async () => {
+    const grants = opened();
+    const user = userEvent.setup();
+    await user.click(within(grants).getByRole("checkbox", { name: /everything/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(mine()).toEqual([{ connectorId: "conn-web", tool: "*" }]);
+  });
+
+  it("shows what their department gives everybody as already given", () => {
+    const grants = opened({ ...eng, toolGrants: [{ connectorId: "conn-web", tool: "*" }] });
+    const box = within(grants).getByRole("checkbox", { name: /everything/i });
+
+    expect(box).toBeChecked();
+    // Union, not override: there is no way to take a room's grant off a person.
+    expect(box).toBeDisabled();
+  });
+
+  it("does not copy the department's grant onto the person when saving", async () => {
+    // Copied over it would outlive the department's, and taking it off the
+    // department would stop meaning anything.
+    opened({ ...eng, toolGrants: [{ connectorId: "conn-web", tool: "*" }] });
+    await userEvent.setup().click(screen.getByRole("button", { name: /save/i }));
+
+    expect(mine()).toEqual([]);
   });
 });

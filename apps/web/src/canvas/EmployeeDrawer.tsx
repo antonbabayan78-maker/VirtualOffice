@@ -11,11 +11,12 @@
  * system then rejects on save.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Employee, TaskPriority, ValidationError } from "@vo/core";
+import type { Employee, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
 import { Produced } from "./Produced.js";
 import { Tray } from "./Tray.js";
@@ -46,6 +47,7 @@ interface Draft {
   readonly workspace: string;
   readonly priority: TaskPriority;
   readonly hours: HoursDraft;
+  readonly toolGrants: readonly ToolGrant[];
 }
 
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -76,6 +78,7 @@ function draftOf(employee: Employee): Draft {
     supervisorId: employee.supervisorId ?? "",
     workspace: employee.workspaceRef ?? "",
     priority: employee.priority,
+    toolGrants: employee.toolGrants,
     hours:
       employee.schedule === null || employee.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -93,6 +96,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
   const selectedEmployeeId = store((state) => state.selectedEmployeeId);
   const employees = store((state) => state.employees);
   const departments = store((state) => state.departments);
+  const connectors = store((state) => state.connectors);
 
   const employee = employees.find((candidate) => candidate.id === selectedEmployeeId) ?? null;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -148,6 +152,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           .filter((skill) => skill.length > 0),
         supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
         workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
+        toolGrants: draft.toolGrants,
         // Null hands the employee back to their department's hours.
         schedule: draft.hours.own
           ? {
@@ -414,6 +419,18 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           }}
         />
       </Field>
+
+      {/* The department's grants go in as inherited, never as the person's own:
+          copied onto them they would outlive the department's. */}
+      <Grants
+        connectors={connectors}
+        grants={draft.toolGrants}
+        inherited={department?.toolGrants ?? []}
+        owner="employee"
+        onChange={(toolGrants) => {
+          edit({ toolGrants });
+        }}
+      />
 
       <Tray store={store} owner={{ kind: "employee", id: employee.id }} tray="in" />
       <Tray store={store} owner={{ kind: "employee", id: employee.id }} tray="out" />
