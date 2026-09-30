@@ -3,11 +3,13 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
+  createEmployee,
   unwrap,
   type Connector,
   type ConnectorId,
   type Department,
   type DepartmentId,
+  type EmployeeId,
   type OfficeId,
 } from "@vo/core";
 import { createOfficeStore, type OfficeStore } from "../office/office-store.js";
@@ -374,5 +376,91 @@ describe("stopping one department", () => {
     await user.click(screen.getByRole("button", { name: /cancel/i }));
 
     expect(saved()?.runState).toBe("paused");
+  });
+});
+
+describe("benches on the department drawer", () => {
+  const withPeople = () => {
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "bench-new",
+      now: () => at,
+    });
+    const hire = (id: string, name: string, model: string) =>
+      unwrap(
+        createEmployee(
+          { name, role: "Designer", color: "#00aa66", llm: { provider: "anthropic", model } },
+          { department: { id: eng.id, officeId }, supervisor: null },
+          { id: () => id as EmployeeId, now: () => at },
+        ),
+      );
+    store
+      .getState()
+      .load(
+        [eng, sales],
+        [hire("emp-iris", "Iris", "claude-sonnet-5"), hire("emp-theo", "Theo", "claude-opus-5")],
+      );
+    store.getState().select(eng.id);
+    view = render(<DepartmentDrawer store={store} />);
+  };
+
+  it("offers the section", () => {
+    withPeople();
+    expect(screen.getByRole("group", { name: /benches/i })).toBeTruthy();
+  });
+
+  it("makes a bench and saves it with the rest of the department", async () => {
+    withPeople();
+    const user = userEvent.setup();
+    const panel = screen.getByRole("group", { name: /benches/i });
+    await user.type(within(panel).getByLabelText(/new bench/i), "Drafting");
+    await user.click(within(panel).getByRole("button", { name: /add bench/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.benches).toEqual([
+      { id: "bench-new", name: "Drafting", memberIds: [], strategy: "round_robin" },
+    ]);
+  });
+
+  it("only offers this department's own people", () => {
+    // The office refuses anybody else, so offering them would be offering a
+    // save that comes back refused.
+    withPeople();
+    const panel = screen.getByRole("group", { name: /benches/i });
+    expect(within(panel).queryByText(/Sales/)).toBeNull();
+  });
+
+  it("changes nothing when the edit is abandoned", async () => {
+    withPeople();
+    const user = userEvent.setup();
+    const panel = screen.getByRole("group", { name: /benches/i });
+    await user.type(within(panel).getByLabelText(/new bench/i), "Drafting");
+    await user.click(within(panel).getByRole("button", { name: /add bench/i }));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(saved()?.benches).toEqual([]);
+  });
+
+  it("shows what a bench the office already has handed out", () => {
+    // Only for saved benches: a record for one that exists in a draft and
+    // nowhere else would always be empty, and would vanish on Cancel.
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "bench-new",
+      now: () => at,
+    });
+    const drafting = {
+      id: "bench-draft" as never,
+      name: "Drafting",
+      memberIds: [],
+      strategy: "round_robin" as const,
+    };
+    store.getState().load([{ ...eng, benches: [drafting] }, sales], []);
+    store.getState().select(eng.id);
+    view = render(<DepartmentDrawer store={store} />);
+
+    expect(screen.getByRole("group", { name: /what drafting handed out/i })).toBeTruthy();
   });
 });

@@ -389,6 +389,18 @@ describe("fields an older office does not send", () => {
     if (result.ok) expect(result.value.definitionOfDone).toEqual([]);
   });
 
+  it("gives a department the empty bench list it is typed as having", async () => {
+    // Every department stored before benches existed says nothing about them,
+    // and the canvas maps over this without checking.
+    server.use(
+      http.get(`${BASE}/departments/dept-eng`, () =>
+        HttpResponse.json({ id: "dept-eng", name: "Engineering" }),
+      ),
+    );
+    const result = await client().getDepartment("dept-eng");
+    if (result.ok) expect(result.value.benches).toEqual([]);
+  });
+
   it("leaves what the office did send alone", async () => {
     server.use(
       http.get(`${BASE}/departments/dept-eng`, () =>

@@ -365,3 +365,67 @@ describe("work that is not happening, seen without opening anything", () => {
     }
   });
 });
+
+describe("a bench drawn inside its department", () => {
+  const drafting = {
+    id: "bench-draft" as never,
+    name: "Drafting",
+    memberIds: ["emp-ada" as EmployeeId],
+    strategy: "round_robin" as const,
+  };
+
+  const openWith = (benches: readonly (typeof drafting)[]) => {
+    const store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "dept-new",
+      now: () => at,
+    });
+    store
+      .getState()
+      .load(
+        [{ ...eng, benches }, sales],
+        [employee("emp-ada", "Ada", "dept-eng"), employee("emp-bob", "Bob", "dept-eng")],
+        [],
+        [],
+      );
+    render(<Canvas store={store} />);
+    return store;
+  };
+
+  const room = () => {
+    const found = screen
+      .getAllByTestId("department")
+      .find((one) => one.textContent.includes("Engineering"));
+    if (found === undefined) throw new Error("no Engineering room on the canvas");
+    return found;
+  };
+
+  it("shows the bench by name inside the room", () => {
+    openWith([drafting]);
+    expect(within(room()).getByRole("group", { name: /Drafting/ })).toBeTruthy();
+  });
+
+  it("puts the people on it inside the box", () => {
+    openWith([drafting]);
+    const box = within(room()).getByRole("group", { name: /Drafting/ });
+    expect(within(box).getByRole("button", { name: /Configure Ada/ })).toBeTruthy();
+  });
+
+  it("leaves everybody else in the room outside it", () => {
+    openWith([drafting]);
+    const box = within(room()).getByRole("group", { name: /Drafting/ });
+    expect(within(box).queryByRole("button", { name: /Configure Bob/ })).toBeNull();
+    expect(within(room()).getByRole("button", { name: /Configure Bob/ })).toBeTruthy();
+  });
+
+  it("draws no box at all in a room that has no bench", () => {
+    openWith([]);
+    expect(within(room()).queryByRole("group")).toBeNull();
+  });
+
+  it("still shows an empty bench, so it can be seen to exist", () => {
+    // Otherwise a bench you made and have not filled looks like a failed save.
+    openWith([{ ...drafting, memberIds: [] }]);
+    expect(within(room()).getByRole("group", { name: /Drafting/ })).toBeTruthy();
+  });
+});

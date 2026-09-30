@@ -183,6 +183,7 @@ function reviveDepartment(raw: Record<string, unknown>): Department {
     ...raw,
     definitionOfDone: listOr(raw["definitionOfDone"]),
     toolGrants: grantsOr(raw["toolGrants"]),
+    benches: Array.isArray(raw["benches"]) ? raw["benches"] : [],
     runState: runStateOr(raw["runState"]),
     createdAt: asDate(raw["createdAt"]),
   } as unknown as Department;

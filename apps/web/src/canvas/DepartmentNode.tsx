@@ -29,6 +29,16 @@ export interface DepartmentNodeData extends Record<string, unknown> {
     /** Everything worth saying about them when somebody points at them. */
     readonly summary: EmployeeSummary;
   }[];
+  /**
+   * The boxes in this room, each holding whoever is on it. Drawn as a box
+   * because that is what it is: work aimed at it goes to one of these people
+   * in turn, and a flat row of figures would not show that at all.
+   */
+  readonly benches: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly memberIds: readonly string[];
+  }[];
   /** Opens the drawer for one of the people in this room. */
   readonly onSelectEmployee: (id: string) => void;
 }
@@ -102,15 +112,43 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
           </span>
         </header>
 
-        <ul className="flex flex-wrap content-start gap-4 p-4">
-          {data.employees.map((employee) => (
-            <EmployeeFigure
-              key={employee.id}
-              employee={employee}
-              onSelect={data.onSelectEmployee}
-            />
+        <div className="flex flex-col gap-2 p-4">
+          {data.benches.map((bench) => (
+            <section
+              key={bench.id}
+              role="group"
+              aria-label={bench.name}
+              className="flex flex-col gap-1 rounded-panel border border-dashed border-ink-muted/40 p-2"
+            >
+              <span className="text-[10px] font-medium text-ink-muted">{bench.name}</span>
+              <ul className="flex flex-wrap content-start gap-4">
+                {data.employees
+                  .filter((employee) => bench.memberIds.includes(employee.id))
+                  .map((employee) => (
+                    <EmployeeFigure
+                      key={employee.id}
+                      employee={employee}
+                      onSelect={data.onSelectEmployee}
+                    />
+                  ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+
+          <ul className="flex flex-wrap content-start gap-4">
+            {data.employees
+              .filter(
+                (employee) => !data.benches.some((one) => one.memberIds.includes(employee.id)),
+              )
+              .map((employee) => (
+                <EmployeeFigure
+                  key={employee.id}
+                  employee={employee}
+                  onSelect={data.onSelectEmployee}
+                />
+              ))}
+          </ul>
+        </div>
       </div>
     </>
   );
