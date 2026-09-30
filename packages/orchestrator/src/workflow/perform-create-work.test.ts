@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { unwrap, type DepartmentId, type EmployeeId, type OfficeId, type TaskId } from "@vo/core";
+import {
+  unwrap,
+  type Bench,
+  type BenchId,
+  type BenchPlacement,
+  type DepartmentId,
+  type EmployeeId,
+  type OfficeId,
+  type TaskId,
+} from "@vo/core";
 import {
   chooseRecipient,
   performCreateWork,
@@ -125,5 +134,77 @@ describe("making the next department's work", () => {
     expect(outcome.assignedTo).toBeNull();
     // Not lost: waiting where whoever runs that department will find it.
     expect(outcome.task.status).toBe("backlog");
+  });
+});
+
+describe("handing work to a bench in the receiving department", () => {
+  const iris = "emp-iris" as EmployeeId;
+  const theo = "emp-theo" as EmployeeId;
+  const bench: Bench = {
+    id: "bench-draft" as BenchId,
+    name: "Drafting",
+    memberIds: [iris, theo],
+    strategy: "round_robin",
+  };
+  const toBench = effect({ assign: { kind: "bench", benchId: bench.id } });
+  const room = (placed: BenchPlacement[] = []) => ({ benches: [bench], placed });
+  const placed = (assigneeId: EmployeeId, at: number): BenchPlacement => ({
+    id: `task-${String(at)}`,
+    assigneeId,
+    benchId: bench.id,
+    createdAt: new Date(2026, 8, 30, 9, 0, at),
+  });
+
+  it("gives the work to whoever's turn it is", () => {
+    expect(chooseRecipient(toBench, [person(iris), person(theo)], room())).toBe(iris);
+  });
+
+  it("gives the next one to the next member", () => {
+    const chosen = chooseRecipient(toBench, [person(iris), person(theo)], room([placed(iris, 1)]));
+    expect(chosen).toBe(theo);
+  });
+
+  it("passes over a member who is paused", () => {
+    const people = [person(iris), person(theo, { status: "paused" })];
+    expect(chooseRecipient(toBench, people, room([placed(iris, 1)]))).toBe(iris);
+  });
+
+  it("places nothing when the bench has nobody who can work", () => {
+    // Not forced on somebody outside the bench: the arrow said this bench.
+    const people = [person(iris, { status: "paused" }), person(theo, { status: "terminated" })];
+    expect(chooseRecipient(toBench, people, room())).toBeNull();
+  });
+
+  it("places nothing when the receiving room has no such bench", () => {
+    // An arrow pointing at a bench that has been taken out. Dropping the work
+    // on whoever is nearest would silently undo what the arrow asked for.
+    const gone = effect({ assign: { kind: "bench", benchId: "bench-gone" } });
+    expect(chooseRecipient(gone, [person(iris), person(theo)], room())).toBeNull();
+  });
+
+  it("still ranks by skill when the arrow names no bench", () => {
+    // The bench path must not become the only path.
+    const chosen = chooseRecipient(effect({ assign: { kind: "skill", skill: "visual" } }), [
+      person(iris),
+      person(theo, { skillIds: ["visual"] }),
+    ]);
+    expect(chosen).toBe(theo);
+  });
+
+  it("records which bench placed the work", () => {
+    const placement = performCreateWork(
+      toBench,
+      officeId,
+      [person(iris), person(theo)],
+      deps,
+      room(),
+    );
+    expect(unwrap(placement).task.benchId).toBe(bench.id);
+    expect(unwrap(placement).task.assigneeId).toBe(iris);
+  });
+
+  it("records no bench on work an arrow placed by skill", () => {
+    const placement = performCreateWork(effect(), officeId, [person(iris)], deps);
+    expect(unwrap(placement).task.benchId).toBeNull();
   });
 });

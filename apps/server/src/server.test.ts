@@ -2167,3 +2167,220 @@ describe("pausing a person over the wire", () => {
     });
   });
 });
+
+describe("a bench taking work in turn, over the wire", () => {
+  let officeId: string;
+  let departmentId: string;
+  let iris: string;
+  let theo: string;
+  let benchId: string;
+
+  const hire = async (name: string) => {
+    const created = await post(`/offices/${officeId}/employees`, {
+      name,
+      role: "Designer",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
+    return created.json<{ id: string }>().id;
+  };
+
+  const workFor = async (title: string, body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/tasks`, { departmentId, title, ...body });
+
+  const assignee = (response: LightMyRequestResponse) =>
+    response.json<{ assigneeId: string | null }>().assigneeId;
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = await aDepartment(officeId, "Design");
+    iris = await hire("Iris");
+    theo = await hire("Theo");
+    benchId = "bench-draft";
+    await patch(`/departments/${departmentId}`, {
+      benches: [
+        { id: benchId, name: "Drafting", memberIds: [iris, theo], strategy: "round_robin" },
+      ],
+    });
+  });
+
+  it("keeps the bench the department was given", async () => {
+    const back = await get(`/departments/${departmentId}`);
+    expect(back.json<{ benches: { name: string }[] }>().benches[0]?.name).toBe("Drafting");
+  });
+
+  it("refuses a bench holding somebody who works elsewhere", async () => {
+    // Shape alone cannot catch this; the route has the room's people and does.
+    const other = await aDepartment(officeId, "Engineering");
+    const response = await patch(`/departments/${other}`, {
+      benches: [{ id: "b2", name: "Nope", memberIds: [iris], strategy: "round_robin" }],
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("hands the first piece of work to the first member", async () => {
+    expect(assignee(await workFor("One", { benchId }))).toBe(iris);
+  });
+
+  it("goes round the bench in turn", async () => {
+    const one = assignee(await workFor("One", { benchId }));
+    const two = assignee(await workFor("Two", { benchId }));
+    const three = assignee(await workFor("Three", { benchId }));
+
+    expect([one, two, three]).toEqual([iris, theo, iris]);
+  });
+
+  it("records which bench placed each one", async () => {
+    const task = await workFor("One", { benchId });
+    expect(task.json<{ benchId: string | null }>().benchId).toBe(benchId);
+  });
+
+  it("passes over somebody who has been paused", async () => {
+    await workFor("One", { benchId });
+    await put(`/employees/${theo}/status`, { status: "paused" });
+
+    expect(assignee(await workFor("Two", { benchId }))).toBe(iris);
+    expect(assignee(await workFor("Three", { benchId }))).toBe(iris);
+  });
+
+  it("brings them back into the rotation when they return", async () => {
+    await put(`/employees/${theo}/status`, { status: "paused" });
+    await workFor("One", { benchId });
+    await put(`/employees/${theo}/status`, { status: "active" });
+
+    expect(assignee(await workFor("Two", { benchId }))).toBe(theo);
+  });
+
+  it("refuses work aimed at a bench this department does not have", async () => {
+    const response = await workFor("One", { benchId: "bench-nowhere" });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("leaves work in the backlog when nobody on the bench can take it", async () => {
+    await put(`/employees/${iris}/status`, { status: "paused" });
+    await put(`/employees/${theo}/status`, { status: "paused" });
+    const task = await workFor("One", { benchId });
+
+    expect(task.statusCode).toBe(201);
+    expect(assignee(task)).toBeNull();
+    expect(task.json<{ status: string }>().status).toBe("backlog");
+  });
+
+  it("still takes a named assignee, with no bench involved", async () => {
+    const task = await workFor("One", { assigneeId: theo });
+    expect(assignee(task)).toBe(theo);
+    expect(task.json<{ benchId: string | null }>().benchId).toBeNull();
+  });
+
+  it("does not let a task name both a bench and a person", async () => {
+    // Two answers to who does it, and no reason to prefer either.
+    expect((await workFor("One", { benchId, assigneeId: theo })).statusCode).toBe(400);
+  });
+});
+
+describe("work handed across to a bench", () => {
+  /** Two departments that review nothing, so a submit finishes the work. */
+  async function wiredToBench() {
+    const officeId = await anOffice();
+    const make = async (name: string): Promise<string> =>
+      (
+        await post(`/offices/${officeId}/departments`, {
+          name,
+          color: "#3366ff",
+          position: { x: 0, y: 0 },
+          reviewPolicy: { kind: "direct" },
+        })
+      ).json<{ id: string }>().id;
+    const product = await make("Product");
+    const design = await make("Design");
+
+    const hire = async (name: string, departmentId: string) =>
+      (
+        await post(`/offices/${officeId}/employees`, {
+          name,
+          role: "Maker",
+          color: "#00aa66",
+          department: departmentId,
+          llm: { provider: "anthropic", model: "claude-sonnet-5" },
+        })
+      ).json<{ id: string }>().id;
+    const pam = await hire("Pam", product);
+    const iris = await hire("Iris", design);
+    const theo = await hire("Theo", design);
+
+    await patch(`/departments/${design}`, {
+      benches: [
+        { id: "bench-draft", name: "Drafting", memberIds: [iris, theo], strategy: "round_robin" },
+      ],
+    });
+    await post(`/offices/${officeId}/connections`, {
+      fromId: product,
+      toId: design,
+      kind: "handoff",
+      rules: { assign: { bench: "bench-draft" } },
+    });
+    return { officeId, product, design, pam, iris, theo };
+  }
+
+  /** Finishes one piece of work in Product, which fires the handoff. */
+  const handOver = async (
+    office: { officeId: string; product: string; pam: string },
+    title: string,
+  ) => {
+    const task = await post(`/offices/${office.officeId}/tasks`, {
+      departmentId: office.product,
+      title,
+      assigneeId: office.pam,
+    });
+    const id = task.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.pam });
+    await post(`/tasks/${id}/events`, { type: "submit", actorId: office.pam });
+  };
+
+  const inDesign = async (officeId: string, design: string) =>
+    (await get(`/offices/${officeId}/tasks`))
+      .json<{
+        items: {
+          departmentId: string;
+          title: string;
+          assigneeId: string | null;
+          benchId: string | null;
+        }[];
+      }>()
+      .items.filter((one) => one.departmentId === design);
+
+  it("lands on a member of the bench the arrow names, in turn", async () => {
+    const office = await wiredToBench();
+    await handOver(office, "First");
+    await handOver(office, "Second");
+
+    // By title, not by list order: the store makes no promise about that.
+    const handed = await inDesign(office.officeId, office.design);
+    expect(handed.find((one) => one.title === "First")?.assigneeId).toBe(office.iris);
+    expect(handed.find((one) => one.title === "Second")?.assigneeId).toBe(office.theo);
+  });
+
+  it("records the bench that placed it, so the box knows what it handed out", async () => {
+    const office = await wiredToBench();
+    await handOver(office, "First");
+
+    expect((await inDesign(office.officeId, office.design))[0]?.benchId).toBe("bench-draft");
+  });
+
+  it("shares the turn with work created directly against the bench", async () => {
+    // One rotation per bench, however the work arrived: two counters would let
+    // the same person take two in a row without either path noticing.
+    const office = await wiredToBench();
+    await post(`/offices/${office.officeId}/tasks`, {
+      departmentId: office.design,
+      title: "Direct",
+      benchId: "bench-draft",
+    });
+    await handOver(office, "Handed");
+
+    const handed = await inDesign(office.officeId, office.design);
+    expect(handed.find((one) => one.title === "Direct")?.assigneeId).toBe(office.iris);
+    expect(handed.find((one) => one.title === "Handed")?.assigneeId).toBe(office.theo);
+  });
+});

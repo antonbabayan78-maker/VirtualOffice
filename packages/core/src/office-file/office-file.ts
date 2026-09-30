@@ -21,6 +21,12 @@ import {
   type ConnectorKind,
   type ToolGrant,
 } from "../connector/connector.js";
+import {
+  isBenchStrategy,
+  validateBenchMembers,
+  type Bench,
+  type BenchId,
+} from "../department/bench.js";
 import { createDepartment, type Department, type DepartmentId } from "../department/department.js";
 import {
   createEmployee,
@@ -85,6 +91,19 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         reviewPolicy: d.reviewPolicy,
         schedule: d.schedule,
         runState: d.runState === "running" ? null : d.runState,
+        benches:
+          d.benches.length > 0
+            ? d.benches.map((bench) =>
+                omitNull({
+                  id: bench.id,
+                  name: bench.name,
+                  members: bench.memberIds,
+                  // Round robin is the default, and a default in every file
+                  // on every bench says nothing. Written when there is another.
+                  strategy: (bench.strategy as string) === "round_robin" ? null : bench.strategy,
+                }),
+              )
+            : null,
         definitionOfDone: d.definitionOfDone.length > 0 ? d.definitionOfDone : null,
         tools:
           d.toolGrants.length > 0
@@ -360,6 +379,24 @@ export function importOfficeYaml(
     c.add("office.configVersion", "must be a positive integer");
   else if (office) office = { ...office, configVersion: rawVersion };
 
+  /** A `benches:` block on a department. Absent means a room with none. */
+  const benchesOf = (raw: Record<string, unknown>, path: string): Bench[] =>
+    (Array.isArray(raw["benches"]) ? (raw["benches"] as unknown[]) : []).map((one, index) => {
+      const bench = isRecord(one) ? one : {};
+      const strategy = bench["strategy"] ?? "round_robin";
+      if (!isBenchStrategy(strategy)) {
+        c.add(`${path}.benches[${String(index)}].strategy`, "is not a strategy a bench can use");
+      }
+      return {
+        id: (str(bench, "id") ?? deps.id()) as BenchId,
+        name: str(bench, "name") ?? "",
+        memberIds: (Array.isArray(bench["members"]) ? bench["members"] : []).filter(
+          (member: unknown): member is string => typeof member === "string",
+        ) as EmployeeId[],
+        strategy: isBenchStrategy(strategy) ? strategy : "round_robin",
+      };
+    });
+
   /** A `tools:` block, as both a department and an employee spell it. */
   const grantsOf = (raw: Record<string, unknown>): ToolGrant[] =>
     (Array.isArray(raw["tools"]) ? (raw["tools"] as unknown[]) : []).map((t) =>
@@ -398,6 +435,7 @@ export function importOfficeYaml(
           ? { definitionOfDone: d["definitionOfDone"] as readonly string[] }
           : {}),
         toolGrants: grantsOf(d),
+        benches: benchesOf(d, path),
       },
       departments,
       { id: () => id as DepartmentId, now: () => created },
@@ -513,6 +551,18 @@ export function importOfficeYaml(
   });
 
   // Connections -----------------------------------------------------------
+  // A bench's members are checked once the people are read: the rooms come
+  // first in the file, and a member means nothing until the office has staff.
+  departments.forEach((department, i) => {
+    c.addAll(
+      `departments[${String(i)}]`,
+      validateBenchMembers(
+        department.benches,
+        employees.filter((one) => one.departmentId === department.id).map((one) => one.id),
+      ),
+    );
+  });
+
   const connections: Connection[] = [];
   const departmentIds = new Set(departments.map((d) => d.id));
   list(raw, "connections", c).forEach((x, i) => {
