@@ -3,6 +3,7 @@ import {
   createDepartment,
   createEmployee,
   createTask,
+  setRunState,
   unwrap,
   type DepartmentId,
   type EmployeeId,
@@ -56,7 +57,7 @@ describe("turning an office into something the scheduler can read", () => {
 
   it("carries the office's hours, which gate everything else", () => {
     expect(snapshot.offices).toEqual([
-      { id: officeId, schedule: office.schedule, priority: "normal" },
+      { id: officeId, schedule: office.schedule, runState: "running", priority: "normal" },
     ]);
   });
 
@@ -119,5 +120,27 @@ describe("carrying the standing priorities through", () => {
       tasks: [task],
     });
     expect(snapshot.employees[0]?.priority).toBe("low");
+  });
+});
+
+describe("carrying a stopped office through to the scheduler", () => {
+  const input = { office, departments: [eng], employees: [ada], tasks: [task] };
+
+  it("passes the office's switch on", () => {
+    const stopped = setRunState(office, "paused");
+    expect(officeSnapshot({ ...input, office: stopped }).offices[0]?.runState).toBe("paused");
+  });
+
+  it("passes a department's switch on", () => {
+    const stopped = setRunState(eng, "paused");
+    expect(officeSnapshot({ ...input, departments: [stopped] }).departments[0]?.runState).toBe(
+      "paused",
+    );
+  });
+
+  it("says running for an office that is", () => {
+    // The scheduler treats an absent switch as running, but there is no reason
+    // to leave it out when the office has an answer.
+    expect(officeSnapshot(input).offices[0]?.runState).toBe("running");
   });
 });

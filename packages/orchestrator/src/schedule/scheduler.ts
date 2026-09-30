@@ -18,10 +18,12 @@
  */
 import {
   isOpen,
+  whyShut,
   type DepartmentId,
   type EmployeeId,
   type EmployeeStatus,
   type OfficeId,
+  type RunState,
   type Schedule,
   type TaskId,
   type TaskPriority,
@@ -34,6 +36,8 @@ import { orderingKey } from "./priority.js";
 export interface ScheduledOffice {
   readonly id: OfficeId;
   readonly schedule: Schedule;
+  /** Absent means running, exactly as an absent priority means normal. */
+  readonly runState?: RunState;
   /** Absent means normal: a level that has set nothing must not sink its work. */
   readonly priority?: TaskPriority;
 }
@@ -42,6 +46,8 @@ export interface ScheduledDepartment {
   readonly id: DepartmentId;
   readonly officeId: OfficeId;
   readonly schedule: Schedule;
+  /** Absent means running, exactly as an absent priority means normal. */
+  readonly runState?: RunState;
   readonly priority?: TaskPriority;
 }
 
@@ -98,7 +104,9 @@ export interface SchedulerSnapshot {
 
 export type SkipReason =
   | "office_closed"
+  | "office_paused"
   | "department_closed"
+  | "department_paused"
   | "employee_closed"
   | "employee_unavailable"
   | "unassigned"
@@ -162,9 +170,23 @@ function closedBecause(
   employee: ScheduledEmployee | undefined,
 ): Closure | null {
   if (office === undefined) return { reason: "unknown_office" };
-  if (!isOpen(office.schedule, now)) return { reason: "office_closed" };
-  if (department !== undefined && !isOpen(department.schedule, now)) {
-    return { reason: "department_closed" };
+  // Stopped and shut are asked about together and reported apart: one of them
+  // ends when the hours come round and the other waits for a person.
+  const officeShut = whyShut(
+    { runState: office.runState ?? "running", schedule: office.schedule },
+    now,
+  );
+  if (officeShut !== null) {
+    return { reason: officeShut === "paused" ? "office_paused" : "office_closed" };
+  }
+  if (department !== undefined) {
+    const departmentShut = whyShut(
+      { runState: department.runState ?? "running", schedule: department.schedule },
+      now,
+    );
+    if (departmentShut !== null) {
+      return { reason: departmentShut === "paused" ? "department_paused" : "department_closed" };
+    }
   }
   if (employee !== undefined) {
     if (employee.status !== "active") {
