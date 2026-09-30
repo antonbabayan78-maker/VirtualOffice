@@ -73,8 +73,15 @@ export function openOfficeStream(options: StreamOptions): OfficeStream {
       options.onEvent(record);
     };
 
+    // A failed connection fires onerror AND onclose, so this socket gets at
+    // most one retry however many times the browser says it has gone. Retrying
+    // on both doubled the sockets every cycle — 1, 2, 4, 8 — until the browser
+    // refused to open any more and the canvas was wedged.
+    let retried = false;
     const retry = (): void => {
-      if (!wanted) return;
+      if (!wanted || retried) return;
+      retried = true;
+      if (timer !== null) clearTimeout(timer);
       timer = setTimeout(connect, delay);
     };
     next.onclose = retry;

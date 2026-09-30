@@ -38,6 +38,17 @@ class FakeSocket implements StreamSocket {
   drop(): void {
     this.onclose?.();
   }
+
+  /**
+   * What a browser actually does when a connection fails: onerror, then
+   * onclose. The fake fired only onclose for a long time, which is exactly why
+   * the double-reconnect below went unnoticed until a real browser ran out of
+   * sockets.
+   */
+  fail(): void {
+    this.onerror?.();
+    this.onclose?.();
+  }
 }
 
 const options = (sockets: ReturnType<typeof fakeSockets>, since = () => 0) => ({
@@ -130,5 +141,45 @@ describe("the office stream", () => {
     expect(sockets.urls).toHaveLength(1);
     expect(sockets.open[0]?.closed).toBe(true);
     vi.useRealTimers();
+  });
+});
+
+describe("a connection that fails rather than merely dropping", () => {
+  it("reconnects once, not once per event the browser fires", async () => {
+    // A failed connect fires onerror AND onclose. Retrying on both doubles the
+    // sockets every cycle: 1, 2, 4, 8 — until the browser refuses to open any
+    // more and the canvas is wedged. Found by leaving one open against an
+    // office that was not there.
+    const sockets = fakeSockets();
+    const stream = openOfficeStream({ ...options(sockets), onEvent: () => undefined });
+
+    sockets.open[0]?.fail();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sockets.urls).toHaveLength(2);
+    stream.close();
+  });
+
+  it("does not multiply them over several failures", async () => {
+    const sockets = fakeSockets();
+    const stream = openOfficeStream({ ...options(sockets), onEvent: () => undefined });
+
+    for (let round = 0; round < 4; round += 1) {
+      sockets.open.at(-1)?.fail();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(sockets.urls).toHaveLength(5);
+    stream.close();
+  });
+
+  it("stops trying once the canvas has closed it", async () => {
+    const sockets = fakeSockets();
+    const stream = openOfficeStream({ ...options(sockets), onEvent: () => undefined });
+    stream.close();
+    sockets.open[0]?.fail();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sockets.urls).toHaveLength(1);
   });
 });
