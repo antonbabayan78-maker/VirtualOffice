@@ -33,6 +33,7 @@ import {
   type ConnectorKind,
   type EmployeeStatus,
   type RunState,
+  type UsageRecord,
   type UpdateConnectorInput,
   type Department,
   type DepartmentId,
@@ -111,6 +112,12 @@ export interface OfficeStoreState {
    */
   readonly connectors: readonly Connector[];
   /**
+   * What the office has been spent on. Loaded whole with the office, like the
+   * documents, and replaced rather than added to — two loads must not double
+   * every figure on the canvas.
+   */
+  readonly usage: readonly UsageRecord[];
+  /**
    * Whether a document is on its way to the office. The only thing the canvas
    * does that is not instant: bytes have to travel before the office can name
    * what arrived, so there is nothing to show optimistically.
@@ -156,6 +163,7 @@ export interface OfficeStoreState {
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
   removeTask(id: TaskId): void;
+  loadUsage(usage: readonly UsageRecord[]): void;
   loadConnectors(connectors: readonly Connector[]): void;
   /** Told about one, from the office's event stream. */
   putConnector(connector: Connector): void;
@@ -409,6 +417,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       documents: [],
       uploading: false,
       connectors: [],
+      usage: [],
 
       load: (departments, employees = [], tasks = [], connections = []) => {
         const layout = deps.storage.readLayout();
@@ -598,6 +607,10 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       removeTask: (id) => {
         const tasks = get().tasks.filter((candidate) => candidate.id !== id);
         set({ tasks, activity: activityFromTasks(tasks) });
+      },
+
+      loadUsage: (usage) => {
+        set({ usage });
       },
 
       loadConnectors: (connectors) => {

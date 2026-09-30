@@ -150,6 +150,13 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     // to open, so a refusal is not reported as a problem with the office.
     const documents = await api.listDocuments(officeId);
     if (documents.ok) store.getState().loadDocuments(documents.value);
+
+    // What it has been spent on, on the same terms: an office whose figures
+    // cannot be read is an office with no figures, not one that fails to open.
+    // Not followed on the stream either — there is no event for a usage row,
+    // deliberately, since one per model call would wake every canvas.
+    const usage = await api.listUsage(officeId);
+    if (usage.ok) store.getState().loadUsage(usage.value);
   };
 
   return { apply, reload };

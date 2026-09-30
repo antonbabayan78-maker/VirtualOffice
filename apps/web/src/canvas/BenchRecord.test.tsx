@@ -173,3 +173,120 @@ describe("what a bench has handed out", () => {
     expect(panel()).not.toHaveTextContent("emp-gone");
   });
 });
+
+describe("what each member's work cost", () => {
+  const spend = (
+    id: string,
+    taskId: string,
+    employeeId: EmployeeId,
+    totalUsd: number | null,
+    durationMs = 1200,
+  ) =>
+    ({
+      id,
+      officeId,
+      taskId,
+      employeeId,
+      at,
+      event: {
+        kind: "llm_call",
+        model: "claude-sonnet-5",
+        durationMs,
+        cost: totalUsd === null ? null : { totalUsd },
+      },
+    }) as never;
+
+  const openWithSpend = (tasks: readonly Task[], usage: readonly unknown[]) => {
+    cleanup();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([design], [iris, theo], tasks, []);
+    store.getState().loadUsage(usage as never);
+    return render(<BenchRecord store={store} bench={bench} />);
+  };
+
+  it("adds up what each member has spent", () => {
+    const mine = work("One", iris.id);
+    const theirs = work("Two", theo.id);
+    openWithSpend(
+      [mine, theirs],
+      [
+        spend("u1", mine.id, iris.id, 0.01),
+        spend("u2", mine.id, iris.id, 0.02),
+        spend("u3", theirs.id, theo.id, 0.04),
+      ],
+    );
+
+    expect(panel()).toHaveTextContent("$0.03");
+    expect(panel()).toHaveTextContent("$0.04");
+  });
+
+  it("shows what one piece of work cost, beside what it produced", () => {
+    const mine = work("One", iris.id);
+    openWithSpend([mine], [spend("u1", mine.id, iris.id, 0.01)]);
+
+    const row = within(panel())
+      .getAllByRole("listitem")
+      .find((one) => one.textContent.includes("One"));
+    expect(row).toHaveTextContent("$0.01");
+  });
+
+  it("shows how long the work took", () => {
+    const mine = work("One", iris.id);
+    openWithSpend([mine], [spend("u1", mine.id, iris.id, 0.01, 2500)]);
+    expect(panel()).toHaveTextContent(/2\.5\s*s/);
+  });
+
+  it("says a piece of work has cost nothing yet rather than showing zero", () => {
+    // Nothing spent and nothing recorded look the same as $0.00, and one of
+    // them means the pipeline is broken.
+    openWithSpend([work("One", iris.id)], []);
+    expect(panel()).toHaveTextContent(/not recorded|nothing recorded/i);
+  });
+
+  it("does not count another bench's spend", () => {
+    const mine = work("One", iris.id);
+    const elsewhere = work("Theirs", theo.id, "bench-other" as BenchId);
+    openWithSpend(
+      [mine, elsewhere],
+      [spend("u1", mine.id, iris.id, 0.01), spend("u2", elsewhere.id, theo.id, 9.99)],
+    );
+
+    expect(panel()).not.toHaveTextContent("9.99");
+  });
+
+  it("leaves out a member's spend on work this bench did not place", () => {
+    // Iris is on the bench and also has a task somebody assigned her directly.
+    // Her figure here is what the bench cost, not what she cost.
+    const onBench = work("Through the bench", iris.id);
+    const direct = work("Given to her directly", iris.id, null);
+    openWithSpend(
+      [onBench, direct],
+      [spend("u1", onBench.id, iris.id, 0.01), spend("u2", direct.id, iris.id, 7.5)],
+    );
+
+    expect(panel()).toHaveTextContent("$0.01");
+    expect(panel()).not.toHaveTextContent("7.5");
+  });
+
+  it("shows a total containing an unpriced call as a floor, not a number", () => {
+    // cost is null when the registry has no price for a model, deliberately,
+    // so that nothing can quietly add it to a total and call it free.
+    const mine = work("One", iris.id);
+    openWithSpend(
+      [mine],
+      [spend("u1", mine.id, iris.id, 0.01), spend("u2", mine.id, iris.id, null)],
+    );
+
+    expect(panel()).toHaveTextContent(/at least/i);
+  });
+
+  it("names how many calls went unpriced, so the gap can be closed", () => {
+    const mine = work("One", iris.id);
+    openWithSpend([mine], [spend("u1", mine.id, iris.id, null)]);
+    expect(panel()).toHaveTextContent(/1 call|unpriced/i);
+  });
+});

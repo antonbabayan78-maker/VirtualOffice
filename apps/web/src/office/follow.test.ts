@@ -83,6 +83,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     patchEmployee: () => Promise.reject(new Error("not used here")),
     getDocument: () => Promise.reject(new Error("not used here")),
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
+    listUsage: () => Promise.resolve({ ok: true, value: [] }),
     createConnector: () => Promise.reject(new Error("not used here")),
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
@@ -90,7 +91,6 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     setDepartmentRunState: () => Promise.reject(new Error("not used here")),
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),
     recordUsage: () => Promise.reject(new Error("not used here")),
-    listUsage: () => Promise.resolve({ ok: true, value: [] }),
     // Reloading an office asks what it is holding, so this one is always used.
     listDocuments: () => Promise.resolve({ ok: true, value: [] }),
     uploadDocument: () => Promise.reject(new Error("not used here")),
@@ -580,5 +580,41 @@ describe("what the office can reach changing under you", () => {
     });
 
     expect(store.getState().departments).toHaveLength(1);
+  });
+});
+
+describe("what the office has been spent on, when the canvas loads", () => {
+  it("asks for it on a reload", async () => {
+    const listUsage = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: [
+          {
+            id: "u1",
+            officeId,
+            taskId: "task-1",
+            employeeId: ada.id,
+            at,
+            event: { kind: "llm_call", model: "claude-sonnet-5", cost: { totalUsd: 0.004 } },
+          },
+        ],
+      }),
+    );
+    await follow(fakeApi({ listUsage } as never)).reload();
+
+    expect(listUsage).toHaveBeenCalledWith(officeId);
+    expect(store.getState().usage).toHaveLength(1);
+  });
+
+  it("opens an office that cannot say, rather than failing to open", async () => {
+    // Spend is a view on the office, not the office. An office whose usage
+    // cannot be read is an office with no figures, not a broken one.
+    const api = fakeApi({
+      listUsage: () => Promise.resolve({ ok: false, kind: "transport", message: "no figures" }),
+    } as never);
+
+    await follow(api).reload();
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().usage).toEqual([]);
   });
 });
