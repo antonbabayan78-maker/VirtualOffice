@@ -1011,3 +1011,40 @@ describe("ids for things the canvas makes", () => {
     expect(store.getState().newId()).toBe("dept-new");
   });
 });
+
+describe("what the office has been spent on", () => {
+  const spend = (id: string, taskId: string, employeeId: string, totalUsd: number | null) => ({
+    id,
+    officeId,
+    taskId,
+    employeeId,
+    at: new Date("2026-10-01T09:00:00Z"),
+    event: {
+      kind: "llm_call",
+      model: "claude-sonnet-5",
+      durationMs: 1200,
+      cost: totalUsd === null ? null : { totalUsd },
+    },
+  });
+
+  it("knows about none of it until it is told", () => {
+    open([eng]);
+    expect(store.getState().usage).toEqual([]);
+  });
+
+  it("holds what the office reported", () => {
+    open([eng]);
+    store.getState().loadUsage([spend("u1", "task-1", "emp-ada", 0.004)] as never);
+    expect(store.getState().usage).toHaveLength(1);
+  });
+
+  it("replaces the lot rather than adding to it", () => {
+    // Loaded whole with the office, like documents: two loads must not double
+    // every figure on the canvas.
+    open([eng]);
+    store.getState().loadUsage([spend("u1", "task-1", "emp-ada", 0.004)] as never);
+    store.getState().loadUsage([spend("u1", "task-1", "emp-ada", 0.004)] as never);
+
+    expect(store.getState().usage).toHaveLength(1);
+  });
+});
