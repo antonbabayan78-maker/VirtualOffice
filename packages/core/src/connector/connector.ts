@@ -14,6 +14,26 @@ export type ConnectorKind = (typeof CONNECTOR_KINDS)[number];
 
 export const WILDCARD_TOOL = "*";
 
+/**
+ * What each kind of connector offers, as far as that is knowable in advance.
+ *
+ * Here rather than with the connector implementations because the canvas needs
+ * it and cannot reach them: making a connector means naming its tools, and a
+ * browser has no business importing a package full of sockets and secrets to
+ * find out that reading the web is one tool called `fetch_url`.
+ *
+ * Empty is the honest answer for a kind whose tools come from the thing itself —
+ * an MCP server reports its own, and a guess here would be a list the office
+ * would grant and nothing would perform.
+ */
+export const TOOLS_BY_KIND: Readonly<Record<ConnectorKind, readonly string[]>> = {
+  web: ["fetch_url"],
+  mcp: [],
+  rest: [],
+  webhook: [],
+  plugin: [],
+};
+
 export interface ToolGrant {
   readonly connectorId: string;
   /** Tool name within the connector, or "*" for every tool it exposes. */

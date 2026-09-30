@@ -7,6 +7,7 @@ import {
   createConnector,
   resolveToolAccess,
   splitToolWireName,
+  TOOLS_BY_KIND,
   updateConnector,
   toolWireName,
   validateToolGrants,
@@ -267,6 +268,35 @@ describe("a connector that reads the web", () => {
       { id: () => "conn-web" as ConnectorId, now: () => new Date("2026-09-30T09:00:00Z") },
     );
     expect(unwrap(made).kind).toBe("web");
+  });
+});
+
+describe("what a kind of connector offers before anyone asks it", () => {
+  it("says a web connector offers the one tool it offers", () => {
+    expect(TOOLS_BY_KIND.web).toEqual(["fetch_url"]);
+  });
+
+  it("says nothing for a kind whose tools come from the thing itself", () => {
+    // An MCP server's tools are whatever that server reports, so there is
+    // nothing to know in advance and claiming otherwise would be a guess.
+    expect(TOOLS_BY_KIND.mcp).toEqual([]);
+  });
+
+  it("has an answer for every kind, so a caller never reads undefined", () => {
+    for (const kind of CONNECTOR_KINDS) {
+      expect(Array.isArray(TOOLS_BY_KIND[kind]), kind).toBe(true);
+    }
+  });
+
+  it("offers a list a connector would actually accept", () => {
+    // What this is for: something that can make a connector without knowing how
+    // that kind works. A list createConnector refuses would be useless.
+    const made = createConnector(
+      { officeId, kind: "web", name: "web", tools: TOOLS_BY_KIND.web },
+      [],
+      { id: () => "conn-web" as ConnectorId, now: () => new Date("2026-09-30T09:00:00Z") },
+    );
+    expect(unwrap(made).tools).toEqual(["fetch_url"]);
   });
 });
 
