@@ -56,7 +56,13 @@ function spendOf(rows: readonly UsageRecord[]): Spend {
 /** Money as somebody reads it, with a floor when something could not be priced. */
 function readableSpend(spend: Spend): string {
   if (spend.calls === 0) return "cost not recorded";
-  const money = `$${spend.usd.toFixed(spend.usd > 0 && spend.usd < 0.01 ? 4 : 2)}`;
+  // Two decimals would render a few tenths of a cent as "$0.01", overstating
+  // the cheap model whose whole point is that it is cheap; four decimals would
+  // pad every ordinary figure with zeros it does not have.
+  const money =
+    spend.usd > 0 && spend.usd < 0.01
+      ? `$${spend.usd.toFixed(4).replace(/0+$/, "")}`
+      : `$${spend.usd.toFixed(2)}`;
   if (spend.unpriced === 0) return money;
   const calls =
     spend.unpriced === 1 ? "1 call unpriced" : `${String(spend.unpriced)} calls unpriced`;
