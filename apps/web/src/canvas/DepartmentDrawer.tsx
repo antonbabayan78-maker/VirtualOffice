@@ -10,10 +10,19 @@
  * offered is one the workflow engine can actually run.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Department, GatedAction, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
+import type {
+  Bench,
+  Department,
+  GatedAction,
+  TaskPriority,
+  ToolGrant,
+  ValidationError,
+} from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { BenchRecord } from "./BenchRecord.js";
+import { Benches } from "./Benches.js";
 import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
 import { Produced } from "./Produced.js";
@@ -56,6 +65,7 @@ interface Draft {
   readonly policy: PolicyDraft;
   readonly hours: HoursDraft;
   readonly toolGrants: readonly ToolGrant[];
+  readonly benches: readonly Bench[];
 }
 
 function draftOf(department: Department): Draft {
@@ -67,6 +77,7 @@ function draftOf(department: Department): Draft {
     definitionOfDone: department.definitionOfDone,
     policy: policyDraftOf(department.reviewPolicy),
     toolGrants: department.toolGrants,
+    benches: department.benches,
     hours:
       department.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -126,6 +137,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
         definitionOfDone: draft.definitionOfDone,
         reviewPolicy: policyFromDraft(draft.policy),
         toolGrants: draft.toolGrants,
+        benches: draft.benches,
         schedule: draft.hours.own
           ? {
               kind: "windows",
@@ -456,6 +468,23 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           </Button>
         </div>
       </div>
+
+      {/* Part of this drawer's draft, unlike the office's connectors: a bench
+          is a field of the department, so Save commits it and Cancel drops it. */}
+      <Benches
+        benches={draft.benches}
+        people={employees.filter((one) => one.departmentId === department.id)}
+        newId={() => store.getState().newId()}
+        onChange={(benches) => {
+          edit({ benches });
+        }}
+      />
+
+      {/* Only for benches the office has actually got: a record for one that
+          exists in a draft and nowhere else would always be empty. */}
+      {department.benches.map((bench) => (
+        <BenchRecord key={bench.id} store={store} bench={bench} />
+      ))}
 
       <RunSwitch
         what="department"

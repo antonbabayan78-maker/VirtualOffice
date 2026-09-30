@@ -1002,3 +1002,12 @@ describe("stopping and starting work from the canvas", () => {
     expect(store.getState().office?.runState).toBe("paused");
   });
 });
+
+describe("ids for things the canvas makes", () => {
+  it("hands out ids from the same generator everything else here uses", () => {
+    // A drawer that made its own would be unpredictable in a test and would
+    // not follow the office's id scheme when one arrives.
+    open([eng]);
+    expect(store.getState().newId()).toBe("dept-new");
+  });
+});

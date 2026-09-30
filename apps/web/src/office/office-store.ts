@@ -217,6 +217,12 @@ export interface OfficeStoreState {
   saveDepartmentRunState(id: DepartmentId, to: RunState): Promise<SaveOutcome>;
   saveEmployeeStatus(id: EmployeeId, to: EmployeeStatus): Promise<SaveOutcome>;
   /** The last event offset this client has seen, which a save is judged against. */
+  /**
+   * An id for something the canvas is about to make, from the same generator
+   * the store uses for departments and people — so a drawer does not invent
+   * its own scheme, and a test can say what it will be.
+   */
+  newId(): string;
   readonly seenOffset: number;
   setSeenOffset(offset: number): void;
   setSnapToGrid(on: boolean): void;
@@ -797,6 +803,8 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         persist(next, settings);
         return updated;
       },
+
+      newId: () => deps.id(),
 
       setSeenOffset: (offset) => {
         // Only ever forward: an older event is not newer news.

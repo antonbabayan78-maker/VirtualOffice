@@ -91,6 +91,7 @@ function CanvasSurface({
                 activity: activity[employee.id] ?? "idle",
               }),
             })),
+          benches: department.benches,
           onSelectEmployee: (id: string) => {
             store.getState().selectEmployee(id as EmployeeId);
           },
