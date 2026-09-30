@@ -496,3 +496,107 @@ describe("recurring work takes its place in the same order", () => {
     expect(crunched).toBeGreaterThan(dueDigest({ priority: "urgent" }));
   });
 });
+
+describe("an office or a room somebody stopped", () => {
+  it("passes over every task in a stopped office", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, runState: "paused" }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toEqual([]);
+  });
+
+  it("says it was stopped rather than shut, which are different facts", () => {
+    // Closed ends by itself when the hours come round; stopped does not, and a
+    // trail that conflates them cannot tell you why nothing is happening.
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, runState: "paused" }],
+      }),
+      duringHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "office_paused" });
+  });
+
+  it("says stopped even when the hours are against it too", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: OFFICE_HOURS, runState: "paused" }],
+      }),
+      afterHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "office_paused" });
+  });
+
+  it("passes over a task in a stopped room, and says which", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        departments: [{ id: dept, officeId: office, schedule: ALWAYS, runState: "paused" }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped[0]).toMatchObject({ reason: "department_paused" });
+  });
+
+  it("leaves the rest of the office working when one room is stopped", () => {
+    const other = "dept-sales" as DepartmentId;
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task(), task({ id: "task-2" as TaskId, departmentId: other })],
+        departments: [
+          { id: dept, officeId: office, schedule: ALWAYS, runState: "paused" },
+          { id: other, officeId: office, schedule: ALWAYS },
+        ],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toHaveLength(1);
+    expect(due.jobs[0]?.payload).toMatchObject({ taskId: "task-2" });
+  });
+
+  it("holds recurring work back in a stopped office too", () => {
+    const due = computeDueWork(
+      snapshot({
+        recurring: [
+          {
+            id: "digest",
+            officeId: office,
+            cron: "0 9 * * 1-5",
+            timezone: "Asia/Nicosia",
+            kind: "daily_digest",
+            lastRunAt: null,
+          },
+        ],
+        offices: [{ id: office, schedule: ALWAYS, runState: "paused" }],
+      }),
+      // 09:00 Nicosia on Monday: due by cron, and stopped by a person.
+      new Date("2026-09-28T06:00:30.000Z"),
+    );
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped[0]).toMatchObject({ reason: "office_paused" });
+  });
+
+  it("works as before when nothing says anything about a switch", () => {
+    // Every snapshot built before this existed says nothing, and must run.
+    const due = computeDueWork(snapshot({ tasks: [task()] }), duringHours);
+    expect(due.jobs).toHaveLength(1);
+  });
+
+  it("starts working again the moment it is put back", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, runState: "running" }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toHaveLength(1);
+  });
+});

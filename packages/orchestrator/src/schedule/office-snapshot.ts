@@ -22,12 +22,18 @@ export interface OfficeSnapshotInput {
 export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
   return {
     offices: [
-      { id: input.office.id, schedule: input.office.schedule, priority: input.office.priority },
+      {
+        id: input.office.id,
+        schedule: input.office.schedule,
+        runState: input.office.runState,
+        priority: input.office.priority,
+      },
     ],
     departments: input.departments.map((department) => ({
       id: department.id,
       officeId: department.officeId,
       schedule: department.schedule,
+      runState: department.runState,
       priority: department.priority,
     })),
     employees: input.employees.map((employee) => ({
