@@ -5,6 +5,7 @@
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "./schedule.js";
+import { type RunState } from "./run-state.js";
 
 declare const officeIdBrand: unique symbol;
 export type OfficeId = string & { readonly [officeIdBrand]: true };
@@ -19,6 +20,13 @@ export interface Office {
    * exactly as it did before there were levels at all.
    */
   readonly priority: TaskPriority;
+  /**
+   * Whether this office is working at all. Running unless somebody stopped it,
+   * so an office that predates the switch behaves exactly as it always did.
+   * Changed through `setRunState`, never through `updateOffice`: renaming an
+   * office is not a reason to start it.
+   */
+  readonly runState: RunState;
   /** Incremented on every configuration change; snapshots key off it. */
   readonly configVersion: number;
   readonly createdAt: Date;
@@ -79,6 +87,7 @@ export function createOffice(input: CreateOfficeInput, deps: OfficeDeps): Result
     name: name.value,
     schedule: schedule.value,
     priority,
+    runState: "running",
     configVersion: 1,
     createdAt: deps.now(),
   });

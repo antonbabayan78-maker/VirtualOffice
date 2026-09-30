@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
+import { setRunState, whyShut } from "../office/run-state.js";
 import { DEFAULT_REVIEW_POLICY } from "./review-policy.js";
 import {
   createDepartment,
@@ -147,6 +148,7 @@ describe("createDepartment", () => {
       definitionOfDone: [],
       toolGrants: [],
       schedule: { kind: "always" },
+      runState: "running",
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
   });
@@ -399,5 +401,43 @@ describe("what a department may reach", () => {
     );
     expect(changed.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
     expect(changed.name).toBe(department.name);
+  });
+});
+
+describe("stopping and starting a department", () => {
+  const design = () =>
+    unwrap(
+      createDepartment(
+        { officeId, name: "Design", color: "#7c5cff", position: { x: 0, y: 0 } },
+        [],
+        deps,
+      ),
+    );
+
+  it("is running when it is opened, so nothing that exists changes", () => {
+    expect(design().runState).toBe("running");
+  });
+
+  it("can be stopped and started again", () => {
+    const stopped = setRunState(design(), "paused");
+    expect(stopped.runState).toBe("paused");
+    expect(setRunState(stopped, "running").runState).toBe("running");
+  });
+
+  it("is not working while it is paused, whatever its hours say", () => {
+    expect(whyShut(setRunState(design(), "paused"), deps.now())).toBe("paused");
+    expect(whyShut(design(), deps.now())).toBeNull();
+  });
+
+  it("is not started by renaming it", () => {
+    const stopped = setRunState(design(), "paused");
+    expect(unwrap(updateDepartment(stopped, { name: "Brand" }, [])).runState).toBe("paused");
+  });
+
+  it("keeps its own switch when the office has one too", () => {
+    // Two levels, two switches: starting the office must not quietly start
+    // every room somebody stopped inside it.
+    const stopped = setRunState(design(), "paused");
+    expect(unwrap(updateDepartment(stopped, { priority: "urgent" }, [])).runState).toBe("paused");
   });
 });

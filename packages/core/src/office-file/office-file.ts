@@ -29,6 +29,7 @@ import {
   type EmployeeStatus,
 } from "../employee/employee.js";
 import { createOffice, type Office, type OfficeId } from "../office/office.js";
+import { isRunState, RUN_STATES, setRunState, type RunState } from "../office/run-state.js";
 import { err, ok, type Result, type ValidationError } from "../shared/result.js";
 import type { OfficeConfig } from "../snapshot/snapshot.js";
 
@@ -68,6 +69,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
       // A default is not worth writing down: it would appear on every entity in
       // every file and say nothing.
       priority: o.priority === "normal" ? null : o.priority,
+      runState: o.runState === "running" ? null : o.runState,
       configVersion: o.configVersion,
       createdAt: o.createdAt.toISOString(),
     }),
@@ -82,6 +84,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         config: d.config,
         reviewPolicy: d.reviewPolicy,
         schedule: d.schedule,
+        runState: d.runState === "running" ? null : d.runState,
         definitionOfDone: d.definitionOfDone.length > 0 ? d.definitionOfDone : null,
         tools:
           d.toolGrants.length > 0
@@ -320,6 +323,21 @@ export function importOfficeYaml(
     c.add("office", "is required and must be a mapping");
     return err(c.errors);
   }
+  /**
+   * A `runState:` on an entity, refused rather than ignored when it is not one.
+   * Absent means running, so every file written before the switch existed keeps
+   * working — which is also why nothing is written when it is running.
+   */
+  const runStateOf = (raw: Record<string, unknown>, path: string): RunState => {
+    const value = raw["runState"];
+    if (value === undefined) return "running";
+    if (!isRunState(value)) {
+      c.add(`${path}.runState`, `must be one of ${RUN_STATES.join(", ")}`);
+      return "running";
+    }
+    return value;
+  };
+
   const officeId = (str(rawOffice, "id") ?? deps.id()) as OfficeId;
   const officeCreated = date(rawOffice, "createdAt", deps.now(), report, "office");
   let office: Office | null = null;
@@ -335,6 +353,8 @@ export function importOfficeYaml(
     if (r.ok) office = r.value;
     else c.addAll("office", r.error);
   }
+  if (office) office = setRunState(office, runStateOf(rawOffice, "office"));
+
   const rawVersion = rawOffice["configVersion"] ?? 1;
   if (typeof rawVersion !== "number" || !Number.isInteger(rawVersion) || rawVersion < 1)
     c.add("office.configVersion", "must be a positive integer");
@@ -382,7 +402,7 @@ export function importOfficeYaml(
       departments,
       { id: () => id as DepartmentId, now: () => created },
     );
-    if (r.ok) departments.push(r.value);
+    if (r.ok) departments.push(setRunState(r.value, runStateOf(d, path)));
     else c.addAll(path, r.error);
   });
 
