@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
+import type { EmployeeId } from "../employee/employee.js";
 import { setRunState, whyShut } from "../office/run-state.js";
+import type { BenchId } from "./bench.js";
 import { DEFAULT_REVIEW_POLICY } from "./review-policy.js";
 import {
   createDepartment,
@@ -147,6 +149,7 @@ describe("createDepartment", () => {
       priority: "normal",
       definitionOfDone: [],
       toolGrants: [],
+      benches: [],
       schedule: { kind: "always" },
       runState: "running",
       createdAt: new Date("2026-09-22T00:00:00Z"),
@@ -439,5 +442,56 @@ describe("stopping and starting a department", () => {
     // every room somebody stopped inside it.
     const stopped = setRunState(design(), "paused");
     expect(unwrap(updateDepartment(stopped, { priority: "urgent" }, [])).runState).toBe("paused");
+  });
+});
+
+describe("benches in a department", () => {
+  const ada = "emp-ada" as EmployeeId;
+  const bench = {
+    id: "bench-1" as BenchId,
+    name: "Drafting",
+    memberIds: [ada],
+    strategy: "round_robin" as const,
+  };
+
+  const design = () =>
+    unwrap(
+      createDepartment(
+        { officeId, name: "Design", color: "#7c5cff", position: { x: 0, y: 0 } },
+        [],
+        deps,
+      ),
+    );
+
+  it("has none until one is made", () => {
+    expect(design().benches).toEqual([]);
+  });
+
+  it("takes one that is added", () => {
+    expect(unwrap(updateDepartment(design(), { benches: [bench] }, [])).benches).toEqual([bench]);
+  });
+
+  it("keeps the ones it has when something else is changed", () => {
+    const withBench = unwrap(updateDepartment(design(), { benches: [bench] }, []));
+    expect(unwrap(updateDepartment(withBench, { name: "Brand" }, [])).benches).toEqual([bench]);
+  });
+
+  it("refuses the same person on two benches", () => {
+    const two = [bench, { ...bench, id: "bench-2" as BenchId, name: "Review" }];
+    expect(isErr(updateDepartment(design(), { benches: two }, []))).toBe(true);
+  });
+
+  it("takes one out again", () => {
+    const withBench = unwrap(updateDepartment(design(), { benches: [bench] }, []));
+    expect(unwrap(updateDepartment(withBench, { benches: [] }, [])).benches).toEqual([]);
+  });
+
+  it("is made with benches when the office file says so", () => {
+    const made = createDepartment(
+      { officeId, name: "Design", color: "#7c5cff", position: { x: 0, y: 0 }, benches: [bench] },
+      [],
+      deps,
+    );
+    expect(unwrap(made).benches).toEqual([bench]);
   });
 });

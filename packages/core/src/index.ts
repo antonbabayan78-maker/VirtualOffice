@@ -11,6 +11,7 @@ export * from "./office/schedule.js";
 export * from "./office/run-state.js";
 export * from "./office/office.js";
 export * from "./department/review-policy.js";
+export * from "./department/bench.js";
 export * from "./department/department.js";
 export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";

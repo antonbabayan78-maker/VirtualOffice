@@ -6,6 +6,7 @@
  * Side states: blocked, escalated, transferred; terminal: done, cancelled.
  * Every transition appends exactly one history event.
  */
+import type { BenchId } from "../department/bench.js";
 import type { DepartmentId } from "../department/department.js";
 import type { EmployeeId } from "../employee/employee.js";
 import type { OfficeId } from "../office/office.js";
@@ -106,6 +107,13 @@ export interface Task {
   readonly priority: TaskPriority;
   readonly status: TaskStatus;
   readonly assigneeId: EmployeeId | null;
+  /**
+   * The bench that chose the assignee, when one did. Not used for routing —
+   * this is an ordinary assigned task however it got here. It is here so a
+   * bench's record of what it handed out can be read off the office's tasks,
+   * rather than kept as a second list somebody has to remember to update.
+   */
+  readonly benchId: BenchId | null;
   readonly reviewerIds: readonly EmployeeId[];
 
   /**
@@ -161,6 +169,7 @@ export interface CreateTaskInput {
   readonly brief?: string;
   readonly priority?: string;
   readonly assigneeId?: EmployeeId;
+  readonly benchId?: BenchId;
   readonly reviewerIds?: readonly EmployeeId[];
   /** Where this work has already been, when it was handed on from somewhere. */
   readonly route?: readonly DepartmentId[];
@@ -187,6 +196,7 @@ export interface TransitionOptions {
   readonly reason?: string;
   /** New assignee when moving into `assigned` (required if the task has none). */
   readonly assigneeId?: EmployeeId;
+  readonly benchId?: BenchId;
 }
 
 export const TASK_TITLE_MAX_LENGTH = 200;
@@ -308,6 +318,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     priority,
     status,
     assigneeId,
+    benchId: input.benchId ?? null,
     reviewerIds: [...reviewerIds],
     approvals: [],
     stage: null,

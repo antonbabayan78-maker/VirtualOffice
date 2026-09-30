@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BenchId } from "../department/bench.js";
 import type { DepartmentId } from "../department/department.js";
 import type { EmployeeId } from "../employee/employee.js";
 import type { OfficeId } from "../office/office.js";
@@ -51,6 +52,7 @@ describe("createTask", () => {
       priority: "normal",
       status: "backlog",
       assigneeId: null,
+      benchId: null,
       reviewerIds: [],
       approvals: [],
       stage: null,
@@ -491,5 +493,42 @@ describe("work approved here but not yet checked elsewhere", () => {
 
   it("may not go back to being worked on directly", () => {
     expect(canTransition("approved", "in_progress")).toBe(false);
+  });
+});
+
+describe("work a bench placed", () => {
+  const benchId = "bench-1" as BenchId;
+
+  it("remembers nothing about a bench when none placed it", () => {
+    expect(
+      unwrap(createTask({ officeId, departmentId, title: "Write it" }, deps)).benchId,
+    ).toBeNull();
+  });
+
+  it("remembers which bench placed it", () => {
+    // Not for routing — the task is assigned to a person like any other. This
+    // is what makes the bench's record derivable instead of a second list.
+    const task = createTask(
+      { officeId, departmentId, title: "Write it", assigneeId: ada, benchId },
+      deps,
+    );
+    expect(unwrap(task).benchId).toBe(benchId);
+  });
+
+  it("is an ordinary assigned task, however it got there", () => {
+    const task = unwrap(
+      createTask({ officeId, departmentId, title: "Write it", assigneeId: ada, benchId }, deps),
+    );
+    expect(task.status).toBe("assigned");
+    expect(task.assigneeId).toBe(ada);
+  });
+
+  it("keeps the bench that placed it when the work moves on", () => {
+    // Otherwise the record loses the task the moment somebody starts it.
+    const task = unwrap(
+      createTask({ officeId, departmentId, title: "Write it", assigneeId: ada, benchId }, deps),
+    );
+    const moved = unwrap(transitionTask(task, "in_progress", { at: t1, actorId: ada }));
+    expect(moved.benchId).toBe(benchId);
   });
 });
