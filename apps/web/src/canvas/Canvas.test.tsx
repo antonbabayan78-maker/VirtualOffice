@@ -11,6 +11,7 @@ import {
   type ConnectionId,
   type Employee,
   type EmployeeId,
+  type Office,
   type OfficeId,
 } from "@vo/core";
 import { createOfficeStore, type OfficeStore } from "../office/office-store.js";
@@ -292,5 +293,75 @@ describe("choosing an arrow", () => {
   it("opens nothing until one is chosen", () => {
     const store = openCanvas([link(eng, sales)]);
     expect(store.getState().selectedConnectionId).toBeNull();
+  });
+});
+
+describe("work that is not happening, seen without opening anything", () => {
+  const acme: Office = {
+    id: officeId,
+    name: "Acme Robotics",
+    schedule: { kind: "always" },
+    priority: "normal",
+    runState: "running",
+    configVersion: 1,
+    createdAt: at,
+  };
+
+  const openWith = (office: Office, departments = [eng, sales, ops]) => {
+    const store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "dept-new",
+      now: () => at,
+    });
+    store.getState().loadOffice(office);
+    store.getState().load(departments, [employee("emp-ada", "Ada", "dept-eng")], [], []);
+    render(<Canvas store={store} />);
+    return store;
+  };
+
+  it("says nothing when the office is working", () => {
+    // A banner that is always there is a banner nobody reads.
+    openWith(acme);
+    expect(screen.queryByRole("status", { name: /stopped/i })).toBeNull();
+  });
+
+  it("says the office is stopped, without a drawer being opened", () => {
+    // The failure worth designing against: a stopped office looks exactly like
+    // a quiet one, and nothing on the canvas would tell you which you had.
+    openWith({ ...acme, runState: "paused" });
+    expect(screen.getByRole("status", { name: /stopped/i })).toHaveTextContent(/stopped/i);
+  });
+
+  it("says why nothing is moving, not only that something is off", () => {
+    openWith({ ...acme, runState: "paused" });
+    expect(screen.getByRole("status", { name: /stopped/i })).toHaveTextContent(
+      /nothing|picked up|not being/i,
+    );
+  });
+
+  it("marks a stopped department on the room itself", () => {
+    openWith(acme, [{ ...eng, runState: "paused" }, sales, ops]);
+    const rooms = screen.getAllByTestId("department");
+    const engineering = rooms.find((room) => room.textContent.includes("Engineering"));
+
+    expect(engineering).toBeDefined();
+    expect(engineering).toHaveTextContent(/stopped/i);
+  });
+
+  it("leaves the working rooms unmarked", () => {
+    openWith(acme, [{ ...eng, runState: "paused" }, sales, ops]);
+    const rooms = screen.getAllByTestId("department");
+    const salesRoom = rooms.find((room) => room.textContent.includes("Sales"));
+
+    expect(salesRoom).not.toHaveTextContent(/stopped/i);
+  });
+
+  it("marks every room when the whole office is stopped", () => {
+    // A room that looks live inside a stopped office is a worse lie than no
+    // mark at all: its own switch is on, and it still picks up nothing.
+    openWith({ ...acme, runState: "paused" });
+    for (const room of screen.getAllByTestId("department")) {
+      expect(room).toHaveTextContent(/stopped/i);
+    }
   });
 });

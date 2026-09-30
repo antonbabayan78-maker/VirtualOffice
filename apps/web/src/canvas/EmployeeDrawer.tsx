@@ -19,6 +19,7 @@ import { Field, Problems, inputClass } from "../ui/field.js";
 import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
 import { Produced } from "./Produced.js";
+import { RunSwitch } from "./RunSwitch.js";
 import { Tray } from "./Tray.js";
 
 interface ModelRef {
@@ -419,6 +420,23 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           }}
         />
       </Field>
+
+      {/* Terminating is final, so it is not offered here: a settings panel is
+          not where somebody's employment ends, and a disabled switch would
+          imply it could be undone. */}
+      {employee.status === "terminated" ? (
+        <p className="rounded-panel border border-border p-2 text-xs text-ink-muted">
+          No longer works here. Their record is kept; they pick up nothing.
+        </p>
+      ) : (
+        <RunSwitch
+          what="person"
+          running={employee.status === "active"}
+          onChange={(running) => {
+            void store.getState().saveEmployeeStatus(employee.id, running ? "active" : "paused");
+          }}
+        />
+      )}
 
       {/* The department's grants go in as inherited, never as the person's own:
           copied onto them they would outlive the department's. */}

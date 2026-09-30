@@ -16,6 +16,12 @@ import { EmployeeAvatar, type ActivityState } from "./EmployeeAvatar.js";
 export interface DepartmentNodeData extends Record<string, unknown> {
   readonly name: string;
   readonly color: string;
+  /**
+   * Why this room is picking nothing up, or null when it is. Its own switch or
+   * the office's: a room that looked live inside a stopped office would be a
+   * worse lie than no mark at all, because its own switch really is on.
+   */
+  readonly stopped: "this department" | "the whole office" | null;
   readonly employees: readonly {
     readonly id: string;
     readonly name: string;
@@ -69,7 +75,7 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
       />
       <div
         data-testid="department"
-        className="flex h-full w-full flex-col overflow-hidden rounded-panel border-2"
+        className="flex h-full w-full flex-col overflow-hidden rounded-panel border-2 shadow-sm"
         style={{
           borderColor: data.color,
           // Mixed in sRGB, not oklch: the surface is white, white has no hue of
@@ -83,6 +89,14 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
           style={{ backgroundColor: data.color }}
         >
           <span>{data.name}</span>
+          {data.stopped !== null && (
+            <span
+              className="rounded bg-white/25 px-1.5 py-0.5 text-[10px] font-normal"
+              title={`Stopped: ${data.stopped} is not picking up work.`}
+            >
+              Stopped
+            </span>
+          )}
           <span className="ml-auto text-xs font-normal opacity-80">
             {data.employees.length === 1 ? "1 person" : `${String(data.employees.length)} people`}
           </span>

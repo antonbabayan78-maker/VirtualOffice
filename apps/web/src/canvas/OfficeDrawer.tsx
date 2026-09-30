@@ -13,6 +13,7 @@ import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { Connectors } from "./Connectors.js";
+import { RunSwitch } from "./RunSwitch.js";
 import { PriorityField } from "./PriorityField.js";
 
 interface Draft {
@@ -84,6 +85,16 @@ export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactN
         }}
         note="The organisation's own standing. It outranks every department, so nothing set below can overturn it."
         className={inputClass}
+      />
+
+      {/* Pressed, not drafted, for the same reason the connectors below are
+          saved as they change: stopping work must not wait for a Save. */}
+      <RunSwitch
+        what="office"
+        running={office.runState === "running"}
+        onChange={(running) => {
+          void store.getState().saveOfficeRunState(running ? "running" : "paused");
+        }}
       />
 
       {/* Its own saves, not part of this drawer's draft: a connector is an

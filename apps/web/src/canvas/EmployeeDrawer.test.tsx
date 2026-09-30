@@ -384,3 +384,56 @@ describe("what one person may use", () => {
     expect(mine()).toEqual([]);
   });
 });
+
+describe("pausing one person", () => {
+  const control = () => screen.getByRole("group", { name: /whether this person picks up work/i });
+  const them = () => store.getState().employees.find((one) => one.id === ada.id);
+
+  it("offers the switch", () => {
+    expect(control()).toBeTruthy();
+  });
+
+  it("pauses them the moment it is pressed", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+
+    expect(them()?.status).toBe("paused");
+  });
+
+  it("puts them back to work", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+    await user.click(within(control()).getByRole("checkbox"));
+
+    expect(them()?.status).toBe("active");
+  });
+
+  it("stays paused when the drawer is cancelled", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(them()?.status).toBe("paused");
+  });
+
+  it("does not offer to end somebody's employment", () => {
+    // Terminating is final. A settings panel beside a model dropdown is not
+    // where that belongs, and a disabled control would imply it could be undone.
+    expect(screen.queryByText(/terminate/i)).toBeNull();
+  });
+
+  it("says a terminated person is, rather than offering a switch", () => {
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([eng], [{ ...ada, status: "terminated" }, grace]);
+    store.getState().selectEmployee(ada.id);
+    view = render(<EmployeeDrawer store={store} />);
+
+    expect(screen.queryByRole("group", { name: /picks up work/i })).toBeNull();
+    expect(screen.getByRole("dialog")).toHaveTextContent(/no longer works here|terminated/i);
+  });
+});

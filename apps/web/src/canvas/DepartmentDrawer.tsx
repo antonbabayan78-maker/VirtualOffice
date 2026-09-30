@@ -17,6 +17,7 @@ import { Field, Problems, inputClass } from "../ui/field.js";
 import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
 import { Produced } from "./Produced.js";
+import { RunSwitch } from "./RunSwitch.js";
 import { Tray } from "./Tray.js";
 import {
   ALL_GATED_ACTIONS,
@@ -455,6 +456,16 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           </Button>
         </div>
       </div>
+
+      <RunSwitch
+        what="department"
+        running={department.runState === "running"}
+        onChange={(running) => {
+          void store
+            .getState()
+            .saveDepartmentRunState(department.id, running ? "running" : "paused");
+        }}
+      />
 
       <Grants
         connectors={connectors}

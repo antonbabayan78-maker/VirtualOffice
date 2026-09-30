@@ -345,3 +345,34 @@ describe("what a department may use", () => {
     expect(saved()?.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
   });
 });
+
+describe("stopping one department", () => {
+  const control = () =>
+    screen.getByRole("group", { name: /whether this department picks up work/i });
+
+  it("offers the switch", () => {
+    expect(control()).toBeTruthy();
+  });
+
+  it("stops the room the moment it is pressed", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+
+    expect(saved()?.runState).toBe("paused");
+  });
+
+  it("leaves the other rooms working", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+
+    expect(store.getState().departments.find((d) => d.id === sales.id)?.runState).toBe("running");
+  });
+
+  it("stays stopped when the drawer is cancelled", async () => {
+    const user = userEvent.setup();
+    await user.click(within(control()).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(saved()?.runState).toBe("paused");
+  });
+});
