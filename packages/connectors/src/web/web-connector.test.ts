@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TOOLS_BY_KIND } from "@vo/core";
 import { webBroker, WEB_TOOLS, type WebFetch } from "./web-connector.js";
 
 const connectorId = "conn-web";
@@ -49,6 +50,15 @@ describe("what a web connector says it can do", () => {
   it("says in its description that it only reads", async () => {
     const { broker: b } = broker({});
     expect((await b.describe())[0]?.description).toMatch(/read|fetch/i);
+  });
+
+  it("offers exactly what the office believes a web connector offers", async () => {
+    // The canvas makes a web connector from core's list, without importing this
+    // package. Two lists that drift make a tool the office grants and nothing
+    // performs, or one this offers that nobody can be granted.
+    const { broker: b } = broker({});
+    expect(WEB_TOOLS).toEqual(TOOLS_BY_KIND.web);
+    expect((await b.describe()).map((tool) => tool.name)).toEqual([...TOOLS_BY_KIND.web]);
   });
 });
 
