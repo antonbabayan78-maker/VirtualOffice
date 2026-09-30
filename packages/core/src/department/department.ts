@@ -7,6 +7,7 @@ import { err, ok, prefixErrors, type Result, type ValidationError } from "../sha
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
 import { type RunState } from "../office/run-state.js";
+import { validateBenchShape, type Bench } from "./bench.js";
 import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
@@ -62,6 +63,13 @@ export interface Department {
    * to these, never subtracted from them.
    */
   readonly toolGrants: readonly ToolGrant[];
+  /**
+   * Boxes in this room that take work in turn. Here rather than in a table of
+   * their own: a bench belongs to exactly one department, has no lifecycle
+   * apart from it, and is never referenced from another office — the same shape
+   * as the tool grants above.
+   */
+  readonly benches: readonly Bench[];
   readonly createdAt: Date;
 }
 
@@ -79,6 +87,7 @@ export interface CreateDepartmentInput {
   readonly priority?: string;
   readonly definitionOfDone?: readonly string[];
   readonly toolGrants?: readonly ToolGrant[];
+  readonly benches?: readonly Bench[];
   readonly schedule?: unknown;
 }
 
@@ -175,6 +184,7 @@ export interface UpdateDepartmentInput {
   readonly priority?: string;
   readonly definitionOfDone?: readonly string[];
   readonly toolGrants?: readonly ToolGrant[];
+  readonly benches?: readonly Bench[];
 }
 
 /**
@@ -235,6 +245,10 @@ export function updateDepartment(
   const definitionOfDone = changes.definitionOfDone ?? department.definitionOfDone;
   errors.push(...validateDefinitionOfDone(definitionOfDone));
 
+  const benches =
+    changes.benches === undefined ? ok(department.benches) : validateBenchShape(changes.benches);
+  if (!benches.ok) errors.push(...benches.error);
+
   const toolGrants =
     changes.toolGrants === undefined
       ? ok(department.toolGrants)
@@ -268,6 +282,7 @@ export function updateDepartment(
     priority,
     definitionOfDone: [...definitionOfDone],
     toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
+    benches: benches.ok ? [...benches.value] : [],
   });
 }
 
@@ -312,6 +327,9 @@ export function createDepartment(
   const toolGrants = validateGrantShape(input.toolGrants);
   if (!toolGrants.ok) errors.push(...toolGrants.error);
 
+  const benches = validateBenchShape(input.benches ?? []);
+  if (!benches.ok) errors.push(...benches.error);
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -343,6 +361,7 @@ export function createDepartment(
     priority,
     definitionOfDone: [...definitionOfDone],
     toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
+    benches: benches.ok ? [...benches.value] : [],
     createdAt: deps.now(),
   });
 }
