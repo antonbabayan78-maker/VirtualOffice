@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
   unwrap,
+  type Connector,
+  type ConnectorId,
   type Department,
   type DepartmentId,
   type OfficeId,
@@ -273,5 +275,73 @@ describe("what is in the room's trays", () => {
 describe("what the room's work has produced", () => {
   it("shows nothing until some work has produced something", () => {
     expect(screen.queryByRole("group", { name: /produced here/i })).toBeNull();
+  });
+});
+
+describe("what a department may use", () => {
+  const web: Connector = {
+    id: "conn-web" as ConnectorId,
+    officeId,
+    kind: "web",
+    name: "design-web",
+    config: { hosts: ["help.figma.com"] },
+    secretRef: null,
+    tools: ["fetch_url"],
+    enabled: true,
+    createdAt: at,
+  };
+
+  const withConnector = () => {
+    view.unmount();
+    view = open();
+    act(() => {
+      store.getState().loadConnectors([web]);
+    });
+  };
+
+  it("offers the office's connectors", () => {
+    withConnector();
+    const grants = screen.getByRole("group", { name: /what this department may use/i });
+    expect(within(grants).getByRole("group", { name: "design-web" })).toBeTruthy();
+  });
+
+  it("grants one, and saves it with the rest of the department", async () => {
+    withConnector();
+    const user = userEvent.setup();
+    const grants = screen.getByRole("group", { name: /what this department may use/i });
+    await user.click(within(grants).getByRole("checkbox", { name: /everything/i }));
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
+  });
+
+  it("changes nothing when the edit is abandoned", async () => {
+    withConnector();
+    const user = userEvent.setup();
+    const grants = screen.getByRole("group", { name: /what this department may use/i });
+    await user.click(within(grants).getByRole("checkbox", { name: /everything/i }));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(saved()?.toolGrants).toEqual([]);
+  });
+
+  it("keeps a grant it already had when something else is saved", async () => {
+    // The draft carries them; a save that left toolGrants out would clear them.
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([{ ...eng, toolGrants: [{ connectorId: "conn-web", tool: "*" }] }], []);
+    store.getState().loadConnectors([web]);
+    store.getState().select(eng.id);
+    view = render(<DepartmentDrawer store={store} />);
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(/priority/i), "urgent");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(saved()?.toolGrants).toEqual([{ connectorId: "conn-web", tool: "*" }]);
   });
 });

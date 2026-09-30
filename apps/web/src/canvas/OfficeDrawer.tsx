@@ -12,6 +12,7 @@ import type { TaskPriority, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { Connectors } from "./Connectors.js";
 import { PriorityField } from "./PriorityField.js";
 
 interface Draft {
@@ -84,6 +85,10 @@ export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactN
         note="The organisation's own standing. It outranks every department, so nothing set below can overturn it."
         className={inputClass}
       />
+
+      {/* Its own saves, not part of this drawer's draft: a connector is an
+          entity of the office rather than a field of it. */}
+      <Connectors store={store} />
 
       <div className="mt-auto flex gap-2 pt-2">
         <Button variant="primary" onClick={save}>
