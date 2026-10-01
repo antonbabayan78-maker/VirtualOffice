@@ -31,6 +31,8 @@ const post = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
   server.inject({ method: "POST", url, headers: auth, payload });
 const patch = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
   server.inject({ method: "PATCH", url, headers: auth, payload });
+const listedChannels = (response: LightMyRequestResponse) =>
+  response.json<{ items: Record<string, unknown>[] }>().items;
 const put = (url: string, payload: Body): Promise<LightMyRequestResponse> =>
   server.inject({ method: "PUT", url, headers: auth, payload });
 const get = (url: string): Promise<LightMyRequestResponse> =>
@@ -2594,5 +2596,203 @@ describe("what each level has spent", () => {
     await spend(iris, 5);
     const other = await anOffice();
     expect((await get(`/offices/${other}/spend`)).json<{ officeUsd: number }>().officeUsd).toBe(0);
+  });
+});
+
+describe("where an office sends word", () => {
+  let officeId: string;
+
+  const aChannel = (body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/channels`, {
+      kind: "slack",
+      name: "ops-alerts",
+      secret: "https://hooks.slack.test/services/T/B/x",
+      ...body,
+    });
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+  });
+
+  it("adds one", async () => {
+    const response = await aChannel();
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ kind: "slack", name: "ops-alerts", enabled: true });
+  });
+
+  it("never hands the secret back, not even to the one who set it", async () => {
+    // A Slack webhook is a bearer credential: reading it is posting to that
+    // channel for ever, and anybody who can open the canvas can read this.
+    const created = await aChannel();
+    expect(JSON.stringify(created.json())).not.toContain("hooks.slack.test");
+    expect(JSON.stringify(created.json())).toContain("hasSecret");
+  });
+
+  it("does not leak it when listing either", async () => {
+    await aChannel();
+    const listed = await get(`/offices/${officeId}/channels`);
+    expect(JSON.stringify(listed.json())).not.toContain("hooks.slack.test");
+  });
+
+  it("says whether one is configured, which is what anybody needs to know", async () => {
+    await aChannel();
+    const listed = listedChannels(await get(`/offices/${officeId}/channels`));
+    expect(listed[0]?.["hasSecret"]).toBe(true);
+  });
+
+  it("keeps the secret through a rename, since no canvas can send it back", async () => {
+    const id = (await aChannel()).json<{ id: string }>().id;
+    const renamed = await patch(`/channels/${id}`, { name: "alerts" });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json<{ hasSecret: boolean }>().hasSecret).toBe(true);
+  });
+
+  it("switches one off", async () => {
+    const id = (await aChannel()).json<{ id: string }>().id;
+    expect((await patch(`/channels/${id}`, { enabled: false })).json()).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it("removes one", async () => {
+    const id = (await aChannel()).json<{ id: string }>().id;
+    expect(
+      (await server.inject({ method: "DELETE", url: `/channels/${id}`, headers: auth })).statusCode,
+    ).toBe(204);
+    expect(listedChannels(await get(`/offices/${officeId}/channels`))).toEqual([]);
+  });
+
+  it("refuses a telegram channel with no chat to post in", async () => {
+    expect((await aChannel({ kind: "telegram", secret: "123:AA", config: {} })).statusCode).toBe(
+      400,
+    );
+  });
+
+  it("refuses a second channel with the same name", async () => {
+    await aChannel();
+    expect((await aChannel()).statusCode).toBe(400);
+  });
+
+  it("says so when there is no such office", async () => {
+    expect(
+      (await post("/offices/id-nope/channels", { kind: "slack", name: "x", secret: "y" }))
+        .statusCode,
+    ).toBe(404);
+  });
+});
+
+describe("warning when the money is nearly gone", () => {
+  let officeId: string;
+  let departmentId: string;
+  let iris: string;
+
+  const spend = async (usd: number, at = "2026-10-01T09:00:00Z") =>
+    post(`/offices/${officeId}/usage`, {
+      id: `ev-${String(Math.random())}`,
+      kind: "llm_call",
+      at: Date.parse(at),
+      attribution: { officeId, departmentId, employeeId: iris, taskId: "task-1" },
+      durationMs: 1000,
+      ok: true,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      cost: { totalUsd: usd },
+      streamed: false,
+    });
+
+  const warnings = () =>
+    events
+      .since(officeId, 0)
+      .filter((event) => (event.data as { kind?: string }).kind === "budget.warned");
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    await patch(`/offices/${officeId}`, { budget: { limitUsd: 10, warnAtUsd: 8, period: "day" } });
+    departmentId = await aDepartment(officeId, "Design");
+    iris = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Iris",
+        role: "Designer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+  });
+
+  it("says nothing while there is room", async () => {
+    await spend(5);
+    expect(warnings()).toHaveLength(0);
+  });
+
+  it("warns on the call that crosses the threshold", async () => {
+    await spend(5);
+    await spend(4);
+    expect(warnings()).toHaveLength(1);
+  });
+
+  it("warns once, not on every call after it", async () => {
+    // The whole reason the crossing is detected here: the spend before this
+    // row was under and after it is not, so there is nothing to remember and
+    // nothing to reset when the period rolls.
+    await spend(5);
+    await spend(4);
+    // Still warning, never over: crossing the limit is a second crossing and
+    // has its own test below.
+    await spend(0.3);
+    await spend(0.3);
+
+    expect(warnings()).toHaveLength(1);
+  });
+
+  it("says which level, and what it has spent against what", async () => {
+    await spend(9);
+    const warned = warnings()[0]?.data as Record<string, unknown>;
+
+    expect(warned["level"]).toBe("office");
+    expect(warned["spentUsd"]).toBeCloseTo(9);
+    expect(warned["limitUsd"]).toBe(10);
+  });
+
+  it("warns for a department over its own threshold", async () => {
+    await patch(`/departments/${departmentId}`, {
+      budget: { limitUsd: 4, warnAtUsd: 3, period: "day" },
+    });
+    await spend(3.5);
+
+    const levels = warnings().map((event) => (event.data as { level?: string }).level);
+    expect(levels).toContain("department");
+  });
+
+  it("warns again once the limit itself is crossed", async () => {
+    // Crossing the warning and crossing the limit are two different moments,
+    // and the second is the one that stops work.
+    await spend(9);
+    await spend(2);
+
+    expect(warnings()).toHaveLength(2);
+  });
+
+  it("says nothing for an office with no budget at all", async () => {
+    const plain = await anOffice();
+    await post(`/offices/${plain}/usage`, {
+      id: "ev-plain",
+      kind: "llm_call",
+      at: Date.parse("2026-10-01T09:00:00Z"),
+      attribution: { officeId: plain },
+      durationMs: 1,
+      ok: true,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      usage: {},
+      cost: { totalUsd: 500 },
+      streamed: false,
+    });
+
+    expect(
+      events.since(plain, 0).filter((e) => (e.data as { kind?: string }).kind === "budget.warned"),
+    ).toHaveLength(0);
   });
 });

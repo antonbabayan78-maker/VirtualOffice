@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OfficeId } from "@vo/core";
-import { isErr, unwrap } from "@vo/core";
+import { isErr } from "@vo/core";
 import {
   deliverAll,
   slackChannel,
@@ -17,6 +17,10 @@ const notification = (overrides: Partial<Notification> = {}): Notification => ({
   body: "Spent $8.10 of $10.00 today.",
   ...overrides,
 });
+
+/** What a call sent, as text. Every channel here posts a JSON string. */
+const bodyOf = (call: { init: RequestInit } | undefined): string =>
+  typeof call?.init.body === "string" ? call.init.body : "{}";
 
 /** A fetch that records what it was asked and answers from a script. */
 function scripted(answer: Response | Error = new Response("ok", { status: 200 })): {
@@ -48,7 +52,7 @@ describe("telling Slack", () => {
     const { fetch, calls } = scripted();
     await slackChannel({ webhookUrl: hook, fetch }).send(notification());
 
-    const body = JSON.parse(String(calls[0]?.init.body)) as { text: string };
+    const body = JSON.parse(bodyOf(calls[0])) as { text: string };
     expect(body.text).toContain("Design is near its daily budget");
     expect(body.text).toContain("$8.10");
   });
@@ -90,7 +94,7 @@ describe("telling Telegram", () => {
     const { fetch, calls } = scripted(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     await telegramChannel({ ...options, fetch }).send(notification());
 
-    const body = JSON.parse(String(calls[0]?.init.body)) as { chat_id: string; text: string };
+    const body = JSON.parse(bodyOf(calls[0])) as { chat_id: string; text: string };
     expect(body.chat_id).toBe("-100999");
     expect(body.text).toContain("Design is near its daily budget");
   });
@@ -118,7 +122,8 @@ describe("telling Telegram", () => {
 describe("telling everybody", () => {
   const ok: NotificationChannel = { send: () => Promise.resolve(unwrap0()) };
   const broken: NotificationChannel = {
-    send: () => Promise.resolve({ ok: false as const, error: [{ path: "slack", message: "down" }] }),
+    send: () =>
+      Promise.resolve({ ok: false as const, error: [{ path: "slack", message: "down" }] }),
   };
   const throws: NotificationChannel = {
     send: () => Promise.reject(new Error("exploded")),

@@ -14,6 +14,7 @@ import type {
   OfficeSnapshot,
   Skill,
   Task,
+  NotificationChannelRecord,
   UsageRecord,
 } from "@vo/core";
 import type { StoreCapabilities } from "../stores/capabilities.js";
@@ -88,6 +89,7 @@ function collections(tables: () => Tables, maxPageSize: number): RelationalColle
     tasks: repo<Task>("tasks"),
     documents: repo<Document>("documents"),
     usage: repo<UsageRecord>("usage"),
+    channels: repo<NotificationChannelRecord>("channels"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -115,6 +117,7 @@ export class InMemoryRelationalStore implements RelationalStore {
   readonly tasks: EntityRepository<Task>;
   readonly documents: EntityRepository<Document>;
   readonly usage: EntityRepository<UsageRecord>;
+  readonly channels: EntityRepository<NotificationChannelRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -133,6 +136,7 @@ export class InMemoryRelationalStore implements RelationalStore {
     this.tasks = c.tasks;
     this.documents = c.documents;
     this.usage = c.usage;
+    this.channels = c.channels;
     this.connections = c.connections;
     this.connectors = c.connectors;
     this.skills = c.skills;

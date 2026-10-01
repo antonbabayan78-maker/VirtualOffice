@@ -40,7 +40,7 @@ describe("SqliteRelationalStore", () => {
       expect.arrayContaining([...CANONICAL_TABLES.map((t) => t.name), "_vo_migrations"]),
     );
     expect(await store.migrationStatus()).toEqual({
-      applied: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage"],
+      applied: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage", "0005_channels"],
       pending: [],
     });
     await store.close();
@@ -52,7 +52,7 @@ describe("SqliteRelationalStore", () => {
     expect(await store.tables()).toEqual(["_vo_migrations"]);
     expect(await store.migrationStatus()).toEqual({
       applied: [],
-      pending: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage"],
+      pending: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage", "0005_channels"],
     });
     await store.migrateUp();
     expect(await store.tables()).toContain("tasks");
@@ -71,7 +71,7 @@ describe("SqliteRelationalStore", () => {
     expect((await second.offices.get("o1"))?.name).toBe("Persisted");
     expect(await second.employees.get("e1")).toEqual(fx.employee("e1", "o1", "d1"));
     expect(await second.migrationStatus()).toEqual({
-      applied: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage"],
+      applied: ["0001_initial", "0002_snapshots", "0003_documents", "0004_usage", "0005_channels"],
       pending: [],
     });
     await second.close();

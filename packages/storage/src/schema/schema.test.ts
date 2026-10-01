@@ -65,6 +65,7 @@ describe("canonical schema", () => {
       "0002_snapshots",
       "0003_documents",
       "0004_usage",
+      "0005_channels",
     ]);
     const created = CANONICAL_MIGRATIONS.flatMap((m) =>
       m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),
