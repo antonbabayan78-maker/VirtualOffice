@@ -42,11 +42,28 @@ export function officeSource(options: OfficeSourceOptions): () => Promise<Schedu
       return NOTHING;
     }
 
+    // What has been spent, for the budgets. A summary rather than the rows:
+    // a tick needs a handful of numbers to decide what to queue.
+    //
+    // An office whose figures cannot be read schedules as it always did, for
+    // the same reason the whole function does above — a network blip must not
+    // stop work that needs no network. Nothing known spent is the truthful
+    // answer, and it errs towards working rather than towards stopping.
+    const spend = await options.api.officeSpend(options.officeId, "day");
+    if (!spend.ok) {
+      options.onProblem?.(
+        `could not read spend for office ${options.officeId}: ${
+          spend.kind === "transport" ? spend.message : "the office refused the question"
+        }`,
+      );
+    }
+
     return officeSnapshot({
       office: loaded.value.office,
       departments: loaded.value.departments,
       employees: loaded.value.employees,
       tasks: loaded.value.tasks,
+      ...(spend.ok ? { spend: spend.value } : {}),
     });
   };
 }

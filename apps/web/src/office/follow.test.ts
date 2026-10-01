@@ -84,6 +84,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     getDocument: () => Promise.reject(new Error("not used here")),
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     listUsage: () => Promise.resolve({ ok: true, value: [] }),
+    officeSpend: () => Promise.reject(new Error("not used here")),
     createConnector: () => Promise.reject(new Error("not used here")),
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),

@@ -406,6 +406,7 @@ describe("the office itself", () => {
     schedule: { kind: "always" as const },
     priority: "normal" as const,
     runState: "running" as const,
+    budget: null,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };
@@ -461,6 +462,7 @@ describe("being told where the office actually lives", () => {
     schedule: { kind: "always" as const },
     priority: "normal" as const,
     runState: "running" as const,
+    budget: null,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };
@@ -645,6 +647,7 @@ describe("wiring an office up from the canvas", () => {
     schedule: { kind: "always" as const },
     priority: "normal" as const,
     runState: "running" as const,
+    budget: null,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };
@@ -852,6 +855,7 @@ describe("stopping and starting work from the canvas", () => {
     schedule: { kind: "always" as const },
     priority: "normal" as const,
     runState: "running" as const,
+    budget: null,
     configVersion: 1,
     createdAt: new Date("2026-09-28T09:00:00Z"),
   };

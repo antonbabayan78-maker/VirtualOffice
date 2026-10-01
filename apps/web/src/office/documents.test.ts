@@ -59,6 +59,7 @@ function scriptedApi(): Scripted {
     setEmployeeStatus: unused,
     recordUsage: unused,
     listUsage: unused,
+    officeSpend: unused,
     listDocuments: unused,
     uploadDocument: (_officeId, input) => {
       uploads.push({ ...input });

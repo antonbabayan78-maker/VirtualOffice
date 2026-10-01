@@ -600,3 +600,135 @@ describe("an office or a room somebody stopped", () => {
     expect(due.jobs).toHaveLength(1);
   });
 });
+
+describe("work stopped by a budget rather than by a person", () => {
+  const capped = { limitUsd: 10, warnAtUsd: 8, period: "day" as const };
+
+  it("passes over a task when the office is over its budget", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, budget: capped, spentUsd: 10 }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped[0]).toMatchObject({ reason: "office_over_budget" });
+  });
+
+  it("says which level stopped it, since that is the first thing anybody asks", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        departments: [
+          { id: dept, officeId: office, schedule: ALWAYS, budget: capped, spentUsd: 12 },
+        ],
+      }),
+      duringHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "department_over_budget" });
+  });
+
+  it("stops one person without stopping the room", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        employees: [
+          {
+            id: ada,
+            officeId: office,
+            departmentId: dept,
+            status: "active",
+            schedule: ALWAYS,
+            budget: capped,
+            spentUsd: 10,
+          },
+        ],
+      }),
+      duringHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "employee_over_budget" });
+  });
+
+  it("keeps working below the limit", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, budget: capped, spentUsd: 9.99 }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toHaveLength(1);
+  });
+
+  it("keeps working at a warning, which is a warning and not a stop", () => {
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: ALWAYS, budget: capped, spentUsd: 8.5 }],
+      }),
+      duringHours,
+    );
+    expect(due.jobs).toHaveLength(1);
+  });
+
+  it("says a person stopped it rather than a budget, when both are true", () => {
+    // A stopped office is stopped whatever it has spent, and "somebody stopped
+    // this" is the more useful answer of the two.
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [
+          { id: office, schedule: ALWAYS, runState: "paused", budget: capped, spentUsd: 99 },
+        ],
+      }),
+      duringHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "office_paused" });
+  });
+
+  it("says over budget rather than shut, when both are true", () => {
+    // "Shut until Monday" implies waiting will fix it, and here it will not.
+    const due = computeDueWork(
+      snapshot({
+        tasks: [task()],
+        offices: [{ id: office, schedule: OFFICE_HOURS, budget: capped, spentUsd: 10 }],
+      }),
+      afterHours,
+    );
+    expect(due.skipped[0]).toMatchObject({ reason: "office_over_budget" });
+  });
+
+  it("works as before when no level has a budget", () => {
+    expect(computeDueWork(snapshot({ tasks: [task()] }), duringHours).jobs).toHaveLength(1);
+  });
+
+  it("works when a budget is set and nothing has been spent", () => {
+    const due = computeDueWork(
+      snapshot({ tasks: [task()], offices: [{ id: office, schedule: ALWAYS, budget: capped }] }),
+      duringHours,
+    );
+    expect(due.jobs).toHaveLength(1);
+  });
+
+  it("holds recurring work back too, so a digest cannot outspend the cap", () => {
+    const due = computeDueWork(
+      snapshot({
+        recurring: [
+          {
+            id: "digest",
+            officeId: office,
+            cron: "0 9 * * 1-5",
+            timezone: "Asia/Nicosia",
+            kind: "daily_digest",
+            lastRunAt: null,
+          },
+        ],
+        offices: [{ id: office, schedule: ALWAYS, budget: capped, spentUsd: 10 }],
+      }),
+      new Date("2026-09-28T06:00:30.000Z"),
+    );
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped[0]).toMatchObject({ reason: "office_over_budget" });
+  });
+});

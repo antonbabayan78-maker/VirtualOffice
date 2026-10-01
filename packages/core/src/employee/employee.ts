@@ -203,7 +203,7 @@ export function createEmployee(
     llm: llm.value,
     skillIds: skillIds.value,
     toolGrants: toolGrants.value,
-    budget: budget.ok ? budget.value : null,
+    budget: budget.value,
     schedule,
     supervisorId: supervisorId.value,
     workspaceRef: input.workspaceRef ?? null,
