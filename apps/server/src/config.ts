@@ -10,6 +10,11 @@
  * the network the moment somebody ran it to try it out. And it keeps everything
  * in memory, because somebody trying it out should get a working office rather
  * than a request for a database — a real deployment names its storage.
+ *
+ * The exception is the coordination store, which stays in memory even when the
+ * records move: it is leader election between workers, nothing here reads it,
+ * and pointing it at a database that cannot elect anybody would stop a server
+ * that would otherwise have run perfectly well.
  */
 import { err, ok, type Result, type ValidationError } from "@vo/core";
 import type { StorageConfig } from "@vo/storage";
@@ -64,13 +69,23 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
   // about adapters rather than about configuration.
   const records = url("VO_STORAGE", "memory:");
   const blobs = url("VO_BLOBS", "memory:");
+  /**
+   * Leader election, which is between workers and not something this server
+   * reads at all. It gets its own setting, and its own default, because
+   * following the records would make every sqlite deployment fail on startup:
+   * the sqlite adapter keeps records, events and vectors, and does not elect
+   * anybody. The variable is here for the day a shared queue needs one.
+   */
+  const coordination = url("VO_COORDINATION", "memory:");
 
   const allowedOrigins = (env["VO_ALLOWED_ORIGINS"] ?? "")
     .split(",")
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
 
-  if (errors.length > 0 || records === null || blobs === null) return err(errors);
+  if (errors.length > 0 || records === null || blobs === null || coordination === null) {
+    return err(errors);
+  }
 
   return ok({
     port,
@@ -81,7 +96,7 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
       relational: records,
       vector: records,
       events: records,
-      coordination: records,
+      coordination,
       blobs,
     },
     allowedOrigins,
