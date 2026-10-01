@@ -2,6 +2,10 @@
  * The application shell: a title bar, the navigation, and whatever route is
  * showing. Deliberately thin — the canvas and the drawers arrive as their own
  * tasks and mount inside this.
+ *
+ * In front of it, the session: a canvas the office served has no token in it,
+ * so the first thing it does is ask whether it is signed in, and the shell is
+ * what it shows once it is and knows which office it is for.
  */
 import type { ReactNode } from "react";
 import { NavLink, Route, Routes } from "react-router";
@@ -11,8 +15,12 @@ import { useTheme } from "../ui/theme.js";
 import { Placeholder, ROUTES, type RouteDefinition } from "./routes.js";
 import { CanvasScreen } from "../canvas/CanvasScreen.js";
 import { officeStore } from "../office/store.js";
-import { useOffice } from "../office/useOffice.js";
+import { useOffice, type OfficePlan } from "../office/useOffice.js";
 import { UsageScreen } from "../usage/UsageScreen.js";
+import { ChooseOffice } from "./ChooseOffice.js";
+import { SignIn } from "./SignIn.js";
+import { useSession } from "./useSession.js";
+import type { SessionDeps } from "./session.js";
 
 function ThemeToggle(): ReactNode {
   const { resolved, toggle } = useTheme();
@@ -34,11 +42,59 @@ function screenFor(route: RouteDefinition): ReactNode {
   return <Placeholder route={route} />;
 }
 
-export function App(): ReactNode {
+export function App({
+  session: deps,
+}: { readonly session?: Partial<SessionDeps> } = {}): ReactNode {
+  const { session, signIn, createOffice, openOffice, signOut } = useSession(deps ?? {});
+
+  if (session === null) {
+    return (
+      <main className="flex h-full items-center justify-center bg-canvas p-6 text-ink">
+        <p className="text-xs text-ink-muted">Finding the office…</p>
+      </main>
+    );
+  }
+
+  if (session.kind === "signIn") {
+    return <SignIn onSignIn={signIn} problem={session.problem} />;
+  }
+
+  if (session.kind === "choose") {
+    return (
+      <ChooseOffice
+        offices={session.offices}
+        onOpen={openOffice}
+        onCreate={createOffice}
+        onSignOut={() => void signOut()}
+      />
+    );
+  }
+
+  return (
+    <Shell
+      plan={
+        session.kind === "sample" ? { kind: "sample" } : { kind: "office", config: session.config }
+      }
+      // Only for a browser that signed in: a canvas configured with a token of
+      // its own has nothing here to give back.
+      onSignOut={
+        session.kind === "ready" && session.config.token === undefined ? () => signOut() : null
+      }
+    />
+  );
+}
+
+function Shell({
+  plan,
+  onSignOut,
+}: {
+  readonly plan: OfficePlan;
+  readonly onSignOut: (() => Promise<void>) | null;
+}): ReactNode {
   // Above the router on purpose: moving between sections must not reload the
   // office, and landing on any address should find the same data as landing on
   // the canvas.
-  const problem = useOffice(officeStore);
+  const problem = useOffice(officeStore, plan);
 
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
@@ -61,7 +117,17 @@ export function App(): ReactNode {
             </NavLink>
           ))}
         </nav>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {onSignOut !== null && (
+            <Button
+              aria-label="Sign out"
+              onClick={() => {
+                void onSignOut();
+              }}
+            >
+              Sign out
+            </Button>
+          )}
           <ThemeToggle />
         </div>
       </header>

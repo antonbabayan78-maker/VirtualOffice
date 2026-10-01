@@ -6,8 +6,11 @@
  * offset the client has *now*, not the one it had when it first connected, so a
  * reconnect resumes rather than replaying what has already been applied.
  *
- * A browser cannot put headers on a WebSocket, which is why the token travels
- * in the query string. The server refuses the upgrade before accepting it.
+ * A browser cannot put headers on a WebSocket. A canvas that was given a token
+ * therefore puts it in the query string; one that signed in puts nothing there
+ * at all, because the cookie the office set travels with the upgrade on its own
+ * — and a token in a query string is a token in every proxy log between here and
+ * the office. Either way the server refuses the upgrade before accepting it.
  */
 export interface StreamSocket {
   onmessage: ((event: { data: string }) => void) | null;
@@ -18,7 +21,8 @@ export interface StreamSocket {
 
 export interface StreamOptions {
   readonly url: string;
-  readonly token: string;
+  /** Absent when the browser has signed in: the cookie is the credential. */
+  readonly token?: string;
   readonly officeId: string;
   /** Read at connect time, so a reconnect resumes from where the canvas is. */
   readonly since: () => number;
@@ -48,7 +52,7 @@ export function openOfficeStream(options: StreamOptions): OfficeStream {
     if (!wanted) return;
     const query = new URLSearchParams({
       officeId: options.officeId,
-      token: options.token,
+      ...(options.token === undefined ? {} : { token: options.token }),
       since: String(options.since()),
     });
     const next = makeSocket(`${options.url}?${query.toString()}`);

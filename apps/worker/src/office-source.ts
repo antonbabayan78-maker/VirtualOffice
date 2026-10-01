@@ -37,7 +37,9 @@ export function officeSource(options: OfficeSourceOptions): () => Promise<Schedu
           ? loaded.errors.map((error) => `${error.path}: ${error.message}`).join("; ")
           : loaded.kind === "conflict"
             ? "the office changed while it was being read"
-            : loaded.message;
+            : loaded.kind === "unauthorized"
+              ? "this office does not accept our token"
+              : loaded.message;
       options.onProblem?.(`could not read office ${options.officeId}: ${detail}`);
       return NOTHING;
     }

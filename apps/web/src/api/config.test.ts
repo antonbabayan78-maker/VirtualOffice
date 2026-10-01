@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readApiConfig } from "./config.js";
+import { officeServingThisPage, readApiConfig } from "./config.js";
 
 describe("deciding whether there is an office to talk to", () => {
   it("is configured when it has a url, a token and an office", () => {
@@ -63,5 +63,63 @@ describe("deciding whether there is an office to talk to", () => {
         VITE_VO_OFFICE_ID: "o",
       })?.streamUrl,
     ).toBe("wss://office.example.com/ws");
+  });
+});
+
+describe("an office that served this page", () => {
+  const ok = () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+  it("asks its own address whether an office answers there", async () => {
+    const asked: string[] = [];
+    const where = await officeServingThisPage({
+      origin: "https://office.example.com",
+      fetch: (input) => {
+        asked.push(input instanceof Request ? input.url : input.toString());
+        return ok();
+      },
+    });
+
+    expect(asked).toEqual(["https://office.example.com/health"]);
+    expect(where).toEqual({
+      baseUrl: "https://office.example.com",
+      streamUrl: "wss://office.example.com/ws",
+    });
+  });
+
+  it("finds none when the address answers something that is not an office", async () => {
+    // A dev server answers every path with the canvas itself, and HTML is not
+    // an office saying it is well.
+    const html = () =>
+      Promise.resolve(
+        new Response("<!doctype html>", { status: 200, headers: { "content-type": "text/html" } }),
+      );
+    const where = await officeServingThisPage({
+      origin: "http://localhost:5173",
+      fetch: html,
+    });
+
+    expect(where).toBeNull();
+  });
+
+  it("finds none when nothing answers at all", async () => {
+    const where = await officeServingThisPage({
+      origin: "http://localhost:5173",
+      fetch: () => Promise.reject(new Error("refused")),
+    });
+    expect(where).toBeNull();
+  });
+
+  it("finds none when the address answers an error", async () => {
+    const where = await officeServingThisPage({
+      origin: "http://localhost:5173",
+      fetch: () => Promise.resolve(new Response("nope", { status: 502 })),
+    });
+    expect(where).toBeNull();
   });
 });

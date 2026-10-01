@@ -1113,3 +1113,168 @@ describe("asking the office what it has spent", () => {
     expect((await client().officeSpend("office-acme", "day")).ok).toBe(false);
   });
 });
+
+describe("a client that signs in instead of carrying a token", () => {
+  /** A fetch that records what it was asked, so the headers can be read. */
+  const watching = () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetch = ((input: string | URL | Request, init: RequestInit = {}) => {
+      calls.push({ url: input instanceof Request ? input.url : input.toString(), init });
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }) as typeof globalThis.fetch;
+    return { calls, fetch };
+  };
+
+  const headerOf = (init: RequestInit, name: string): string | undefined =>
+    (init.headers as Record<string, string> | undefined)?.[name];
+
+  it("sends no authorization header, because it has nothing to put in one", async () => {
+    const watcher = watching();
+    await createApiClient({ baseUrl: BASE, fetch: watcher.fetch }).listOffices();
+
+    expect(headerOf(watcher.calls[0]?.init ?? {}, "authorization")).toBeUndefined();
+  });
+
+  it("sends the cookie instead, which is what it is signed in with", async () => {
+    const watcher = watching();
+    await createApiClient({ baseUrl: BASE, fetch: watcher.fetch }).listOffices();
+
+    expect(watcher.calls[0]?.init.credentials).toBe("include");
+  });
+
+  it("still sends the header when it was given a token", async () => {
+    const watcher = watching();
+    await createApiClient({ baseUrl: BASE, token: "sk-owner", fetch: watcher.fetch }).listOffices();
+
+    expect(headerOf(watcher.calls[0]?.init ?? {}, "authorization")).toBe("Bearer sk-owner");
+  });
+
+  it("asks for a document's bytes the same way", async () => {
+    // The byte path builds its own request, and was the one place a token was
+    // put on by hand.
+    const watcher = watching();
+    await createApiClient({ baseUrl: BASE, fetch: watcher.fetch }).downloadDocument("doc-1");
+
+    expect(headerOf(watcher.calls[0]?.init ?? {}, "authorization")).toBeUndefined();
+  });
+});
+
+describe("signing in from a browser", () => {
+  it("hands the token over once and says it worked", async () => {
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/session`, async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json({ signedIn: true });
+      }),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).signIn("sk-owner");
+    expect(result.ok).toBe(true);
+    expect(sent).toEqual({ token: "sk-owner" });
+  });
+
+  it("says a token the office refused was refused, rather than throwing", async () => {
+    server.use(
+      http.post(`${BASE}/session`, () =>
+        HttpResponse.json({ error: "that is not a token this office knows" }, { status: 401 }),
+      ),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).signIn("sk-nonsense");
+    expect(result.ok).toBe(false);
+  });
+
+  it("signs out", async () => {
+    let asked = false;
+    server.use(
+      http.delete(`${BASE}/session`, () => {
+        asked = true;
+        return HttpResponse.json({ signedIn: false });
+      }),
+    );
+
+    expect((await createApiClient({ baseUrl: BASE }).signOut()).ok).toBe(true);
+    expect(asked).toBe(true);
+  });
+});
+
+describe("finding out which offices there are", () => {
+  it("lists them", async () => {
+    server.use(
+      http.get(`${BASE}/offices`, () =>
+        HttpResponse.json({
+          items: [
+            { id: "office-1", name: "Northwind", createdAt: "2026-10-01T09:00:00.000Z" },
+            { id: "office-2", name: "Acme", createdAt: "2026-10-01T10:00:00.000Z" },
+          ],
+        }),
+      ),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).listOffices();
+    expect(result.ok && result.value.map((one) => one.name)).toEqual(["Northwind", "Acme"]);
+  });
+
+  it("turns their dates back into dates, like every other office it reads", async () => {
+    server.use(
+      http.get(`${BASE}/offices`, () =>
+        HttpResponse.json({
+          items: [{ id: "office-1", name: "Northwind", createdAt: "2026-10-01T09:00:00.000Z" }],
+        }),
+      ),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).listOffices();
+    if (result.ok) expect(result.value[0]?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("says when nobody is signed in, so the canvas can ask", async () => {
+    server.use(http.get(`${BASE}/offices`, () => new HttpResponse(null, { status: 401 })));
+
+    const result = await createApiClient({ baseUrl: BASE }).listOffices();
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.kind).toBe("unauthorized");
+  });
+
+  it("makes one, for a deployment that has none yet", async () => {
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/offices`, async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json(
+          { id: "office-new", name: "Northwind", createdAt: "2026-10-02T09:00:00.000Z" },
+          { status: 201 },
+        );
+      }),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).createOffice("Northwind");
+    expect(sent).toEqual({ name: "Northwind" });
+    expect(result.ok && result.value.id).toBe("office-new");
+  });
+
+  it("says why an office it would not make was refused", async () => {
+    server.use(
+      http.post(`${BASE}/offices`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "name", message: "must not be empty" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const result = await createApiClient({ baseUrl: BASE }).createOffice("  ");
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.message).toMatch(/empty/);
+    } else {
+      throw new Error("expected the office to refuse the name");
+    }
+  });
+});
