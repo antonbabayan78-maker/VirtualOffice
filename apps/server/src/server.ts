@@ -18,6 +18,7 @@ import {
   createDepartment,
   createEmployee,
   createConnector,
+  createNotificationChannel,
   createOffice,
   EMPLOYEE_STATUSES,
   isDocumentOwnerKind,
@@ -31,7 +32,10 @@ import {
   setRunState,
   transitionEmployee,
   isBudgetPeriod,
+  budgetStanding,
   periodStart,
+  redactChannel,
+  updateNotificationChannel,
   usageRecordOf,
   updateConnection,
   updateConnector,
@@ -43,6 +47,8 @@ import {
   updateEmployee,
   type ConnectionId,
   type ConnectorId,
+  type NotificationChannelId,
+  type Office,
   type BenchId,
   type DepartmentId,
   type DocumentId,
@@ -98,6 +104,18 @@ export interface ServerOptions {
    * API is reachable by servers and command lines only.
    */
   readonly allowedOrigins?: readonly string[];
+  /**
+   * Where word is sent when something happens — Slack, Telegram, whatever the
+   * office has configured. Injected so the server has no idea what a channel
+   * is, and so no test can post into a real one by accident. A deployment that
+   * passes none still runs: the stream event is published either way.
+   */
+  readonly notify?: (notification: {
+    readonly officeId: OfficeId;
+    readonly kind: string;
+    readonly subject: string;
+    readonly body: string;
+  }) => Promise<void>;
 }
 
 /** The events a task may be given; anything else is a client mistake, not a 500. */
@@ -153,6 +171,10 @@ function runStateFrom(body: unknown, errors: ValidationError[]): "running" | "pa
   if (isRunState(value)) return value;
   errors.push({ path: "runState", message: `must be one of ${RUN_STATES.join(", ")}` });
   return null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function missing(reply: FastifyReply, what: string): FastifyReply {
@@ -260,6 +282,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     forceCloseConnections: options.forceCloseConnections ?? false,
   });
   const store = options.store;
+  const notify = options.notify;
   const events = options.events ?? new OfficeEventLog();
   const workflow = defaultWorkflowEngine();
   const newId = options.id ?? (() => crypto.randomUUID());
@@ -665,7 +688,175 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return moved.value;
   });
 
+  // -- notification channels -------------------------------------------------
+
+  /**
+   * Where this office sends word. The secret never comes back out: it is a
+   * bearer credential, and anybody who can open the canvas can read a response.
+   */
+  const channelsIn = async (officeId: string) =>
+    (await store.channels.list({ where: { officeId: officeId as OfficeId } })).items;
+
+  app.get("/offices/:officeId/channels", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    return { items: (await channelsIn(officeId)).map(redactChannel) };
+  });
+
+  app.post("/offices/:officeId/channels", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const body = request.body as Record<string, unknown>;
+
+    const made = createNotificationChannel(
+      {
+        officeId: officeId as OfficeId,
+        kind: body["kind"],
+        name: body["name"],
+        secret: body["secret"],
+        ...(isPlainObject(body["config"]) ? { config: body["config"] } : {}),
+        ...(typeof body["enabled"] === "boolean" ? { enabled: body["enabled"] } : {}),
+      },
+      await channelsIn(officeId),
+      { id: () => newId() as NotificationChannelId, now },
+    );
+    if (isErr(made)) return fail(reply, made.error);
+    await store.channels.put(made.value);
+    events.publish(made.value.officeId, { kind: "channel.created", id: made.value.id });
+    return reply.code(201).send(redactChannel(made.value));
+  });
+
+  app.patch("/channels/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const channel = await store.channels.get(id);
+    if (channel === null) return missing(reply, "channel");
+
+    const body = request.body as Record<string, unknown>;
+    const updated = updateNotificationChannel(
+      channel,
+      {
+        ...(body["name"] === undefined ? {} : { name: body["name"] }),
+        // Absent keeps the one it has: a canvas never holds the secret, so a
+        // rename would otherwise wipe delivery.
+        ...(body["secret"] === undefined ? {} : { secret: body["secret"] }),
+        ...(isPlainObject(body["config"]) ? { config: body["config"] } : {}),
+        ...(typeof body["enabled"] === "boolean" ? { enabled: body["enabled"] } : {}),
+      },
+      (await channelsIn(channel.officeId)).filter((one) => one.id !== channel.id),
+    );
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.channels.put(updated.value);
+    events.publish(channel.officeId, { kind: "channel.updated", id });
+    return redactChannel(updated.value);
+  });
+
+  app.delete("/channels/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const channel = await store.channels.get(id);
+    if (channel === null) return missing(reply, "channel");
+    await store.channels.delete(id);
+    events.publish(channel.officeId, { kind: "channel.deleted", id });
+    return reply.code(204).send();
+  });
+
   // -- usage -----------------------------------------------------------------
+
+  /** What one level has spent in its own budget's period, and how that stands. */
+  interface Standing {
+    readonly standing: "ok" | "warn" | "over";
+    readonly spentUsd: number;
+    readonly limitUsd: number;
+    readonly name: string;
+  }
+
+  const spentFor = async (
+    office: Office,
+    period: "day" | "month",
+    pick: (row: { readonly employeeId: string | null }) => boolean,
+  ): Promise<number> => {
+    const timezone = office.schedule.kind === "windows" ? office.schedule.timezone : "UTC";
+    const since = periodStart(period, now(), timezone);
+    const rows = await store.usage.list({ where: { officeId: office.id } });
+    let total = 0;
+    for (const row of rows.items) {
+      if (row.at.getTime() < since.getTime() || !pick(row)) continue;
+      const cost = row.event["cost"];
+      if (isPlainObject(cost) && typeof cost["totalUsd"] === "number") total += cost["totalUsd"];
+    }
+    return total;
+  };
+
+  /**
+   * Where the office, and the room and person a call was attributed to, stand
+   * against their budgets right now. Only levels with a budget appear.
+   */
+  const standings = async (
+    office: Office,
+    employeeId: string | null,
+  ): Promise<Record<string, Standing>> => {
+    const out: Record<string, Standing> = {};
+    const employee = employeeId === null ? null : await store.employees.get(employeeId);
+    const department =
+      employee === null ? null : await store.departments.get(employee.departmentId);
+
+    if (office.budget !== null) {
+      const spent = await spentFor(office, office.budget.period, () => true);
+      out["office"] = {
+        standing: budgetStanding(office.budget, spent),
+        spentUsd: spent,
+        limitUsd: office.budget.limitUsd,
+        name: office.name,
+      };
+    }
+    if (department?.budget != null) {
+      const staff = await store.employees.list({ where: { departmentId: department.id } });
+      const inRoom = new Set(staff.items.map((one) => one.id as string));
+      const spent = await spentFor(office, department.budget.period, (row) =>
+        row.employeeId === null ? false : inRoom.has(row.employeeId),
+      );
+      out["department"] = {
+        standing: budgetStanding(department.budget, spent),
+        spentUsd: spent,
+        limitUsd: department.budget.limitUsd,
+        name: department.name,
+      };
+    }
+    if (employee?.budget != null) {
+      const spent = await spentFor(
+        office,
+        employee.budget.period,
+        (row) => row.employeeId === employee.id,
+      );
+      out["employee"] = {
+        standing: budgetStanding(employee.budget, spent),
+        spentUsd: spent,
+        limitUsd: employee.budget.limitUsd,
+        name: employee.name,
+      };
+    }
+    return out;
+  };
+
+  /** Says it on the stream, and sends it wherever the office has asked. */
+  const warn = async (officeId: OfficeId, level: string, standing: Standing): Promise<void> => {
+    events.publish(officeId, {
+      kind: "budget.warned",
+      id: officeId,
+      level,
+      standing: standing.standing,
+      spentUsd: standing.spentUsd,
+      limitUsd: standing.limitUsd,
+    });
+    await notify?.({
+      officeId,
+      kind: "budget.warned",
+      subject:
+        standing.standing === "over"
+          ? `${standing.name} has reached its budget`
+          : `${standing.name} is near its budget`,
+      body: `Spent $${standing.spentUsd.toFixed(2)} of $${standing.limitUsd.toFixed(2)}.`,
+    });
+  };
 
   /**
    * What the office was spent on. One row per metered call.
@@ -676,11 +867,28 @@ export function buildServer(options: ServerOptions): FastifyInstance {
    */
   app.post("/offices/:officeId/usage", async (request, reply) => {
     const { officeId } = request.params as { officeId: string };
-    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const office = await store.offices.get(officeId);
+    if (office === null) return missing(reply, "office");
 
     const record = usageRecordOf(request.body as Record<string, unknown>, { id: () => newId() });
     if (isErr(record)) return fail(reply, record.error);
+
+    // Where each level stood before this call, so the one that crosses a
+    // threshold can be told apart from the ones after it.
+    const before = await standings(office, record.value.employeeId);
     await store.usage.put(record.value);
+    const after = await standings(office, record.value.employeeId);
+
+    for (const [level, now] of Object.entries(after)) {
+      const was = before[level];
+      // The crossing, and only the crossing: no flag is stored and nothing has
+      // to be reset when the period rolls, because "under before, not under
+      // now" is true exactly once per threshold per period.
+      if (was === undefined || was.standing === now.standing) continue;
+      if (now.standing === "ok") continue;
+      await warn(office.id, level, now);
+    }
+
     return reply.code(201).send(record.value);
   });
 

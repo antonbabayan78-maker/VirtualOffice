@@ -244,6 +244,9 @@ importers:
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vo/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
       '@vo/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator

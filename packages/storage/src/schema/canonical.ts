@@ -154,11 +154,18 @@ export const USAGE_TABLE: TableDef = table(
   [["office_id"], ["task_id"], ["office_id", "at"]],
 );
 
+export const CHANNELS_TABLE: TableDef = table(
+  "channels",
+  [id, officeId, { name: "name", type: "text" }, { name: "kind", type: "text" }, data],
+  [["office_id"]],
+);
+
 export const CANONICAL_TABLES: readonly TableDef[] = [
   ...INITIAL_TABLES,
   SNAPSHOTS_TABLE,
   DOCUMENTS_TABLE,
   USAGE_TABLE,
+  CHANNELS_TABLE,
 ];
 
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
@@ -181,5 +188,10 @@ export const CANONICAL_MIGRATIONS: readonly Migration[] = [
     id: "0004_usage",
     up: [{ op: "createTable", table: USAGE_TABLE }],
     down: [{ op: "dropTable", name: USAGE_TABLE.name }],
+  },
+  {
+    id: "0005_channels",
+    up: [{ op: "createTable", table: CHANNELS_TABLE }],
+    down: [{ op: "dropTable", name: CHANNELS_TABLE.name }],
   },
 ];

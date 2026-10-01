@@ -18,6 +18,7 @@ import type {
   OfficeSnapshot,
   Skill,
   Task,
+  NotificationChannelRecord,
   UsageRecord,
 } from "@vo/core";
 import {
@@ -370,6 +371,7 @@ function collections(
     tasks: repo<Task>("tasks"),
     documents: repo<Document>("documents"),
     usage: repo<UsageRecord>("usage"),
+    channels: repo<NotificationChannelRecord>("channels"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     skills: repo<Skill>("skills"),
@@ -389,6 +391,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly tasks: EntityRepository<Task>;
   readonly documents: EntityRepository<Document>;
   readonly usage: EntityRepository<UsageRecord>;
+  readonly channels: EntityRepository<NotificationChannelRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly skills: EntityRepository<Skill>;
@@ -430,6 +433,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.tasks = this.all.tasks;
     this.documents = this.all.documents;
     this.usage = this.all.usage;
+    this.channels = this.all.channels;
     this.connections = this.all.connections;
     this.connectors = this.all.connectors;
     this.skills = this.all.skills;

@@ -30,8 +30,9 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/websocket": "^11.3.1",
     "@vo/core": "workspace:*",
+    "@vo/notifications": "workspace:*",
+    "@vo/orchestrator": "workspace:*",
     "@vo/storage": "workspace:*",
-    "fastify": "^5.12.5",
-    "@vo/orchestrator": "workspace:*"
+    "fastify": "^5.12.5"
   }
 }
