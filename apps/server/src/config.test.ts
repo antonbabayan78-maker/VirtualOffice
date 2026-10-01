@@ -69,10 +69,27 @@ describe("where it keeps things", () => {
     expect(config.storage.blobs.protocol).toBe("file:");
   });
 
-  it("points the records, the events and the rest at the same place", () => {
+  it("points the records, the events and the vectors at the same place", () => {
     const config = unwrap(read({ VO_STORAGE: "sqlite:///tmp/office.db" }));
     expect(config.storage.events.href).toBe(config.storage.relational.href);
-    expect(config.storage.coordination.href).toBe(config.storage.relational.href);
+    expect(config.storage.vector.href).toBe(config.storage.relational.href);
+  });
+
+  it("leaves leader election in memory when the records move", () => {
+    // Nothing in this server reads it — it is between workers — and sqlite
+    // elects nobody, so following the records would stop a server that would
+    // otherwise have run perfectly well.
+    const config = unwrap(read({ VO_STORAGE: "sqlite:///tmp/office.db" }));
+    expect(config.storage.coordination.href).toBe("memory:");
+  });
+
+  it("takes a coordination store of its own, for the day something needs one", () => {
+    const config = unwrap(read({ VO_COORDINATION: "memory:?pool=shared" }));
+    expect(config.storage.coordination.href).toBe("memory:?pool=shared");
+  });
+
+  it("refuses a coordination url that is not one", () => {
+    expect(isErr(read({ VO_COORDINATION: "not a url" }))).toBe(true);
   });
 
   it("leaves documents in memory when only the records were moved", () => {

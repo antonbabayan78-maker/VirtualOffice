@@ -1,4 +1,7 @@
+import { mkdtemp } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { unwrap } from "@vo/core";
 import { readServerConfig } from "./config.js";
@@ -154,6 +157,43 @@ describe("starting a server from its configuration", () => {
     const started = await startServer(config());
     await started.close();
     expect(started.storageClosed()).toBe(true);
+  });
+});
+
+describe("a server that keeps an office on disk, which is what a deployment is", () => {
+  const onDisk = (): Promise<string> => mkdtemp(join(tmpdir(), "vo-start-"));
+
+  it("starts on sqlite and a directory of documents", async () => {
+    // Nothing had ever run the server on anything but memory, and the first
+    // thing that tried found it could not open one of the five stores at all.
+    const dir = await onDisk();
+    await running(
+      { VO_STORAGE: `sqlite:${dir}/office.db`, VO_BLOBS: `file:${dir}/blobs` },
+      async (started) => {
+        expect((await fetch(`${started.url}/health`)).status).toBe(200);
+      },
+    );
+  });
+
+  it("still has the office after a restart, which is the point of keeping it", async () => {
+    const dir = await onDisk();
+    const env = { VO_STORAGE: `sqlite:${dir}/office.db`, VO_BLOBS: `file:${dir}/blobs` };
+
+    await running(env, async (started) => {
+      const made = await fetch(`${started.url}/offices`, {
+        method: "POST",
+        headers: { authorization: "Bearer sk-owner", "content-type": "application/json" },
+        body: JSON.stringify({ name: "Northwind" }),
+      });
+      expect(made.status).toBe(201);
+    });
+
+    await running(env, async (started) => {
+      const listed = (await (await get(`${started.url}/offices`)).json()) as {
+        items: { name: string }[];
+      };
+      expect(listed.items.map((one) => one.name)).toEqual(["Northwind"]);
+    });
   });
 });
 
