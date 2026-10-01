@@ -13,17 +13,27 @@
 import { useEffect, useState } from "react";
 import { isErr } from "@vo/core";
 import { createApiClient } from "@vo/api-client";
-import { readApiConfig } from "../api/config.js";
+import type { ApiConfig } from "../api/config.js";
 import { connectOffice } from "./office-connection.js";
 import { loadSampleOffice } from "./sample-office.js";
 import type { OfficeStore } from "./office-store.js";
 
+/**
+ * Which office to load, decided before this is called.
+ *
+ * The decision used to be made here, out of the environment. It now belongs to
+ * the session: a canvas the office served has no environment to read, and
+ * finding out which office it is for is a conversation rather than a lookup.
+ */
+export type OfficePlan =
+  { readonly kind: "sample" } | { readonly kind: "office"; readonly config: ApiConfig };
+
 /** Null while nothing is wrong, which is almost always. */
-export function useOffice(store: OfficeStore): string | null {
+export function useOffice(store: OfficeStore, plan: OfficePlan): string | null {
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
-    const config = readApiConfig(import.meta.env);
+    const config = plan.kind === "office" ? plan.config : null;
 
     if (config === null) {
       // Nobody to talk to: show the sample office so the canvas still works.
@@ -40,12 +50,15 @@ export function useOffice(store: OfficeStore): string | null {
     const connection = connectOffice({
       store,
       config,
-      api: createApiClient({ baseUrl: config.baseUrl, token: config.token }),
+      api: createApiClient({
+        baseUrl: config.baseUrl,
+        ...(config.token === undefined ? {} : { token: config.token }),
+      }),
     });
     return () => {
       connection.close();
     };
-  }, [store]);
+  }, [store, plan]);
 
   return problem;
 }

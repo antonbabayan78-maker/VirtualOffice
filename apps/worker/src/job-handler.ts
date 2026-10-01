@@ -256,5 +256,8 @@ function describe(result: Extract<ApiResult<unknown>, { ok: false }>): string {
     return result.errors.map((error) => `${error.path}: ${error.message}`).join("; ");
   }
   if (result.kind === "conflict") return "it changed while this was being decided";
+  // A worker carries a token rather than a cookie, so this means the one it was
+  // configured with is not one this office knows.
+  if (result.kind === "unauthorized") return "this office does not accept our token";
   return result.message;
 }

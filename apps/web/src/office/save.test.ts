@@ -64,6 +64,10 @@ function scriptedApi(): {
     deleteDocument: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.reject(new Error("not used here")),
     recordContestWin: () => Promise.reject(new Error("not used here")),
+    signIn: () => Promise.reject(new Error("not used here")),
+    signOut: () => Promise.reject(new Error("not used here")),
+    listOffices: () => Promise.reject(new Error("not used here")),
+    createOffice: () => Promise.reject(new Error("not used here")),
   };
 
   return {

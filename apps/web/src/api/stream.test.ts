@@ -68,6 +68,17 @@ describe("the office stream", () => {
     stream.close();
   });
 
+  it("puts no token in the url when the browser has signed in instead", () => {
+    // The cookie travels with the upgrade on its own, and a token in a query
+    // string is a token in every proxy log between here and the office.
+    const sockets = fakeSockets();
+    const { token: _token, ...noToken } = options(sockets, () => 3);
+    const stream = openOfficeStream({ ...noToken, onEvent: () => undefined });
+
+    expect(sockets.urls[0]).toBe("ws://office.test/ws?officeId=office-1&since=3");
+    stream.close();
+  });
+
   it("passes on what the office says happened", () => {
     const sockets = fakeSockets();
     const heard: unknown[] = [];

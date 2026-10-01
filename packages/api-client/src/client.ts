@@ -32,6 +32,9 @@ export type ApiResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly kind: "validation"; readonly errors: readonly ValidationError[] }
   | { readonly ok: false; readonly kind: "conflict"; readonly current: Department & Employee }
+  /** Nobody is signed in. Its own kind because a canvas answers it by asking
+   *  for the token, where it answers an unreachable office by waiting. */
+  | { readonly ok: false; readonly kind: "unauthorized" }
   | { readonly ok: false; readonly kind: "transport"; readonly message: string };
 
 export interface OfficeSnapshot {
@@ -53,6 +56,18 @@ export interface SpendSummary {
 }
 
 export interface ApiClient {
+  /**
+   * Hands the office a token once, so the browser need not keep one.
+   *
+   * The office answers with a cookie the page cannot read, and every call after
+   * this carries it without anything in this client holding a credential.
+   */
+  signIn(token: string): Promise<ApiResult<true>>;
+  signOut(): Promise<ApiResult<true>>;
+  /** Which offices there are, which is how a canvas finds out what it is for. */
+  listOffices(): Promise<ApiResult<readonly Office[]>>;
+  /** The first one, for a deployment that has none yet. */
+  createOffice(name: string): Promise<ApiResult<Office>>;
   loadOffice(officeId: string): Promise<ApiResult<OfficeSnapshot>>;
   /** The office on its own, for when only it changed. */
   getOffice(id: string): Promise<ApiResult<Office>>;
@@ -166,7 +181,11 @@ export interface UploadDocument {
 
 export interface ApiClientOptions {
   readonly baseUrl: string;
-  readonly token: string;
+  /**
+   * What a machine carries. A browser that has signed in has none: the office
+   * set a cookie it cannot read, and the cookie travels on its own.
+   */
+  readonly token?: string;
   readonly timeoutMs?: number;
   readonly fetch?: typeof globalThis.fetch;
 }
@@ -319,8 +338,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       const response = await doFetch(`${options.baseUrl}${path}`, {
         ...init,
         signal: controller.signal,
+        // With no token the credential is a cookie the office set, so the
+        // request has to be one that carries cookies.
+        ...(options.token === undefined ? { credentials: "include" as const } : {}),
         headers: {
-          authorization: `Bearer ${options.token}`,
+          ...(options.token === undefined ? {} : { authorization: `Bearer ${options.token}` }),
           // Only when there is one. A request that says it carries JSON and
           // carries nothing is refused by a strict server, which is how a
           // delete comes back 400 having done nothing.
@@ -358,7 +380,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     try {
       const response = await doFetch(`${options.baseUrl}${path}`, {
         signal: controller.signal,
-        headers: { authorization: `Bearer ${options.token}` },
+        ...(options.token === undefined ? { credentials: "include" as const } : {}),
+        headers: options.token === undefined ? {} : { authorization: `Bearer ${options.token}` },
       });
       return {
         ok: true,
@@ -401,6 +424,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         errors: (body?.["errors"] ?? []) as ValidationError[],
       };
     }
+    if (response.status === 401) return { ok: false, kind: "unauthorized" };
     if (response.status >= 300 || body === null) {
       return {
         ok: false,
@@ -417,6 +441,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
    */
   const nothing = (response: Awaited<ReturnType<typeof call>>): ApiResult<true> => {
     if (!response.ok) return { ok: false, kind: "transport", message: response.message };
+    if (response.status === 401) return { ok: false, kind: "unauthorized" };
     if (response.status >= 300) {
       return {
         ok: false,
@@ -481,6 +506,28 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         },
       };
     },
+
+    signIn: async (token) =>
+      nothing(await call("/session", { method: "POST", body: JSON.stringify({ token }) })),
+
+    signOut: async () => nothing(await call("/session", { method: "DELETE" })),
+
+    listOffices: async () => {
+      const response = await call("/offices");
+      const listed = interpret(response, (raw) => raw);
+      if (!listed.ok) return listed;
+      const items = Array.isArray(listed.value["items"]) ? listed.value["items"] : [];
+      return {
+        ok: true,
+        value: (items as Record<string, unknown>[]).map(reviveOffice),
+      };
+    },
+
+    createOffice: async (name) =>
+      interpret(
+        await call("/offices", { method: "POST", body: JSON.stringify({ name }) }),
+        reviveOffice,
+      ),
 
     getOffice: async (id) => interpret(await call(`/offices/${id}`), reviveOffice),
 

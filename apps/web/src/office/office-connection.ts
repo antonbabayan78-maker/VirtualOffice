@@ -43,7 +43,9 @@ export function connectOffice(options: ConnectOfficeOptions): OfficeConnection {
   const ready = follower.reload();
   const stream = open({
     url: config.streamUrl,
-    token: config.token,
+    // Left out entirely when the browser signed in: the cookie travels with the
+    // upgrade, and a token in a query string is a token in a log.
+    ...(config.token === undefined ? {} : { token: config.token }),
     officeId: config.officeId,
     since: () => store.getState().seenOffset,
     onEvent: (event) => {
