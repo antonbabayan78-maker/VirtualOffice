@@ -56,3 +56,31 @@ jobs:
           name: coverage
           path: coverage/
           retention-days: 14
+
+  deploy:
+    name: The deploy kit boots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds the image, starts an office on a volume, runs a piece of work
+      # through it with a worker, and replaces the containers to prove the
+      # office survives it. Opt-in everywhere else, because it is minutes.
+      - name: Boot the kit and run a sample office
+        run: pnpm vitest run tooling/tests/deploy-smoke.test.ts
+        env:
+          VO_DOCKER_SMOKE: "1"

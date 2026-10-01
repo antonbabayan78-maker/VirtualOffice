@@ -1,0 +1,9 @@
+# TLS for one office. Caddy gets the certificate and renews it; nothing else
+# here has to know about certificates at all.
+#
+# A domain that is not a real one — localhost, or anything ending .localhost —
+# gets Caddy's own internal certificate instead, which is what makes it possible
+# to try the whole kit on a laptop.
+{$VO_DOMAIN} {
+	reverse_proxy office:3100
+}

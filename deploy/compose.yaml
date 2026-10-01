@@ -1,0 +1,92 @@
+# An office on one machine: the server, one worker, and TLS in front of them.
+#
+# Copy .env.example to .env, fill it in, and `docker compose up -d --build`.
+#
+# The office itself publishes nothing. The only way in is Caddy, which holds the
+# certificate — a bearer token over plain HTTP is a token anybody on the path can
+# read, and a published office port is a way around the thing protecting it.
+name: virtual-office
+
+services:
+  # Terminates TLS for VO_DOMAIN and renews the certificate on its own.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      VO_DOMAIN: ${VO_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      office:
+        condition: service_healthy
+
+  office:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: server
+    restart: unless-stopped
+    environment:
+      VO_API_TOKEN: ${VO_API_TOKEN}
+      # Deliberate, and only safe because nothing publishes this port: the
+      # default binds the loopback so that running one to try it out does not
+      # put an office on the network, and inside a container the loopback is a
+      # server even the proxy in front of it cannot reach.
+      VO_HOST: 0.0.0.0
+      VO_PORT: "3100"
+      # Both inside the volume. Records and documents are kept apart because the
+      # adapters are: SQLite holds rows, and bytes go in a directory.
+      VO_STORAGE: sqlite:/data/office.db
+      VO_BLOBS: file:/data/blobs
+      # Where a canvas may call from. Empty means servers only.
+      VO_ALLOWED_ORIGINS: ${VO_ALLOWED_ORIGINS:-}
+    volumes:
+      - office-data:/data
+    healthcheck:
+      # Node rather than curl: the image has no shell tools it does not need,
+      # and the thing being asked is whether the office answers, not whether a
+      # process is running.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3100/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>{process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # One worker, because the queue is in-process: a second would not share the
+  # work, it would do it twice.
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: worker
+    restart: unless-stopped
+    environment:
+      # By service name, not through the proxy: this traffic never leaves the
+      # machine, and routing it out and back would need the certificate's domain
+      # to resolve from inside the compose network.
+      VO_API_URL: http://office:3100
+      VO_API_TOKEN: ${VO_API_TOKEN}
+      VO_OFFICE_ID: ${VO_OFFICE_ID}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Set to anything to rehearse: the office runs, and no model is called.
+      VO_DRY_RUN: ${VO_DRY_RUN:-}
+    depends_on:
+      office:
+        condition: service_healthy
+
+volumes:
+  # The office itself. Everything else in this file can be rebuilt.
+  office-data:
+  caddy-data:
+  caddy-config:

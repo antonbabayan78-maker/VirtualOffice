@@ -18,6 +18,7 @@ interface Step {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  env?: Record<string, string>;
 }
 interface Job {
   "runs-on": string;
@@ -77,6 +78,21 @@ describe("ci workflow", () => {
     const upload = allSteps(ci()).find((s) => s.uses?.startsWith("actions/upload-artifact"));
     expect(upload).toBeDefined();
     expect(String(upload?.with?.["path"])).toMatch(/coverage/);
+  });
+});
+
+describe("the deploy kit in ci", () => {
+  const ci = lazy(() => loadWorkflow("ci.yml"));
+
+  it("boots the kit in a job of its own", () => {
+    // The smoke test is opt-in, because building an image has no business in
+    // the loop somebody runs on every save. Opt-in with nothing opting in is a
+    // test that never runs, so this is what asks for it.
+    const deploy = Object.values(ci().jobs).find((job) =>
+      job.steps.some((step) => step.env?.["VO_DOCKER_SMOKE"] === "1"),
+    );
+    expect(deploy, "a job must set VO_DOCKER_SMOKE=1").toBeDefined();
+    expect(JSON.stringify(deploy?.steps ?? [])).toMatch(/deploy-smoke/);
   });
 });
 

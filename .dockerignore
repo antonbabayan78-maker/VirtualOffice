@@ -1,0 +1,19 @@
+# What the image is built from is the sources and the lockfile. Everything here
+# is either rebuilt inside the image or has no business in it.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+coverage
+reports
+.turbo
+**/.turbo
+.stryker-tmp
+**/*.tsbuildinfo
+.env
+.env.*
+**/.env.local
+apps/web/dist
+deploy/data
