@@ -10,6 +10,8 @@ import { cn } from "../ui/cn.js";
 import { useTheme } from "../ui/theme.js";
 import { Placeholder, ROUTES } from "./routes.js";
 import { CanvasScreen } from "../canvas/CanvasScreen.js";
+import { officeStore } from "../office/store.js";
+import { useOffice } from "../office/useOffice.js";
 
 function ThemeToggle(): ReactNode {
   const { resolved, toggle } = useTheme();
@@ -25,6 +27,11 @@ function ThemeToggle(): ReactNode {
 }
 
 export function App(): ReactNode {
+  // Above the router on purpose: moving between sections must not reload the
+  // office, and landing on any address should find the same data as landing on
+  // the canvas.
+  const problem = useOffice(officeStore);
+
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
       <header className="flex items-center gap-4 border-b border-border bg-surface px-4 py-2">
@@ -52,24 +59,31 @@ export function App(): ReactNode {
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto">
-        <Routes>
-          {ROUTES.map((route) => (
+        {problem !== null ? (
+          <section className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+            <h1 className="text-sm font-medium text-ink">This office will not open</h1>
+            <p className="max-w-md text-xs text-ink-muted">{problem}</p>
+          </section>
+        ) : (
+          <Routes>
+            {ROUTES.map((route) => (
+              <Route
+                key={route.path}
+                path={route.path}
+                element={route.path === "/" ? <CanvasScreen /> : <Placeholder route={route} />}
+              />
+            ))}
             <Route
-              key={route.path}
-              path={route.path}
-              element={route.path === "/" ? <CanvasScreen /> : <Placeholder route={route} />}
+              path="*"
+              element={
+                <section className="p-8">
+                  <h1 className="text-xl font-semibold">Nothing here</h1>
+                  <p className="text-sm text-ink-muted">That address is not part of the office.</p>
+                </section>
+              }
             />
-          ))}
-          <Route
-            path="*"
-            element={
-              <section className="p-8">
-                <h1 className="text-xl font-semibold">Nothing here</h1>
-                <p className="text-sm text-ink-muted">That address is not part of the office.</p>
-              </section>
-            }
-          />
-        </Routes>
+          </Routes>
+        )}
       </main>
     </div>
   );
