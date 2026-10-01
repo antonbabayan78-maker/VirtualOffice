@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeLlmProvider, reply } from "@vo/llm";
 import type {
+  ContestId,
   DepartmentId,
   EmployeeId,
   OfficeId,
@@ -11,9 +12,11 @@ import type {
 } from "@vo/core";
 import { InProcessJobQueue } from "../queue/in-process-queue.js";
 import {
+  AGENT_JUDGE_JOB,
   AGENT_REVIEW_JOB,
   computeDueWork,
   enqueueDueWork,
+  type JudgeableContest,
   type RecurringJob,
   type RunnableTask,
   type SchedulerSnapshot,
@@ -730,5 +733,132 @@ describe("work stopped by a budget rather than by a person", () => {
     );
     expect(due.jobs).toEqual([]);
     expect(due.skipped[0]).toMatchObject({ reason: "office_over_budget" });
+  });
+});
+
+describe("computeDueWork: a contest waiting to be judged", () => {
+  const grace = "emp-grace" as EmployeeId;
+  const other = "dept-design" as DepartmentId;
+
+  const contest = (overrides: Partial<JudgeableContest> = {}): JudgeableContest => ({
+    contestId: "contest-1" as ContestId,
+    officeId: office,
+    departmentId: dept,
+    judgeId: grace,
+    priority: "normal",
+    ...overrides,
+  });
+
+  /** Grace judges, and works in another room, as a judge usually does. */
+  const withJudge = (overrides: Partial<SchedulerSnapshot> = {}): SchedulerSnapshot =>
+    snapshot({
+      departments: [
+        { id: dept, officeId: office, schedule: ALWAYS },
+        { id: other, officeId: office, schedule: ALWAYS },
+      ],
+      employees: [
+        { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+        { id: grace, officeId: office, departmentId: other, status: "active", schedule: ALWAYS },
+      ],
+      contests: [contest()],
+      ...overrides,
+    });
+
+  it("asks the judge to decide it", () => {
+    const due = computeDueWork(withJudge(), duringHours);
+    expect(due.jobs).toHaveLength(1);
+    expect(due.jobs[0]?.kind).toBe(AGENT_JUDGE_JOB);
+    expect(due.jobs[0]?.employeeId).toBe(grace);
+  });
+
+  it("says which contest, so the worker can read its entries", () => {
+    const due = computeDueWork(withJudge(), duringHours);
+    expect(due.jobs[0]?.payload).toMatchObject({ contestId: "contest-1", departmentId: dept });
+  });
+
+  it("queues one job however many ticks see the same contest", async () => {
+    const queue = new InProcessJobQueue();
+    await enqueueDueWork(queue, withJudge(), duringHours);
+    const second = await enqueueDueWork(queue, withJudge(), duringHours);
+
+    expect(second.enqueued).toBe(0);
+    expect(second.deduplicated).toBe(1);
+  });
+
+  it("waits while the judge's own hours are shut, rather than deciding at 3am", () => {
+    // A judge's hours are their own, exactly as a reviewer's are.
+    const shut = withJudge({
+      employees: [
+        { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+        {
+          id: grace,
+          officeId: office,
+          departmentId: other,
+          status: "active",
+          schedule: OFFICE_HOURS,
+        },
+      ],
+    });
+    const due = computeDueWork(shut, afterHours);
+
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped).toEqual([{ what: "contest-1", reason: "employee_closed" }]);
+  });
+
+  it("does not ask somebody who has been paused", () => {
+    const away = withJudge({
+      employees: [
+        { id: ada, officeId: office, departmentId: dept, status: "active", schedule: ALWAYS },
+        { id: grace, officeId: office, departmentId: other, status: "paused", schedule: ALWAYS },
+      ],
+    });
+    expect(computeDueWork(away, duringHours).jobs).toEqual([]);
+  });
+
+  it("does not ask while the office is stopped", () => {
+    const stopped = withJudge({ offices: [{ id: office, schedule: ALWAYS, runState: "paused" }] });
+    expect(computeDueWork(stopped, duringHours).skipped[0]?.reason).toBe("office_paused");
+  });
+
+  it("does not spend past a budget to decide a contest", () => {
+    // Judging is a call like any other, and an office that has run out has run
+    // out — the person can still decide it themselves.
+    const broke = withJudge({
+      offices: [
+        {
+          id: office,
+          schedule: ALWAYS,
+          budget: { limitUsd: 5, warnAtUsd: null, period: "day" },
+          spentUsd: 6,
+        },
+      ],
+    });
+    expect(computeDueWork(broke, duringHours).skipped[0]?.reason).toBe("office_over_budget");
+  });
+
+  it("says so rather than silently skipping a judge who has left", () => {
+    const gone = withJudge({ contests: [contest({ judgeId: "emp-nowhere" as EmployeeId })] });
+    const due = computeDueWork(gone, duringHours);
+
+    expect(due.jobs).toEqual([]);
+    expect(due.skipped[0]?.reason).toBe("unknown_employee");
+  });
+
+  it("ranks judging alongside everything else, by the levels it belongs to", () => {
+    const urgent = withJudge({ contests: [contest({ priority: "urgent" })] });
+    const ordinary = computeDueWork(withJudge(), duringHours).jobs[0]?.priority ?? 0;
+
+    expect(computeDueWork(urgent, duringHours).jobs[0]?.priority).toBeGreaterThan(ordinary);
+  });
+
+  it("asks nobody when an office has no contests waiting, which is most ticks", () => {
+    expect(computeDueWork(snapshot(), duringHours).jobs).toEqual([]);
+  });
+
+  it("schedules an office that predates contests exactly as it did", () => {
+    // `contests` absent, not empty: a snapshot built before this existed.
+    const { contests, ...old } = snapshot({ tasks: [task()] });
+    expect(contests).toBeUndefined();
+    expect(computeDueWork(old, duringHours).jobs).toHaveLength(1);
   });
 });

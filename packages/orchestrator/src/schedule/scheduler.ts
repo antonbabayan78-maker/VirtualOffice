@@ -20,6 +20,7 @@ import {
   budgetStanding,
   isOpen,
   whyShut,
+  type ContestId,
   type DepartmentId,
   type EmployeeId,
   type EmployeeStatus,
@@ -108,12 +109,31 @@ export interface RecurringJob {
   readonly lastRunAt: number | null;
 }
 
+/**
+ * A contest whose answers are all in, with somebody to decide it.
+ *
+ * Shaped like `recurring`: work that is due but belongs to no task. A contest
+ * with no judge is not here at all — a person decides that one on the canvas,
+ * and queueing a job nobody can do would be a job that fails forever.
+ */
+export interface JudgeableContest {
+  readonly contestId: ContestId;
+  readonly officeId: OfficeId;
+  /** The room the contest ran in, for the payload and the standing priority. */
+  readonly departmentId: DepartmentId;
+  readonly judgeId: EmployeeId;
+  /** What the entries were worth, so judging is ranked with the work it is about. */
+  readonly priority?: TaskPriority;
+}
+
 export interface SchedulerSnapshot {
   readonly offices: readonly ScheduledOffice[];
   readonly departments: readonly ScheduledDepartment[];
   readonly employees: readonly ScheduledEmployee[];
   readonly tasks: readonly RunnableTask[];
   readonly recurring: readonly RecurringJob[];
+  /** Absent means none are waiting, which is most ticks. */
+  readonly contests?: readonly JudgeableContest[];
 }
 
 export type SkipReason =
@@ -173,6 +193,11 @@ function jobPriority(
 export const AGENT_RUN_JOB = "agent_run";
 /** A review is due work too: it is the reviewer's move, not the author's. */
 export const AGENT_REVIEW_JOB = "agent_review";
+/**
+ * Deciding a shootout: the third kind of turn, and the only one that is about a
+ * set of tasks rather than one of them.
+ */
+export const AGENT_JUDGE_JOB = "agent_judge";
 
 interface Closure {
   readonly reason: SkipReason;
@@ -321,6 +346,52 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
       // Keyed by the task's last change, so ticking twice queues one run, and a
       // task that moves on genuinely earns another.
       idempotencyKey: `${AGENT_RUN_JOB}:${task.id}:${String(task.revision)}`,
+    });
+  }
+
+  /**
+   * Contests with every answer in and nobody having decided yet.
+   *
+   * The judge's own hours, status and budget apply, exactly as a reviewer's do:
+   * judging is their move, and it is their day that says whether they are
+   * working. The room the contest ran in supplies the standing priority, since
+   * that is whose work is being judged.
+   */
+  for (const contest of snapshot.contests ?? []) {
+    const judge = employees.get(contest.judgeId);
+    if (judge === undefined) {
+      skipped.push({
+        what: contest.contestId,
+        reason: "unknown_employee",
+        detail: contest.judgeId,
+      });
+      continue;
+    }
+    const closed = closedBecause(
+      now,
+      offices.get(contest.officeId),
+      departments.get(judge.departmentId),
+      judge,
+    );
+    if (closed !== null) {
+      // Not decided and not lost: it waits, and a person can still decide it.
+      skipped.push({ what: contest.contestId, ...closed });
+      continue;
+    }
+
+    jobs.push({
+      officeId: contest.officeId,
+      employeeId: contest.judgeId,
+      kind: AGENT_JUDGE_JOB,
+      payload: { contestId: contest.contestId, departmentId: contest.departmentId },
+      priority: orderingKey({
+        office: offices.get(contest.officeId)?.priority ?? "normal",
+        department: departments.get(judge.departmentId)?.priority ?? "normal",
+        employee: judge.priority ?? "normal",
+        task: contest.priority ?? "normal",
+      }),
+      // One verdict per contest, so one job per contest however many ticks see it.
+      idempotencyKey: `${AGENT_JUDGE_JOB}:${contest.contestId}`,
     });
   }
 

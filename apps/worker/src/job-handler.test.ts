@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "@vo/api-client";
-import { AGENT_RUN_JOB, AGENT_REVIEW_JOB, type AgentTurn, type Job } from "@vo/orchestrator";
+import type { EmployeeId } from "@vo/core";
+import {
+  AGENT_JUDGE_JOB,
+  AGENT_RUN_JOB,
+  AGENT_REVIEW_JOB,
+  type AgentTurn,
+  type Job,
+  type JudgeTurn,
+} from "@vo/orchestrator";
 import { officeJobHandler } from "./job-handler.js";
 
 const at = new Date("2026-09-28T09:00:00Z");
@@ -22,8 +30,10 @@ const task = {
 const ada = {
   id: "emp-ada",
   name: "Ada",
+  role: "Engineer",
   officeId: "office-1",
   departmentId: "dept-eng",
+  llm: { provider: "anthropic", model: "claude-sonnet-5" },
   toolGrants: [],
 };
 
@@ -370,5 +380,197 @@ describe("what a worker's employee may reach", () => {
 
     await officeJobHandler({ api: api2, agent })(job());
     expect(agent).toHaveBeenCalledWith(expect.objectContaining({ connectors: [] }));
+  });
+});
+
+describe("deciding a shootout", () => {
+  const entry = (id: string, assigneeId: string) => ({
+    id,
+    officeId: "office-1",
+    departmentId: "dept-eng",
+    assigneeId,
+    title: "Draft the launch note",
+    status: "done",
+    priority: "normal",
+    benchId: "bench-draft",
+    contestId: "contest-1",
+    won: null,
+    reviewerIds: [],
+    acceptanceCriteria: ["It fits on one screen"],
+    history: [{ type: "created", at }],
+  });
+
+  const theo = { ...ada, id: "emp-theo", name: "Theo" };
+  const grace = { ...ada, id: "emp-grace", name: "Grace" };
+
+  const snapshot = {
+    office: { id: "office-1", name: "Acme" },
+    departments: [{ id: "dept-eng", definitionOfDone: [], toolGrants: [], benches: [] }],
+    employees: [ada, theo, grace],
+    tasks: [entry("task-a", "emp-ada"), entry("task-b", "emp-theo"), ordinary()],
+    connections: [],
+    connectors: [],
+  };
+
+  /** Work in the same office that belongs to no contest. */
+  function ordinary() {
+    return { ...entry("task-x", "emp-ada"), contestId: null, title: "Something else" };
+  }
+
+  const judging = (overrides: Partial<Job> = {}): Job =>
+    job({
+      kind: AGENT_JUDGE_JOB,
+      employeeId: "emp-grace" as EmployeeId,
+      payload: { contestId: "contest-1", departmentId: "dept-eng" },
+      ...overrides,
+    });
+
+  const judgingApi = (overrides: Partial<ApiClient> = {}): ApiClient =>
+    api({
+      loadOffice: () => Promise.resolve({ ok: true, value: snapshot as never }),
+      getEmployee: () => Promise.resolve({ ok: true, value: grace as never }),
+      listDocuments: (_officeId: string, filter?: { ownerId?: string }) =>
+        Promise.resolve({
+          ok: true,
+          value: [
+            {
+              id: `doc-${filter?.ownerId ?? "?"}`,
+              name: `${filter?.ownerId ?? "?"}.md`,
+              mediaType: "text/markdown",
+              ownerKind: "task",
+              ownerId: filter?.ownerId ?? "",
+              tray: "out",
+            },
+          ] as never,
+        }),
+      downloadDocument: (id: string) =>
+        Promise.resolve({ ok: true, value: new TextEncoder().encode(`the answer in ${id}`) }),
+      ...overrides,
+    });
+
+  /** A judge that always picks the entry it is told to. */
+  const picks =
+    (taskId: string, reason = "clearer"): JudgeTurn =>
+    () =>
+      Promise.resolve({ winnerTaskId: taskId as never, reason });
+
+  it("tells the office which entry won, and why", async () => {
+    const recordContestWin = vi.fn(() =>
+      Promise.resolve({ ok: true as const, value: task as never }),
+    );
+    await officeJobHandler({
+      api: judgingApi({ recordContestWin }),
+      agent: decides(),
+      judge: picks("task-b"),
+    })(judging());
+
+    expect(recordContestWin).toHaveBeenCalledWith("task-b", {
+      reason: "clearer",
+      decidedBy: "emp-grace",
+    });
+  });
+
+  it("shows the judge every entry in that contest, and nothing else", async () => {
+    let seen: readonly { readonly taskId: string }[] = [];
+    const judge: JudgeTurn = (request) => {
+      seen = request.entries;
+      return Promise.resolve(null);
+    };
+    await officeJobHandler({ api: judgingApi(), agent: decides(), judge })(judging());
+
+    expect(seen.map((one) => one.taskId)).toEqual(["task-a", "task-b"]);
+  });
+
+  it("shows the judge what each entry produced", async () => {
+    let seen: readonly { readonly outputs: readonly { readonly text: string }[] }[] = [];
+    const judge: JudgeTurn = (request) => {
+      seen = request.entries;
+      return Promise.resolve(null);
+    };
+    await officeJobHandler({ api: judgingApi(), agent: decides(), judge })(judging());
+
+    expect(seen[0]?.outputs[0]?.text).toContain("the answer in doc-task-a");
+  });
+
+  it("tells the judge what was asked and what counted as done", async () => {
+    let asked = { question: "", criteria: [] as readonly string[] };
+    const judge: JudgeTurn = (request) => {
+      asked = { question: request.question, criteria: request.criteria };
+      return Promise.resolve(null);
+    };
+    await officeJobHandler({ api: judgingApi(), agent: decides(), judge })(judging());
+
+    expect(asked.question).toBe("Draft the launch note");
+    expect(asked.criteria).toEqual(["It fits on one screen"]);
+  });
+
+  it("records nothing when the judge decided nothing", async () => {
+    // A model that did not answer clearly has not decided, and a person still can.
+    const recordContestWin = vi.fn(() =>
+      Promise.resolve({ ok: true as const, value: task as never }),
+    );
+    const said: string[] = [];
+    await officeJobHandler({
+      api: judgingApi({ recordContestWin }),
+      agent: decides(),
+      judge: () => Promise.resolve(null),
+      onProblem: (message) => said.push(message),
+    })(judging());
+
+    expect(recordContestWin).not.toHaveBeenCalled();
+    expect(said.join(" ")).toMatch(/contest-1/);
+  });
+
+  it("reports a verdict the office refused rather than trying forever", async () => {
+    // "Already decided", because a person got there first. Coming back would be
+    // refused identically every time.
+    const said: string[] = [];
+    await officeJobHandler({
+      api: judgingApi({
+        recordContestWin: () =>
+          Promise.resolve({
+            ok: false,
+            kind: "validation",
+            errors: [{ path: "contest", message: "already decided" }],
+          }),
+      }),
+      agent: decides(),
+      judge: picks("task-b"),
+      onProblem: (message) => said.push(message),
+    })(judging());
+
+    expect(said.join(" ")).toMatch(/already decided/);
+  });
+
+  it("throws when the office could not be reached, so the queue comes back", async () => {
+    await expect(
+      officeJobHandler({
+        api: judgingApi({
+          recordContestWin: () =>
+            Promise.resolve({ ok: false, kind: "transport", message: "unreachable" }),
+        }),
+        agent: decides(),
+        judge: picks("task-b"),
+      })(judging()),
+    ).rejects.toThrow(/unreachable/);
+  });
+
+  it("throws when the contest has no entries, which should not happen", async () => {
+    await expect(
+      officeJobHandler({ api: judgingApi(), agent: decides(), judge: picks("task-b") })(
+        judging({ payload: { contestId: "contest-nowhere", departmentId: "dept-eng" } }),
+      ),
+    ).rejects.toThrow(/contest-nowhere/);
+  });
+
+  it("leaves a judging job alone when this worker has no judge to do it with", async () => {
+    const said: string[] = [];
+    await officeJobHandler({
+      api: judgingApi(),
+      agent: decides(),
+      onProblem: (message) => said.push(message),
+    })(judging());
+
+    expect(said.join(" ")).toMatch(/judge/i);
   });
 });

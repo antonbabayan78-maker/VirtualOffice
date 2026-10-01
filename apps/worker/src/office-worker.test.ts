@@ -275,3 +275,178 @@ describe("a worker actually wired to meter", () => {
     });
   });
 });
+
+describe("a worker that can decide a shootout", () => {
+  /**
+   * An office with one contest whose answers are both in, a bench that names a
+   * judge, and a record of every verdict and usage post it receives.
+   */
+  function aContest() {
+    const verdicts: { url: string; body: unknown }[] = [];
+    const posted: { url: string; body: unknown }[] = [];
+    const at = "2026-10-01T09:00:00.000Z";
+    const bench = {
+      id: "bench-draft",
+      name: "Drafting",
+      memberIds: ["emp-iris", "emp-theo"],
+      strategy: "shootout",
+      judgeId: "emp-grace",
+    };
+    const department = {
+      id: "dept-design",
+      officeId: "office-1",
+      name: "Design",
+      schedule: { kind: "always" },
+      runState: "running",
+      reviewPolicy: { kind: "direct" },
+      priority: "normal",
+      benches: [bench],
+      toolGrants: [],
+      definitionOfDone: [],
+      createdAt: at,
+    };
+    const person = (id: string, name: string, model: string, departmentId = "dept-design") => ({
+      id,
+      officeId: "office-1",
+      departmentId,
+      name,
+      role: "Designer",
+      status: "active",
+      priority: "normal",
+      llm: { provider: "anthropic", model, fallbacks: [] },
+      skillIds: [],
+      toolGrants: [],
+      schedule: null,
+      createdAt: at,
+      statusChangedAt: at,
+    });
+    const employees = [
+      person("emp-iris", "Iris", "claude-sonnet-5"),
+      person("emp-theo", "Theo", "claude-opus-5"),
+      person("emp-grace", "Grace", "claude-opus-5", "dept-lead"),
+    ];
+    const entry = (id: string, assigneeId: string) => ({
+      id,
+      officeId: "office-1",
+      departmentId: "dept-design",
+      assigneeId,
+      title: "Draft the launch note",
+      brief: "",
+      status: "done",
+      priority: "normal",
+      reviewerIds: [],
+      approvals: [],
+      benchId: "bench-draft",
+      contestId: "contest-1",
+      won: null,
+      history: [{ at, to: "done" }],
+      acceptanceCriteria: [],
+      route: [],
+      artifacts: [],
+      dependsOn: [],
+      gatedActions: [],
+      stage: null,
+    });
+    const tasks = [entry("task-a", "emp-iris"), entry("task-b", "emp-theo")];
+
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+
+    const fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as unknown;
+      if (method === "POST" && url.includes("/win")) {
+        verdicts.push({ url, body });
+        return json({ ...tasks[0], won: body }, 200);
+      }
+      if (method === "POST" && url.includes("/usage")) {
+        posted.push({ url, body });
+        return json({ id: "usage-1" }, 201);
+      }
+      if (url.endsWith("/employees/emp-grace")) return json(employees[2]);
+      if (url.endsWith("/departments/dept-design")) return json(department);
+      if (url.includes("/documents/") && url.includes("/body")) {
+        return new Response("a draft of the launch note", { status: 200 });
+      }
+      if (url.includes("/documents")) {
+        const owner = /ownerId=([^&]+)/.exec(url)?.[1] ?? "task-a";
+        return json({
+          items: [
+            {
+              id: `doc-${owner}`,
+              officeId: "office-1",
+              name: `${owner}.md`,
+              mediaType: "text/markdown",
+              ownerKind: "task",
+              ownerId: owner,
+              tray: "out",
+              size: 24,
+              blobRef: `blob-${owner}`,
+              addedBy: null,
+              addedAt: at,
+            },
+          ],
+        });
+      }
+      if (url.includes("/departments")) return json({ items: [department] });
+      if (url.includes("/employees")) return json({ items: employees });
+      if (url.includes("/tasks") && method === "GET") return json({ items: tasks });
+      if (url.includes("/connectors")) return json({ items: [] });
+      if (url.includes("/connections")) return json({ items: [] });
+      if (url.endsWith("/offices/office-1")) {
+        return json({
+          id: "office-1",
+          name: "Acme",
+          schedule: { kind: "always" },
+          priority: "normal",
+          runState: "running",
+          configVersion: 1,
+          createdAt: at,
+        });
+      }
+      return json({ items: [] });
+    }) as unknown as typeof globalThis.fetch;
+
+    return { fetch, verdicts, posted };
+  }
+
+  it("decides a contest nobody was watching, end to end", async () => {
+    // The assertion that would catch a worker built without a judge: the turn
+    // being correct says nothing about the worker using it.
+    const office = aContest();
+    const worker = createOfficeWorker({
+      config,
+      provider: rehearsalProvider(),
+      fetch: office.fetch,
+    });
+
+    const report = await worker.tick();
+    expect(report.enqueued).toBe(1);
+    expect(report.failed).toBe(0);
+    expect(office.verdicts).toHaveLength(1);
+  });
+
+  it("records who decided it, so the canvas does not call it a person's doing", async () => {
+    const office = aContest();
+    await createOfficeWorker({ config, provider: rehearsalProvider(), fetch: office.fetch }).tick();
+
+    expect(office.verdicts[0]?.body).toMatchObject({ decidedBy: "emp-grace" });
+  });
+
+  it("charges the judging to the judge and the contest, not to a task", async () => {
+    const office = aContest();
+    await createOfficeWorker({ config, provider: rehearsalProvider(), fetch: office.fetch }).tick();
+
+    const event = office.posted[0]?.body as Record<string, unknown>;
+    expect(event["attribution"]).toMatchObject({
+      officeId: "office-1",
+      employeeId: "emp-grace",
+      contestId: "contest-1",
+    });
+    expect((event["attribution"] as Record<string, unknown>)["taskId"]).toBeUndefined();
+  });
+});

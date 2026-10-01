@@ -22,10 +22,13 @@ import type { Connector, ToolGrant } from "@vo/core";
 import {
   acceptanceCriteriaFor,
   catalogFor,
+  AGENT_JUDGE_JOB,
   AGENT_RUN_JOB,
   AGENT_REVIEW_JOB,
   type AgentTurn,
+  type ContestEntry,
   type HandedOver,
+  type JudgeTurn,
   type ToolCatalog,
   type Job,
 } from "@vo/orchestrator";
@@ -33,6 +36,11 @@ import {
 export interface JobHandlerOptions {
   readonly api: ApiClient;
   readonly agent: AgentTurn;
+  /**
+   * Decides a shootout. Absent means this worker does not judge: those jobs are
+   * left alone and said out loud, rather than failing on every attempt.
+   */
+  readonly judge?: JudgeTurn;
   /** Told about work that was dropped on purpose, so nothing vanishes quietly. */
   readonly onProblem?: (message: string) => void;
 }
@@ -66,11 +74,12 @@ async function handedOver(
   api: ApiClient,
   officeId: string,
   taskId: string,
+  tray: "in" | "out" = "in",
 ): Promise<readonly HandedOver[]> {
   const held = await api.listDocuments(officeId, {
     ownerKind: "task",
     ownerId: taskId,
-    tray: "in",
+    tray,
   });
   if (!held.ok) return [];
 
@@ -86,8 +95,98 @@ async function handedOver(
   return read.filter((one): one is HandedOver => one !== null);
 }
 
+/**
+ * Deciding one contest: read its entries and their answers, let the judge
+ * choose, and tell the office.
+ *
+ * The entries are read out of the office rather than carried in the job, for the
+ * reason everything else about a contest is derived: the office is where they
+ * live, and a payload listing them would be a copy that could go stale between
+ * being queued and being done.
+ */
+async function judgeContest(options: JobHandlerOptions, job: Job): Promise<void> {
+  const judge = options.judge;
+  if (judge === undefined) {
+    options.onProblem?.(`this worker has no judge, so ${job.id} is left for somebody who has`);
+    return;
+  }
+  const contestId = job.payload["contestId"];
+  if (typeof contestId !== "string" || contestId.length === 0) {
+    throw new Error(`job ${job.id} of kind ${job.kind} names no contest to decide`);
+  }
+  if (job.employeeId === null) {
+    throw new Error(`job ${job.id} of kind ${job.kind} names nobody to judge it`);
+  }
+
+  const office = await options.api.loadOffice(job.officeId);
+  if (!office.ok) throw new Error(`could not read office ${job.officeId}: ${describe(office)}`);
+
+  const entries = office.value.tasks.filter((task) => task.contestId === contestId);
+  const first = entries[0];
+  if (first === undefined) {
+    throw new Error(`contest ${contestId} has no entries in office ${job.officeId}`);
+  }
+
+  const actor = await options.api.getEmployee(job.employeeId);
+  if (!actor.ok) throw new Error(`could not read employee ${job.employeeId}: ${describe(actor)}`);
+
+  const people = new Map(office.value.employees.map((one) => [one.id as string, one]));
+  const department = await options.api.getDepartment(first.departmentId);
+
+  const answers: ContestEntry[] = [];
+  for (const entry of entries) {
+    const who = entry.assigneeId === null ? undefined : people.get(entry.assigneeId);
+    answers.push({
+      taskId: entry.id,
+      // Kept for the record this returns, and never shown to the judge: a judge
+      // that knows which answer is the expensive model is not judging the answer.
+      who: who?.name ?? "somebody who has left",
+      model: who?.llm.model ?? "unknown",
+      outputs: await handedOver(options.api, job.officeId, entry.id, "out"),
+    });
+  }
+
+  const verdict = await judge({
+    officeId: first.officeId,
+    departmentId: first.departmentId,
+    contestId: contestId as (typeof entries)[number]["contestId"] & string,
+    question: first.title,
+    criteria: acceptanceCriteriaFor(
+      first.acceptanceCriteria,
+      department.ok ? department.value.definitionOfDone : [],
+    ),
+    entries: answers,
+    judge: actor.value,
+  });
+
+  if (verdict === null) {
+    // Nothing is assumed from a model that did not answer clearly, and a person
+    // can still decide this one on the canvas.
+    options.onProblem?.(`the judge decided nothing about contest ${contestId}`);
+    return;
+  }
+
+  const recorded = await options.api.recordContestWin(verdict.winnerTaskId, {
+    reason: verdict.reason,
+    decidedBy: job.employeeId,
+  });
+  if (recorded.ok) return;
+  if (recorded.kind === "transport") {
+    throw new Error(`could not tell the office about contest ${contestId}: ${recorded.message}`);
+  }
+  // Refused, which "already decided" is when a person got there first. Coming
+  // back would be refused identically every time.
+  options.onProblem?.(
+    `the office refused a verdict on contest ${contestId}: ${describe(recorded)}`,
+  );
+}
+
 export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Promise<void> {
   return async (job) => {
+    if (job.kind === AGENT_JUDGE_JOB) {
+      await judgeContest(options, job);
+      return;
+    }
     if (!AGENT_JOBS.includes(job.kind)) {
       // Not ours — a recurring definition may queue any kind it likes.
       options.onProblem?.(`no handler for job kind ${job.kind}; leaving it alone`);

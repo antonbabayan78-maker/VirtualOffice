@@ -13,7 +13,7 @@
 import { createApiClient, type ApiClient } from "@vo/api-client";
 import { defaultModelRegistry, type LlmProvider } from "@vo/llm";
 import { meterProvider, UsageRecorder, type UsageAttribution } from "@vo/telemetry";
-import { InProcessJobQueue, Worker, llmAgentTurn } from "@vo/orchestrator";
+import { InProcessJobQueue, Worker, llmAgentTurn, llmJudgeTurn } from "@vo/orchestrator";
 import type { WorkerConfig } from "./config.js";
 import { officeSource } from "./office-source.js";
 import { officeJobHandler } from "./job-handler.js";
@@ -75,6 +75,12 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
         // office has been read, and a connector switched off on the canvas
         // should stop working without restarting the worker.
         tools: officeTools(api, options.config.officeId),
+      }),
+      // The third kind of turn. Metered the same way, and with no document sink
+      // or tools at all: a judge reads the answers and says which won.
+      judge: llmJudgeTurn({
+        provider: options.provider,
+        wrapProvider: meteredProvider(api, problem),
       }),
       onProblem: problem,
     }),
