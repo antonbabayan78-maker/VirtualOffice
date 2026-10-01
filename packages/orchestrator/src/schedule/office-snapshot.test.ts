@@ -5,9 +5,12 @@ import {
   createTask,
   setRunState,
   unwrap,
+  type Bench,
+  type BenchId,
   type DepartmentId,
   type EmployeeId,
   type OfficeId,
+  type Task,
   type TaskId,
 } from "@vo/core";
 import { officeSnapshot } from "./office-snapshot.js";
@@ -197,5 +200,109 @@ describe("carrying budgets and what has been spent to the scheduler", () => {
     // An office whose spend could not be read schedules as it always did.
     const snapshot = officeSnapshot(input);
     expect(snapshot.offices[0]?.spentUsd).toBe(0);
+  });
+});
+
+describe("contests waiting for a judge", () => {
+  const grace = unwrap(
+    createEmployee(
+      {
+        name: "Grace",
+        role: "Lead",
+        color: "#112233",
+        llm: { provider: "anthropic", model: "claude-opus-5" },
+      },
+      { department: { id: eng.id, officeId }, supervisor: null },
+      { id: () => "emp-grace" as EmployeeId, now: () => at },
+    ),
+  );
+
+  const bench = (overrides: Partial<Bench> = {}): Bench => ({
+    id: "bench-draft" as BenchId,
+    name: "Drafting",
+    memberIds: [ada.id],
+    strategy: "shootout",
+    judgeId: grace.id,
+    ...overrides,
+  });
+
+  const entry = (id: string, status: string, contestId = "contest-1"): Task =>
+    ({
+      ...unwrap(
+        createTask(
+          { officeId, departmentId: eng.id, title: "Draft the launch note", assigneeId: ada.id },
+          { id: () => id as TaskId, now: () => at },
+        ),
+      ),
+      benchId: bench().id,
+      contestId,
+      status,
+    }) as Task;
+
+  const withBench = (tasks: readonly Task[], overrides: Partial<Bench> = {}) =>
+    officeSnapshot({
+      office,
+      departments: [{ ...eng, benches: [bench(overrides)] }],
+      employees: [ada, grace],
+      tasks,
+    });
+
+  it("offers a contest whose answers are all in", () => {
+    const snapshot = withBench([entry("task-a", "done"), entry("task-b", "done")]);
+    expect(snapshot.contests).toEqual([
+      {
+        contestId: "contest-1",
+        officeId,
+        departmentId: eng.id,
+        judgeId: grace.id,
+        priority: "normal",
+      },
+    ]);
+  });
+
+  it("leaves a contest alone while an answer is still coming", () => {
+    expect(withBench([entry("task-a", "done"), entry("task-b", "in_progress")]).contests).toEqual(
+      [],
+    );
+  });
+
+  it("leaves a contest alone once it has been decided", () => {
+    const decided = [
+      { ...entry("task-a", "done"), won: { reason: "clearer", decidedBy: null, decidedAt: at } },
+      entry("task-b", "done"),
+    ] as Task[];
+    expect(withBench(decided).contests).toEqual([]);
+  });
+
+  it("offers nothing for a bench nobody judges, because a person decides that one", () => {
+    const unjudged = withBench([entry("task-a", "done")], { judgeId: null });
+    expect(unjudged.contests).toEqual([]);
+  });
+
+  it("offers nothing for a bench that takes work in turn", () => {
+    expect(withBench([entry("task-a", "done")], { strategy: "round_robin" }).contests).toEqual([]);
+  });
+
+  it("keeps two contests on one bench apart", () => {
+    const tasks = [
+      entry("task-a", "done", "contest-1"),
+      entry("task-b", "done", "contest-1"),
+      entry("task-c", "done", "contest-2"),
+    ];
+    expect(withBench(tasks).contests?.map((one) => one.contestId)).toEqual([
+      "contest-1",
+      "contest-2",
+    ]);
+  });
+
+  it("carries what the entries were worth, so judging is ranked with them", () => {
+    const urgent = [{ ...entry("task-a", "done"), priority: "urgent" }] as Task[];
+    expect(withBench(urgent).contests?.[0]?.priority).toBe("urgent");
+  });
+
+  it("offers nothing for an office with no benches, which is most of them", () => {
+    expect(
+      officeSnapshot({ office, departments: [eng], employees: [ada], tasks: [task] }).contests,
+    ).toEqual([]);
   });
 });

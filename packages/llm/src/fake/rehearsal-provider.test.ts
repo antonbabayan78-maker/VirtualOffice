@@ -54,3 +54,24 @@ describe("rehearsing an office that has a definition of done", () => {
     if (block?.type === "tool_use") expect(block.input).toMatchObject({ met: [] });
   });
 });
+
+describe("rehearsing a shootout", () => {
+  it("decides it, so a rehearsal does not leave a contest open forever", async () => {
+    const response = await rehearsalProvider().complete(ask(["shootout_verdict"]));
+    const block = response.content[0];
+
+    expect(block).toMatchObject({ type: "tool_use", name: "shootout_verdict" });
+    if (block?.type === "tool_use") {
+      expect(block.input).toMatchObject({ winner: "A" });
+      expect(typeof block.input["reason"]).toBe("string");
+    }
+  });
+
+  it("picks the first answer, which is the one label a contest always has", async () => {
+    // It cannot read the answers and has no opinion: favourable and arbitrary,
+    // which is what every other answer this provider gives is.
+    const response = await rehearsalProvider().complete(ask(["shootout_verdict"]));
+    const block = response.content[0];
+    if (block?.type === "tool_use") expect(block.input["winner"]).toBe("A");
+  });
+});

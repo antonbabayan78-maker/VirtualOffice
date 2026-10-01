@@ -43,6 +43,15 @@ export function rehearsalProvider(): LlmProvider {
     handler: (request) => {
       const tools = (request.tools ?? []).map((tool) => tool.name);
       const met = criteriaIn(request);
+      // Deciding a shootout is a call the run loop can make, so this answers it:
+      // the first answer, because A is the one label every contest has and this
+      // provider has no way to read the answers and no opinion about them.
+      if (tools.includes("shootout_verdict")) {
+        return toolCall("shootout_verdict", {
+          winner: "A",
+          reason: "rehearsal: the first answer",
+        });
+      }
       if (tools.includes("review_verdict")) {
         return toolCall("review_verdict", { approved: true, reason: "rehearsal: approved", met });
       }

@@ -9,6 +9,9 @@ const department = {
   id: "dept-eng",
   officeId: "office-1",
   schedule: { kind: "always" },
+  // As the client returns it: a room with no benches has an empty list, never a
+  // missing field, so a double that leaves it out is not a real answer.
+  benches: [],
   createdAt: at,
 };
 const ada = {

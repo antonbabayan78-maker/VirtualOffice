@@ -12,6 +12,7 @@ export * from "./run/token-budget.js";
 export * from "./run/compaction.js";
 export * from "./run/agent-run-loop.js";
 export * from "./run/agent-turn.js";
+export * from "./run/judge-turn.js";
 export * from "./run/document-sink.js";
 export * from "./run/approval-gate.js";
 export * from "./run/checkpoint.js";
