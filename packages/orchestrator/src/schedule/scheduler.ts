@@ -17,11 +17,13 @@
  * their office is shut.
  */
 import {
+  budgetStanding,
   isOpen,
   whyShut,
   type DepartmentId,
   type EmployeeId,
   type EmployeeStatus,
+  type Budget,
   type OfficeId,
   type RunState,
   type Schedule,
@@ -38,6 +40,10 @@ export interface ScheduledOffice {
   readonly schedule: Schedule;
   /** Absent means running, exactly as an absent priority means normal. */
   readonly runState?: RunState;
+  /** What this level may spend in a period; absent means no ceiling. */
+  readonly budget?: Budget | null;
+  /** Spent in the current period. Absent means nothing has been. */
+  readonly spentUsd?: number;
   /** Absent means normal: a level that has set nothing must not sink its work. */
   readonly priority?: TaskPriority;
 }
@@ -48,6 +54,10 @@ export interface ScheduledDepartment {
   readonly schedule: Schedule;
   /** Absent means running, exactly as an absent priority means normal. */
   readonly runState?: RunState;
+  /** What this level may spend in a period; absent means no ceiling. */
+  readonly budget?: Budget | null;
+  /** Spent in the current period. Absent means nothing has been. */
+  readonly spentUsd?: number;
   readonly priority?: TaskPriority;
 }
 
@@ -57,6 +67,10 @@ export interface ScheduledEmployee {
   readonly departmentId: DepartmentId;
   readonly status: EmployeeStatus;
   readonly schedule: Schedule;
+  /** What this level may spend in a period; absent means no ceiling. */
+  readonly budget?: Budget | null;
+  /** Spent in the current period. Absent means nothing has been. */
+  readonly spentUsd?: number;
   readonly priority?: TaskPriority;
 }
 
@@ -105,8 +119,11 @@ export interface SchedulerSnapshot {
 export type SkipReason =
   | "office_closed"
   | "office_paused"
+  | "office_over_budget"
   | "department_closed"
   | "department_paused"
+  | "department_over_budget"
+  | "employee_over_budget"
   | "employee_closed"
   | "employee_unavailable"
   | "unassigned"
@@ -170,28 +187,43 @@ function closedBecause(
   employee: ScheduledEmployee | undefined,
 ): Closure | null {
   if (office === undefined) return { reason: "unknown_office" };
-  // Stopped and shut are asked about together and reported apart: one of them
-  // ends when the hours come round and the other waits for a person.
+
+  /**
+   * Three things can stop a level, and they are reported apart because they
+   * end differently: a person restarts a stopped one, the clock reopens a shut
+   * one, and only the period rolling clears an overspent one. "Shut until
+   * Monday" would be a lie about a level that has run out of money.
+   *
+   * Asked in that order deliberately. A stopped office is stopped whatever it
+   * has spent, and somebody stopping it is the more useful answer; being over
+   * budget is more useful than being shut, because waiting will not fix it.
+   */
+  const spent = (level: { readonly budget?: Budget | null; readonly spentUsd?: number }): boolean =>
+    budgetStanding(level.budget ?? null, level.spentUsd ?? 0) === "over";
+
   const officeShut = whyShut(
     { runState: office.runState ?? "running", schedule: office.schedule },
     now,
   );
-  if (officeShut !== null) {
-    return { reason: officeShut === "paused" ? "office_paused" : "office_closed" };
-  }
+  if (officeShut === "paused") return { reason: "office_paused" };
+  if (spent(office)) return { reason: "office_over_budget" };
+  if (officeShut !== null) return { reason: "office_closed" };
+
   if (department !== undefined) {
     const departmentShut = whyShut(
       { runState: department.runState ?? "running", schedule: department.schedule },
       now,
     );
-    if (departmentShut !== null) {
-      return { reason: departmentShut === "paused" ? "department_paused" : "department_closed" };
-    }
+    if (departmentShut === "paused") return { reason: "department_paused" };
+    if (spent(department)) return { reason: "department_over_budget" };
+    if (departmentShut !== null) return { reason: "department_closed" };
   }
+
   if (employee !== undefined) {
     if (employee.status !== "active") {
       return { reason: "employee_unavailable", detail: employee.status };
     }
+    if (spent(employee)) return { reason: "employee_over_budget" };
     if (!isOpen(employee.schedule, now)) return { reason: "employee_closed" };
   }
   return null;

@@ -11,12 +11,27 @@
 import type { Department, Employee, Office, Task } from "@vo/core";
 import type { RecurringJob, SchedulerSnapshot } from "./scheduler.js";
 
+/**
+ * What each level has spent in the period its budget covers.
+ *
+ * A summary rather than the rows themselves: a worker needs a handful of
+ * numbers to decide what to queue, and shipping every priced call to every
+ * worker on every tick is the thing the rollups task exists to prevent.
+ */
+export interface OfficeSpend {
+  readonly officeUsd: number;
+  readonly byDepartment: Readonly<Record<string, number>>;
+  readonly byEmployee: Readonly<Record<string, number>>;
+}
+
 export interface OfficeSnapshotInput {
   readonly office: Office;
   readonly departments: readonly Department[];
   readonly employees: readonly Employee[];
   readonly tasks: readonly Task[];
   readonly recurring?: readonly RecurringJob[];
+  /** Absent means nothing is known to have been spent, which schedules as before. */
+  readonly spend?: OfficeSpend;
 }
 
 export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
@@ -26,6 +41,8 @@ export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
         id: input.office.id,
         schedule: input.office.schedule,
         runState: input.office.runState,
+        budget: input.office.budget,
+        spentUsd: input.spend?.officeUsd ?? 0,
         priority: input.office.priority,
       },
     ],
@@ -34,6 +51,8 @@ export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
       officeId: department.officeId,
       schedule: department.schedule,
       runState: department.runState,
+      budget: department.budget,
+      spentUsd: input.spend?.byDepartment[department.id] ?? 0,
       priority: department.priority,
     })),
     employees: input.employees.map((employee) => ({
@@ -43,6 +62,8 @@ export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
       status: employee.status,
       // No hours of their own means the department's and the office's apply.
       schedule: employee.schedule ?? { kind: "always" },
+      budget: employee.budget,
+      spentUsd: input.spend?.byEmployee[employee.id] ?? 0,
       priority: employee.priority,
     })),
     tasks: input.tasks.map((task) => ({

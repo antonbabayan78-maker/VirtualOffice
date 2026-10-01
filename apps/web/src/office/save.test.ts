@@ -57,6 +57,7 @@ function scriptedApi(): {
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),
     recordUsage: () => Promise.reject(new Error("not used here")),
     listUsage: () => Promise.reject(new Error("not used here")),
+    officeSpend: () => Promise.reject(new Error("not used here")),
     listDocuments: () => Promise.reject(new Error("not used here")),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),

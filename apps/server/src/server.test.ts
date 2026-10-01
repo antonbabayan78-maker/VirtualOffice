@@ -2467,3 +2467,132 @@ describe("what the office was spent on", () => {
     expect((await get(`/offices/${other}/usage`)).json<{ items: unknown[] }>().items).toEqual([]);
   });
 });
+
+describe("what each level has spent", () => {
+  let officeId: string;
+  let departmentId: string;
+  let iris: string;
+  let theo: string;
+
+  const hire = async (name: string) =>
+    (
+      await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Designer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+
+  const spend = async (employeeId: string, usd: number, at = "2026-10-01T09:00:00Z") =>
+    post(`/offices/${officeId}/usage`, {
+      id: `ev-${String(Math.random())}`,
+      kind: "llm_call",
+      at: Date.parse(at),
+      attribution: { officeId, departmentId, employeeId, taskId: "task-1" },
+      durationMs: 1000,
+      ok: true,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      cost: { totalUsd: usd },
+      streamed: false,
+    });
+
+  const summary = async (query = "") =>
+    (await get(`/offices/${officeId}/spend${query}`)).json<{
+      officeUsd: number;
+      byDepartment: Record<string, number>;
+      byEmployee: Record<string, number>;
+    }>();
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = await aDepartment(officeId, "Design");
+    iris = await hire("Iris");
+    theo = await hire("Theo");
+  });
+
+  it("is nothing for an office that has spent nothing", async () => {
+    const totals = await summary();
+    expect(totals.officeUsd).toBe(0);
+    expect(totals.byEmployee).toEqual({});
+  });
+
+  it("adds up the office's spend", async () => {
+    await spend(iris, 1.5);
+    await spend(theo, 2.25);
+    expect((await summary()).officeUsd).toBeCloseTo(3.75);
+  });
+
+  it("splits it by person", async () => {
+    await spend(iris, 1.5);
+    await spend(iris, 0.5);
+    await spend(theo, 2);
+
+    const totals = await summary();
+    expect(totals.byEmployee[iris]).toBeCloseTo(2);
+    expect(totals.byEmployee[theo]).toBeCloseTo(2);
+  });
+
+  it("splits it by department, joined through the people", async () => {
+    // The usage row deliberately promotes office, task and person — not the
+    // department — so this join happens where the rows are.
+    await spend(iris, 1.5);
+    expect((await summary()).byDepartment[departmentId]).toBeCloseTo(1.5);
+  });
+
+  it("leaves out what fell before the period began", async () => {
+    await spend(iris, 100, "2026-09-30T09:00:00Z");
+    await spend(iris, 1, "2026-10-01T09:00:00Z");
+
+    // A day budget asked about on 1 October must not see September's spending.
+    const totals = await summary("?period=day&at=2026-10-01T12:00:00Z");
+    expect(totals.officeUsd).toBeCloseTo(1);
+  });
+
+  it("counts the whole month when asked for one", async () => {
+    await spend(iris, 100, "2026-09-30T09:00:00Z");
+    await spend(iris, 1, "2026-10-01T09:00:00Z");
+
+    expect((await summary("?period=month&at=2026-10-31T12:00:00Z")).officeUsd).toBeCloseTo(1);
+  });
+
+  it("does not count a call nobody could price as nothing", async () => {
+    // cost is null when the registry has no price; adding it as zero would
+    // make an unpriced model look free and let it run past any limit.
+    await spend(iris, 1);
+    await post(`/offices/${officeId}/usage`, {
+      id: "ev-unpriced",
+      kind: "llm_call",
+      at: Date.parse("2026-10-01T09:00:00Z"),
+      attribution: { officeId, employeeId: iris },
+      durationMs: 10,
+      ok: true,
+      provider: "anthropic",
+      model: "something-new",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      cost: null,
+      streamed: false,
+    });
+
+    const totals = await summary();
+    expect(totals.officeUsd).toBeCloseTo(1);
+    expect((totals as unknown as { unpricedCalls: number }).unpricedCalls).toBe(1);
+  });
+
+  it("refuses a period nobody has heard of", async () => {
+    expect((await get(`/offices/${officeId}/spend?period=fortnight`)).statusCode).toBe(400);
+  });
+
+  it("says so when there is no such office", async () => {
+    expect((await get("/offices/id-nope/spend")).statusCode).toBe(404);
+  });
+
+  it("keeps one office's spend out of another's", async () => {
+    await spend(iris, 5);
+    const other = await anOffice();
+    expect((await get(`/offices/${other}/spend`)).json<{ officeUsd: number }>().officeUsd).toBe(0);
+  });
+});

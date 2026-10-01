@@ -63,6 +63,11 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),
     recordUsage: () => Promise.reject(new Error("not used here")),
     listUsage: () => Promise.reject(new Error("not used here")),
+    officeSpend: () =>
+      Promise.resolve({
+        ok: true as const,
+        value: { officeUsd: 0, unpricedCalls: 0, byDepartment: {}, byEmployee: {} },
+      }),
     listDocuments: () => Promise.reject(new Error("not used here")),
     uploadDocument: () => Promise.reject(new Error("not used here")),
     downloadDocument: () => Promise.reject(new Error("not used here")),
@@ -108,5 +113,44 @@ describe("reading the office the worker schedules from", () => {
       onProblem: (message) => problems.push(message),
     })();
     expect(problems[0]).toMatch(/refused/);
+  });
+});
+
+describe("a worker that knows what its office has spent", () => {
+  it("asks for the spend and puts it on the snapshot", async () => {
+    const officeSpend = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          officeUsd: 4,
+          unpricedCalls: 0,
+          byDepartment: { "dept-eng": 3 },
+          byEmployee: { "emp-ada": 2 },
+        },
+      }),
+    );
+    const snapshot = await officeSource({ api: api({ officeSpend }), officeId: "office-1" })();
+
+    expect(officeSpend).toHaveBeenCalledWith("office-1", "day");
+    expect(snapshot.offices[0]?.spentUsd).toBe(4);
+    expect(snapshot.employees[0]?.spentUsd).toBe(2);
+  });
+
+  it("schedules as it always did when the spend cannot be read", async () => {
+    // The same rule this file already follows for an office it cannot reach:
+    // a network blip must not stop work that needs no network — and here it
+    // would stop it by pretending nothing had been spent is unknowable.
+    const problems: string[] = [];
+    const snapshot = await officeSource({
+      api: api({
+        officeSpend: () => Promise.resolve({ ok: false, kind: "transport", message: "no figures" }),
+      } as never),
+      officeId: "office-1",
+      onProblem: (message) => problems.push(message),
+    })();
+
+    expect(snapshot.tasks).toHaveLength(1);
+    expect(snapshot.offices[0]?.spentUsd).toBe(0);
+    expect(problems.join(" ")).toMatch(/spend|figures/i);
   });
 });

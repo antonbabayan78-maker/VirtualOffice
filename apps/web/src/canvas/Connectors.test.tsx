@@ -14,6 +14,7 @@ const acme: Office = {
   schedule: { kind: "always" },
   priority: "normal",
   runState: "running",
+  budget: null,
   configVersion: 1,
   createdAt: at,
 };

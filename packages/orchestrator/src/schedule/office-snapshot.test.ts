@@ -57,7 +57,14 @@ describe("turning an office into something the scheduler can read", () => {
 
   it("carries the office's hours, which gate everything else", () => {
     expect(snapshot.offices).toEqual([
-      { id: officeId, schedule: office.schedule, runState: "running", priority: "normal" },
+      {
+        id: officeId,
+        schedule: office.schedule,
+        runState: "running",
+        budget: null,
+        spentUsd: 0,
+        priority: "normal",
+      },
     ]);
   });
 
@@ -142,5 +149,53 @@ describe("carrying a stopped office through to the scheduler", () => {
     // The scheduler treats an absent switch as running, but there is no reason
     // to leave it out when the office has an answer.
     expect(officeSnapshot(input).offices[0]?.runState).toBe("running");
+  });
+});
+
+describe("carrying budgets and what has been spent to the scheduler", () => {
+  const capped = { limitUsd: 10, warnAtUsd: 8, period: "day" as const };
+  const input = { office, departments: [eng], employees: [ada], tasks: [task] };
+
+  it("passes each level's budget on", () => {
+    const snapshot = officeSnapshot({
+      ...input,
+      office: { ...office, budget: capped },
+      departments: [{ ...eng, budget: capped }],
+      employees: [{ ...ada, budget: capped }],
+    });
+
+    expect(snapshot.offices[0]?.budget).toEqual(capped);
+    expect(snapshot.departments[0]?.budget).toEqual(capped);
+    expect(snapshot.employees[0]?.budget).toEqual(capped);
+  });
+
+  it("passes what each level has spent on", () => {
+    const snapshot = officeSnapshot({
+      ...input,
+      spend: {
+        officeUsd: 4,
+        byDepartment: { [eng.id]: 3 },
+        byEmployee: { [ada.id]: 2 },
+      },
+    });
+
+    expect(snapshot.offices[0]?.spentUsd).toBe(4);
+    expect(snapshot.departments[0]?.spentUsd).toBe(3);
+    expect(snapshot.employees[0]?.spentUsd).toBe(2);
+  });
+
+  it("says nothing spent for a level the summary does not mention", () => {
+    const snapshot = officeSnapshot({
+      ...input,
+      spend: { officeUsd: 4, byDepartment: {}, byEmployee: {} },
+    });
+    expect(snapshot.departments[0]?.spentUsd).toBe(0);
+    expect(snapshot.employees[0]?.spentUsd).toBe(0);
+  });
+
+  it("says nothing spent when no summary was given at all", () => {
+    // An office whose spend could not be read schedules as it always did.
+    const snapshot = officeSnapshot(input);
+    expect(snapshot.offices[0]?.spentUsd).toBe(0);
   });
 });

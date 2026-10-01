@@ -954,3 +954,44 @@ describe("telling the office what a call cost", () => {
     expect(asked).not.toContain("taskId");
   });
 });
+
+describe("asking the office what it has spent", () => {
+  it("asks for a period and brings back the totals", async () => {
+    let asked = "";
+    server.use(
+      http.get(`${BASE}/offices/office-acme/spend`, ({ request }) => {
+        asked = new URL(request.url).search;
+        return HttpResponse.json({
+          period: "day",
+          since: "2026-10-01T00:00:00.000Z",
+          officeUsd: 3.75,
+          unpricedCalls: 0,
+          byDepartment: { "dept-design": 3.75 },
+          byEmployee: { "emp-iris": 2, "emp-theo": 1.75 },
+        });
+      }),
+    );
+
+    const result = await client().officeSpend("office-acme", "day");
+    expect(asked).toContain("period=day");
+    expect(result.ok && result.value.officeUsd).toBe(3.75);
+    expect(result.ok && result.value.byEmployee["emp-iris"]).toBe(2);
+  });
+
+  it("brings back the empty maps it is typed as having", async () => {
+    // An office that predates a field, or a server that answered thinly, must
+    // not hand back something the scheduler reads straight into undefined.
+    server.use(
+      http.get(`${BASE}/offices/office-acme/spend`, () => HttpResponse.json({ officeUsd: 0 })),
+    );
+
+    const result = await client().officeSpend("office-acme", "day");
+    expect(result.ok && result.value.byDepartment).toEqual({});
+    expect(result.ok && result.value.byEmployee).toEqual({});
+  });
+
+  it("says so when the office could not be asked", async () => {
+    server.use(http.get(`${BASE}/offices/office-acme/spend`, () => HttpResponse.error()));
+    expect((await client().officeSpend("office-acme", "day")).ok).toBe(false);
+  });
+});

@@ -12,6 +12,7 @@
  * compares or formats it.
  */
 import { isRunState } from "@vo/core";
+import type { BudgetPeriod } from "@vo/core";
 import type {
   Connection,
   Connector,
@@ -41,6 +42,14 @@ export interface OfficeSnapshot {
   readonly connections: readonly Connection[];
   /** What this office can reach outside itself. */
   readonly connectors: readonly Connector[];
+}
+
+export interface SpendSummary {
+  readonly officeUsd: number;
+  /** Calls the registry had no price for: the total above is a floor. */
+  readonly unpricedCalls: number;
+  readonly byDepartment: Readonly<Record<string, number>>;
+  readonly byEmployee: Readonly<Record<string, number>>;
 }
 
 export interface ApiClient {
@@ -90,6 +99,11 @@ export interface ApiClient {
   ): Promise<ApiResult<UsageRecord>>;
   /** What an office, or one piece of work in it, has been spent on. */
   listUsage(officeId: string, taskId?: string): Promise<ApiResult<readonly UsageRecord[]>>;
+  /**
+   * What each level has spent in the current period — a handful of numbers, not
+   * the rows, so a worker can decide what to queue without reading every call.
+   */
+  officeSpend(officeId: string, period: BudgetPeriod): Promise<ApiResult<SpendSummary>>;
   /** One document, which is what a live canvas fetches when told one arrived. */
   getDocument(id: string): Promise<ApiResult<Document>>;
   /** A whole office's documents, or one tray of them. */
@@ -186,6 +200,12 @@ function reviveOffice(raw: Record<string, unknown>): Office {
  * downstream.
  */
 const listOr = (raw: unknown): readonly string[] => (Array.isArray(raw) ? (raw as string[]) : []);
+
+/** A map of numbers an older server might not send at all. */
+const mapOr = (raw: unknown): Readonly<Record<string, number>> =>
+  typeof raw === "object" && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, number>)
+    : {};
 
 /** An office stored before the switch existed says nothing, and is running. */
 const runStateOr = (raw: unknown): RunState => (isRunState(raw) ? raw : "running");
@@ -478,6 +498,16 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         await call(`/offices/${officeId}/usage`, { method: "POST", body: JSON.stringify(event) }),
         reviveUsage,
       ),
+
+    officeSpend: async (officeId, period) =>
+      interpret(await call(`/offices/${officeId}/spend?period=${period}`), (raw) => ({
+        officeUsd: typeof raw["officeUsd"] === "number" ? raw["officeUsd"] : 0,
+        unpricedCalls: typeof raw["unpricedCalls"] === "number" ? raw["unpricedCalls"] : 0,
+        // The promise the type makes, kept at the boundary where untrusted
+        // JSON becomes a typed value rather than defended against downstream.
+        byDepartment: mapOr(raw["byDepartment"]),
+        byEmployee: mapOr(raw["byEmployee"]),
+      })),
 
     listUsage: async (officeId, taskId) =>
       interpret(

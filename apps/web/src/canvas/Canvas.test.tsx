@@ -303,6 +303,7 @@ describe("work that is not happening, seen without opening anything", () => {
     schedule: { kind: "always" },
     priority: "normal",
     runState: "running",
+    budget: null,
     configVersion: 1,
     createdAt: at,
   };

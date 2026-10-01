@@ -30,6 +30,8 @@ import {
   RUN_STATES,
   setRunState,
   transitionEmployee,
+  isBudgetPeriod,
+  periodStart,
   usageRecordOf,
   updateConnection,
   updateConnector,
@@ -694,6 +696,78 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       },
     });
     return { items: page.items };
+  });
+
+  /**
+   * What each level has spent in the current period.
+   *
+   * A summary, not the rows: a worker needs a handful of numbers to decide what
+   * to queue, and shipping every priced call to every worker on every tick is
+   * the thing the rollups task exists to prevent.
+   *
+   * The department is joined here through its people, because a usage row
+   * deliberately promotes only the office, the task and the person.
+   */
+  app.get("/offices/:officeId/spend", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    const office = await store.offices.get(officeId);
+    if (office === null) return missing(reply, "office");
+
+    const query = request.query as { period?: string; at?: string };
+    const period = query.period ?? "day";
+    if (!isBudgetPeriod(period)) {
+      return fail(reply, [{ path: "period", message: "must be one of day, month" }]);
+    }
+    const at = query.at === undefined ? now() : new Date(query.at);
+    // Where the office is, not where the server is: a day that rolled at UTC
+    // midnight would cut a working day in half somewhere east of here.
+    const timezone = office.schedule.kind === "windows" ? office.schedule.timezone : "UTC";
+    const since = periodStart(period, at, timezone);
+
+    const [rows, staff] = await Promise.all([
+      store.usage.list({ where: { officeId: officeId as OfficeId } }),
+      store.employees.list({ where: { officeId: officeId as OfficeId } }),
+    ]);
+    const departmentOf = new Map(staff.items.map((one) => [one.id as string, one.departmentId]));
+
+    let officeUsd = 0;
+    let unpricedCalls = 0;
+    const byDepartment: Record<string, number> = {};
+    const byEmployee: Record<string, number> = {};
+
+    for (const row of rows.items) {
+      if (row.at.getTime() < since.getTime()) continue;
+      const cost = row.event["cost"];
+      const usd =
+        typeof cost === "object" &&
+        cost !== null &&
+        typeof (cost as { totalUsd?: unknown }).totalUsd === "number"
+          ? (cost as { totalUsd: number }).totalUsd
+          : null;
+      // Counted, never added as zero: an unpriced model that looked free could
+      // run past any limit, which is the one thing a budget must not allow.
+      if (usd === null) {
+        unpricedCalls += 1;
+        continue;
+      }
+      officeUsd += usd;
+      if (row.employeeId !== null) {
+        byEmployee[row.employeeId] = (byEmployee[row.employeeId] ?? 0) + usd;
+        const department = departmentOf.get(row.employeeId);
+        if (department !== undefined) {
+          byDepartment[department] = (byDepartment[department] ?? 0) + usd;
+        }
+      }
+    }
+
+    return {
+      period,
+      since: since.toISOString(),
+      officeUsd,
+      unpricedCalls,
+      byDepartment,
+      byEmployee,
+    };
   });
 
   // -- tasks -----------------------------------------------------------------

@@ -107,6 +107,7 @@ describe("reaching the office's own settings", () => {
         schedule: { kind: "always" },
         priority: "normal",
         runState: "running",
+        budget: null,
         configVersion: 1,
         createdAt: at,
       });
@@ -127,6 +128,7 @@ describe("reaching the office's own settings", () => {
         schedule: { kind: "always" },
         priority: "normal",
         runState: "running",
+        budget: null,
         configVersion: 1,
         createdAt: at,
       });
