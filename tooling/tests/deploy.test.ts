@@ -67,6 +67,17 @@ describe("the image the two processes run in", () => {
     expect(server ?? "").toMatch(/mkdir[^\n]*\/data[\s\S]*chown[^\n]*node/);
   });
 
+  it("takes the canvas with it, so the office can serve its own", () => {
+    // Which is what lets a browser hold no credential: same origin, so the
+    // cookie set at sign-in is simply sent, and no token is built into the
+    // bundle for somebody to read out of it.
+    const server = dockerfile()
+      .split(/^FROM /m)
+      .find((one) => /^node:\S+ AS server/.test(one));
+    expect(server ?? "").toMatch(/apps\/web\/dist/);
+    expect(server ?? "").toMatch(/VO_WEB_ROOT=/);
+  });
+
   it("starts each process at its own entry point", () => {
     expect(dockerfile()).toMatch(/CMD \["node", "dist\/main\.js"\]/);
   });

@@ -11,6 +11,7 @@
  * Postgres or a map in memory, which is the whole point of the repositories.
  */
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
@@ -115,6 +116,16 @@ export interface ServerOptions {
    */
   readonly allowedOrigins?: readonly string[];
   /**
+   * A built canvas to serve beside the API, if this deployment has one.
+   *
+   * Serving it from the office is what lets a browser hold no credential: the
+   * page and the API share an origin, so the cookie set at sign-in is simply
+   * sent, and there is no token to build into the bundle and no cross-origin
+   * arrangement to make. Absent means an office that answers an API and nothing
+   * else, which is every deployment that ran before this.
+   */
+  readonly webRoot?: string;
+  /**
    * Where word is sent when something happens — Slack, Telegram, whatever the
    * office has configured. Injected so the server has no idea what a channel
    * is, and so no test can post into a real one by accident. A deployment that
@@ -145,13 +156,6 @@ const KNOWN_EVENTS: readonly string[] = [
 const SESSION_PATH = "/session";
 
 /**
- * Paths anyone may call: a health probe has no credentials to offer, and the
- * sign-in route is where a browser goes to get one — asking it for the thing it
- * is asking for would be a locked door with the key inside.
- */
-const OPEN_PATHS: readonly string[] = ["/health", SESSION_PATH];
-
-/**
  * A browser cannot set headers on a WebSocket, so the stream takes its token in
  * the query string instead — or, once somebody has signed in, in the cookie the
  * upgrade carries on its own, which is a credential that never reaches a log.
@@ -159,6 +163,39 @@ const OPEN_PATHS: readonly string[] = ["/health", SESSION_PATH];
  * unauthenticated socket is never opened at all.
  */
 const WS_PATH = "/ws";
+
+/**
+ * Everything this office answers as an office.
+ *
+ * It matters because of what is not here: when a canvas is being served, any
+ * other address is the canvas's own — a section of it, a file it asks for — and
+ * is answered with the page rather than refused. A route that was left out of
+ * this list would be served as HTML to a client expecting JSON, so a test reads
+ * the route table and insists every top-level route appears here.
+ */
+export const OFFICE_PATHS: readonly string[] = [
+  "/health",
+  SESSION_PATH,
+  WS_PATH,
+  "/offices",
+  "/departments",
+  "/employees",
+  "/tasks",
+  "/connections",
+  "/connectors",
+  "/channels",
+  "/documents",
+];
+
+const isOfficePath = (path: string): boolean =>
+  OFFICE_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+
+/**
+ * Paths anyone may call: a health probe has no credentials to offer, and the
+ * sign-in route is where a browser goes to get one — asking it for the thing it
+ * is asking for would be a locked door with the key inside.
+ */
+const OPEN_PATHS: readonly string[] = ["/health", SESSION_PATH];
 
 function fail(reply: FastifyReply, errors: readonly ValidationError[]): FastifyReply {
   return reply.code(400).send({ errors });
@@ -331,6 +368,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       done();
       return;
     }
+    // Anything that is not the office is the canvas, and the canvas is open: a
+    // browser cannot send a credential before it has been given the page that
+    // asks for one, and the page itself holds nothing worth guarding.
+    if (options.webRoot !== undefined && !isOfficePath(path)) {
+      done();
+      return;
+    }
     if (path === WS_PATH) {
       const query = request.query as { token?: string };
       const offered = query.token ?? sessionCookie(request.headers.cookie);
@@ -399,6 +443,32 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   );
 
   // -- the event stream ------------------------------------------------------
+
+  /**
+   * The canvas, served from the office's own origin.
+   *
+   * Which is the point: the page and the API share an origin, so the cookie set
+   * at sign-in is simply sent, there is no token to build into the bundle and
+   * no cross-origin arrangement to make.
+   *
+   * An address that is not a file is one of the canvas's own sections — the
+   * router's business, not this office's — so a GET that wants HTML gets the
+   * page. Anything else keeps the answer an API client expects: a JSON 404,
+   * because a client handed HTML where JSON belongs reports a parse error
+   * rather than a missing route.
+   */
+  if (options.webRoot !== undefined) {
+    const webRoot = options.webRoot;
+    void app.register(fastifyStatic, { root: webRoot, wildcard: false });
+    app.setNotFoundHandler((request, reply) => {
+      const wantsPage =
+        request.method === "GET" && (request.headers.accept ?? "").includes("text/html");
+      if (wantsPage && !isOfficePath(request.url.split("?")[0] ?? "")) {
+        return reply.type("text/html").sendFile("index.html");
+      }
+      return reply.code(404).send({ error: "no such thing here" });
+    });
+  }
 
   void app.register(websocket);
   void app.register((instance, _opts, done) => {

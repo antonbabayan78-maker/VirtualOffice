@@ -186,6 +186,42 @@ describe.skipIf(!asked || dockerVersion() === null)("an office, deployed", () =>
   );
 
   it(
+    "serves the canvas, and asks a browser to sign in to it",
+    async () => {
+      const page = await fetch(`${OFFICE_URL}/`, { headers: { accept: "text/html" } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain('<div id="root"');
+
+      // The page is open and the office behind it is not.
+      expect((await fetch(`${OFFICE_URL}/offices`)).status).toBe(401);
+
+      const refused = await fetch(`${OFFICE_URL}/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "sk-nonsense" }),
+      });
+      expect(refused.status).toBe(401);
+
+      const signedIn = await fetch(`${OFFICE_URL}/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: TOKEN }),
+      });
+      expect(signedIn.status).toBe(200);
+      const cookie = signedIn.headers.get("set-cookie") ?? "";
+      expect(cookie).toContain("vo_session=");
+      expect(cookie).toMatch(/HttpOnly/i);
+
+      // And that cookie is a credential the office accepts.
+      const asBrowser = await fetch(`${OFFICE_URL}/offices`, {
+        headers: { cookie: cookie.split(";")[0] ?? "" },
+      });
+      expect(asBrowser.status).toBe(200);
+    },
+    BOOT,
+  );
+
+  it(
     "still has the office after the containers are replaced",
     async () => {
       // The volume is the whole point of the kit: everything else in it can be

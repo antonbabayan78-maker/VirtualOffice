@@ -27,6 +27,12 @@ export interface ServerConfig {
   readonly ownerId: string;
   readonly storage: StorageConfig;
   readonly allowedOrigins: readonly string[];
+  /**
+   * A built canvas to serve from the office's own origin, or null for an office
+   * that answers an API and nothing else. Serving it is what lets a browser
+   * hold no credential: same origin, so the sign-in cookie is simply sent.
+   */
+  readonly webRoot: string | null;
 }
 
 export const DEFAULT_PORT = 3100;
@@ -78,6 +84,8 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
    */
   const coordination = url("VO_COORDINATION", "memory:");
 
+  const webRoot = (env["VO_WEB_ROOT"] ?? "").trim();
+
   const allowedOrigins = (env["VO_ALLOWED_ORIGINS"] ?? "")
     .split(",")
     .map((origin) => origin.trim())
@@ -100,5 +108,6 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
       blobs,
     },
     allowedOrigins,
+    webRoot: webRoot.length === 0 ? null : webRoot,
   });
 }

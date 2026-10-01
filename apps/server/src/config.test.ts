@@ -106,6 +106,21 @@ describe("where it keeps things", () => {
   });
 });
 
+describe("a canvas to serve beside the office", () => {
+  it("serves none unless it is given one", () => {
+    // Every deployment that ran before this answers an API and nothing else.
+    expect(unwrap(read()).webRoot).toBeNull();
+  });
+
+  it("takes the directory a built canvas is in", () => {
+    expect(unwrap(read({ VO_WEB_ROOT: "/app/web" })).webRoot).toBe("/app/web");
+  });
+
+  it("treats an empty setting as none, since that is what a blank .env gives", () => {
+    expect(unwrap(read({ VO_WEB_ROOT: "  " })).webRoot).toBeNull();
+  });
+});
+
 describe("who may call it from a browser", () => {
   it("allows nobody by default, so it is reachable by servers only", () => {
     expect(unwrap(read()).allowedOrigins).toEqual([]);
