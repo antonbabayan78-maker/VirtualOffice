@@ -50,6 +50,7 @@ describe("createEmployee", () => {
       llm: { provider: "anthropic", model: "claude-sonnet-5", params: {}, fallbacks: [] },
       skillIds: [],
       toolGrants: [],
+      budget: null,
       schedule: null,
       supervisorId: null,
       workspaceRef: null,

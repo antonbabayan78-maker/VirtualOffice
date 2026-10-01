@@ -6,6 +6,7 @@ import { err, ok, prefixErrors, type Result, type ValidationError } from "../sha
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseSchedule, type Schedule } from "./schedule.js";
 import { type RunState } from "./run-state.js";
+import { parseBudget, type Budget } from "../budget/budget.js";
 
 declare const officeIdBrand: unique symbol;
 export type OfficeId = string & { readonly [officeIdBrand]: true };
@@ -27,6 +28,12 @@ export interface Office {
    * office is not a reason to start it.
    */
   readonly runState: RunState;
+  /**
+   * What the whole office may spend in a period, or null for no ceiling. The
+   * scheduler passes work over when it is reached; nobody is paused, and the
+   * period rolling puts it back.
+   */
+  readonly budget: Budget | null;
   /** Incremented on every configuration change; snapshots key off it. */
   readonly configVersion: number;
   readonly createdAt: Date;
@@ -34,6 +41,8 @@ export interface Office {
 
 export interface CreateOfficeInput {
   readonly name: string;
+  /** Unvalidated; absent means no ceiling. */
+  readonly budget?: unknown;
   /** Defaults to 24/7. Accepts unvalidated input (e.g. from YAML or the API). */
   readonly schedule?: unknown;
   /** Defaults to normal. Loose on the way in, narrow on the entity. */
@@ -43,6 +52,7 @@ export interface CreateOfficeInput {
 /** Absent means leave alone; there is no way to unset a field here. */
 export interface UpdateOfficeInput {
   readonly name?: string;
+  readonly budget?: unknown;
   readonly schedule?: unknown;
   readonly priority?: string;
 }
@@ -80,7 +90,12 @@ export function createOffice(input: CreateOfficeInput, deps: OfficeDeps): Result
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
   }
 
-  if (errors.length > 0 || !name.ok || !schedule.ok || !isPriority(priority)) return err(errors);
+  const budget = parseBudget(input.budget);
+  if (!budget.ok) errors.push(...budget.error);
+
+  if (errors.length > 0 || !name.ok || !schedule.ok || !isPriority(priority) || !budget.ok) {
+    return err(errors);
+  }
 
   return ok({
     id: deps.id(),
@@ -88,6 +103,7 @@ export function createOffice(input: CreateOfficeInput, deps: OfficeDeps): Result
     schedule: schedule.value,
     priority,
     runState: "running",
+    budget: budget.value,
     configVersion: 1,
     createdAt: deps.now(),
   });
@@ -115,7 +131,18 @@ export function updateOffice(office: Office, changes: UpdateOfficeInput): Result
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
   }
 
-  if (errors.length > 0 || !name.ok || !schedule.ok || !isPriority(priority)) return err(errors);
+  const budget = changes.budget === undefined ? ok(office.budget) : parseBudget(changes.budget);
+  if (!budget.ok) errors.push(...budget.error);
 
-  return ok({ ...office, name: name.value, schedule: schedule.value, priority });
+  if (errors.length > 0 || !name.ok || !schedule.ok || !isPriority(priority) || !budget.ok) {
+    return err(errors);
+  }
+
+  return ok({
+    ...office,
+    name: name.value,
+    schedule: schedule.value,
+    priority,
+    budget: budget.value,
+  });
 }

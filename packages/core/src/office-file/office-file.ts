@@ -76,6 +76,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
       // every file and say nothing.
       priority: o.priority === "normal" ? null : o.priority,
       runState: o.runState === "running" ? null : o.runState,
+      budget: o.budget,
       configVersion: o.configVersion,
       createdAt: o.createdAt.toISOString(),
     }),
@@ -110,6 +111,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
             ? d.toolGrants.map((g) => ({ connector: g.connectorId, tool: g.tool }))
             : null,
         priority: d.priority === "normal" ? null : d.priority,
+        budget: d.budget,
         createdAt: d.createdAt.toISOString(),
       }),
     ),
@@ -133,6 +135,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         supervisor: e.supervisorId,
         workspace: e.workspaceRef,
         priority: e.priority === "normal" ? null : e.priority,
+        budget: e.budget,
         status: e.status,
         statusChangedAt: e.statusChangedAt.toISOString(),
         createdAt: e.createdAt.toISOString(),
@@ -365,6 +368,7 @@ export function importOfficeYaml(
       {
         name: rawOffice["name"] as string,
         ...("schedule" in rawOffice ? { schedule: rawOffice["schedule"] } : {}),
+        ...("budget" in rawOffice ? { budget: rawOffice["budget"] } : {}),
         ...("priority" in rawOffice ? { priority: rawOffice["priority"] as string } : {}),
       },
       { id: () => officeId, now: () => officeCreated },
@@ -431,6 +435,7 @@ export function importOfficeYaml(
         ...("reviewPolicy" in d ? { reviewPolicy: d["reviewPolicy"] } : {}),
         ...("schedule" in d ? { schedule: d["schedule"] } : {}),
         ...("priority" in d ? { priority: d["priority"] as string } : {}),
+        ...("budget" in d ? { budget: d["budget"] } : {}),
         ...("definitionOfDone" in d
           ? { definitionOfDone: d["definitionOfDone"] as readonly string[] }
           : {}),
@@ -523,6 +528,7 @@ export function importOfficeYaml(
         toolGrants,
         ...("schedule" in e ? { schedule: e["schedule"] } : {}),
         ...("priority" in e ? { priority: e["priority"] as string } : {}),
+        ...("budget" in e ? { budget: e["budget"] } : {}),
         ...(supervisorId === undefined ? {} : { supervisorId }),
         ...(typeof e["workspace"] === "string" ? { workspaceRef: e["workspace"] } : {}),
       },

@@ -8,6 +8,7 @@ import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js"
 import { parseSchedule, type Schedule } from "../office/schedule.js";
 import { type RunState } from "../office/run-state.js";
 import { validateBenchShape, type Bench } from "./bench.js";
+import { parseBudget, type Budget } from "../budget/budget.js";
 import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { parseReviewPolicy, type ReviewPolicy } from "./review-policy.js";
 
@@ -70,6 +71,8 @@ export interface Department {
    * as the tool grants above.
    */
   readonly benches: readonly Bench[];
+  /** What this room may spend in a period, under whatever the office allows. */
+  readonly budget: Budget | null;
   readonly createdAt: Date;
 }
 
@@ -88,6 +91,7 @@ export interface CreateDepartmentInput {
   readonly definitionOfDone?: readonly string[];
   readonly toolGrants?: readonly ToolGrant[];
   readonly benches?: readonly Bench[];
+  readonly budget?: unknown;
   readonly schedule?: unknown;
 }
 
@@ -185,6 +189,7 @@ export interface UpdateDepartmentInput {
   readonly definitionOfDone?: readonly string[];
   readonly toolGrants?: readonly ToolGrant[];
   readonly benches?: readonly Bench[];
+  readonly budget?: unknown;
 }
 
 /**
@@ -249,6 +254,9 @@ export function updateDepartment(
     changes.benches === undefined ? ok(department.benches) : validateBenchShape(changes.benches);
   if (!benches.ok) errors.push(...benches.error);
 
+  const budget = changes.budget === undefined ? ok(department.budget) : parseBudget(changes.budget);
+  if (!budget.ok) errors.push(...budget.error);
+
   const toolGrants =
     changes.toolGrants === undefined
       ? ok(department.toolGrants)
@@ -283,6 +291,7 @@ export function updateDepartment(
     definitionOfDone: [...definitionOfDone],
     toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
     benches: benches.ok ? [...benches.value] : [],
+    budget: budget.ok ? budget.value : null,
   });
 }
 
@@ -330,6 +339,9 @@ export function createDepartment(
   const benches = validateBenchShape(input.benches ?? []);
   if (!benches.ok) errors.push(...benches.error);
 
+  const budget = parseBudget(input.budget);
+  if (!budget.ok) errors.push(...budget.error);
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -362,6 +374,7 @@ export function createDepartment(
     definitionOfDone: [...definitionOfDone],
     toolGrants: toolGrants.ok ? [...toolGrants.value] : [],
     benches: benches.ok ? [...benches.value] : [],
+    budget: budget.ok ? budget.value : null,
     createdAt: deps.now(),
   });
 }

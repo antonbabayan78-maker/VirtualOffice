@@ -10,6 +10,7 @@ import { validateGrantShape, type ToolGrant } from "../connector/connector.js";
 import { normalizeHexColor, type DepartmentId } from "../department/department.js";
 import type { OfficeId } from "../office/office.js";
 import { parseSchedule, type Schedule } from "../office/schedule.js";
+import { parseBudget, type Budget } from "../budget/budget.js";
 import { err, ok, prefixErrors, type Result, type ValidationError } from "../shared/result.js";
 import { isPriority, TASK_PRIORITIES, type TaskPriority } from "../task/task.js";
 import { parseLlmConfig, type LlmConfig } from "./llm-config.js";
@@ -45,6 +46,8 @@ export interface Employee {
    * without touching any of their tasks.
    */
   readonly priority: TaskPriority;
+  /** What this person may spend in a period, under their room's and the office's. */
+  readonly budget: Budget | null;
   /** Where the work is stored (connector reference). null means the department default. */
   readonly workspaceRef: string | null;
   readonly status: EmployeeStatus;
@@ -65,6 +68,7 @@ export interface CreateEmployeeInput {
   /** Defaults to normal. Loose on the way in, narrow on the entity. */
   readonly priority?: string;
   readonly workspaceRef?: string;
+  readonly budget?: unknown;
 }
 
 /** Facts the caller resolved from storage so the domain stays pure. */
@@ -154,6 +158,9 @@ export function createEmployee(
   const toolGrants = validateGrantShape(input.toolGrants);
   if (!toolGrants.ok) errors.push(...toolGrants.error);
 
+  const budget = parseBudget(input.budget);
+  if (!budget.ok) errors.push(...budget.error);
+
   let schedule: Schedule | null = null;
   if (input.schedule !== undefined) {
     const parsed = parseSchedule(input.schedule);
@@ -177,6 +184,7 @@ export function createEmployee(
     !llm.ok ||
     !skillIds.ok ||
     !toolGrants.ok ||
+    !budget.ok ||
     !supervisorId.ok ||
     !isPriority(priority)
   ) {
@@ -195,6 +203,7 @@ export function createEmployee(
     llm: llm.value,
     skillIds: skillIds.value,
     toolGrants: toolGrants.value,
+    budget: budget.ok ? budget.value : null,
     schedule,
     supervisorId: supervisorId.value,
     workspaceRef: input.workspaceRef ?? null,
@@ -222,6 +231,7 @@ export interface UpdateEmployeeInput {
   readonly supervisorId?: string | null;
   readonly workspaceRef?: string | null;
   readonly priority?: string;
+  readonly budget?: unknown;
 }
 
 export interface UpdateEmployeeContext {
@@ -262,6 +272,9 @@ export function updateEmployee(
       ? ok(employee.toolGrants)
       : validateGrantShape(changes.toolGrants);
   if (!toolGrants.ok) errors.push(...toolGrants.error);
+
+  const budget = changes.budget === undefined ? ok(employee.budget) : parseBudget(changes.budget);
+  if (!budget.ok) errors.push(...budget.error);
 
   let schedule: Schedule | null = employee.schedule;
   if (changes.schedule === null) schedule = null;
