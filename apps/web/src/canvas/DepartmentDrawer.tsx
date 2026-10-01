@@ -489,6 +489,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
       <Benches
         benches={draft.benches}
         people={employees.filter((one) => one.departmentId === department.id)}
+        everyone={employees}
         newId={() => store.getState().newId()}
         onChange={(benches) => {
           edit({ benches });

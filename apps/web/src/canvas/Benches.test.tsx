@@ -37,11 +37,23 @@ const drafting: Bench = {
   judgeId: null,
 };
 
-function mount(benches: readonly Bench[] = [], people: readonly Employee[] = [iris, theo]) {
+const ada = person("emp-ada", "Ada", "claude-opus-5");
+
+function mount(
+  benches: readonly Bench[] = [],
+  people: readonly Employee[] = [iris, theo],
+  everyone: readonly Employee[] = [...people, ada],
+) {
   cleanup();
   const onChange = vi.fn();
   render(
-    <Benches benches={benches} people={people} newId={() => "bench-new"} onChange={onChange} />,
+    <Benches
+      benches={benches}
+      people={people}
+      everyone={everyone}
+      newId={() => "bench-new"}
+      onChange={onChange}
+    />,
   );
   return onChange;
 }
@@ -144,5 +156,84 @@ describe("who is on a bench", () => {
   it("says a department with nobody in it has nobody to bench", () => {
     mount([drafting], []);
     expect(row("Drafting")).toHaveTextContent(/nobody|no one/i);
+  });
+});
+
+describe("what a bench does with the work", () => {
+  const shootout: Bench = { ...drafting, strategy: "shootout", memberIds: [iris.id, theo.id] };
+
+  it("takes work in turn unless it is told otherwise", () => {
+    mount([drafting]);
+    expect(within(row("Drafting")).getByLabelText(/what it does/i)).toHaveValue("round_robin");
+  });
+
+  it("switches a bench to running everything off between everybody", async () => {
+    const onChange = mount([drafting]);
+    await userEvent
+      .setup()
+      .selectOptions(within(row("Drafting")).getByLabelText(/what it does/i), "shootout");
+
+    expect(onChange).toHaveBeenCalledWith([{ ...drafting, strategy: "shootout" }]);
+  });
+
+  it("says what a shootout costs, because it is one bill per person", () => {
+    // Four people on a bench is four times the money for one piece of work, and
+    // nobody should discover that from an invoice.
+    mount([shootout]);
+    expect(row("Drafting")).toHaveTextContent(/every|each|per person|times/i);
+  });
+
+  it("offers nobody judging by default, which means a person decides", () => {
+    mount([shootout]);
+    expect(within(row("Drafting")).getByLabelText(/judge/i)).toHaveValue("");
+  });
+
+  it("offers anybody in the office to judge, not only this room", () => {
+    // Ada works elsewhere. Somebody outside the room is often the only person
+    // with nothing at stake in the comparison.
+    mount([shootout]);
+    const choices = within(within(row("Drafting")).getByLabelText(/judge/i)).getAllByRole("option");
+    expect(choices.map((one) => one.textContent)).toContain("Ada");
+  });
+
+  it("does not offer an entrant as the judge", () => {
+    // The office refuses it, and an entrant marking its own entry is the one
+    // thing a comparison cannot survive.
+    mount([shootout]);
+    const choices = within(within(row("Drafting")).getByLabelText(/judge/i)).getAllByRole("option");
+    expect(choices.map((one) => one.textContent)).not.toContain("Iris");
+  });
+
+  it("names the judge", async () => {
+    const onChange = mount([shootout]);
+    await userEvent.setup().selectOptions(within(row("Drafting")).getByLabelText(/judge/i), ada.id);
+
+    expect(onChange).toHaveBeenCalledWith([{ ...shootout, judgeId: ada.id }]);
+  });
+
+  it("goes back to a person deciding", async () => {
+    const judged = { ...shootout, judgeId: ada.id };
+    const onChange = mount([judged]);
+    await userEvent.setup().selectOptions(within(row("Drafting")).getByLabelText(/judge/i), "");
+
+    expect(onChange).toHaveBeenCalledWith([{ ...judged, judgeId: null }]);
+  });
+
+  it("asks nobody to judge a bench that takes work in turn", () => {
+    // There is nothing to judge: one person did the work.
+    mount([drafting]);
+    expect(within(row("Drafting")).queryByLabelText(/judge/i)).toBeNull();
+  });
+
+  it("drops a judge who has just been put on the bench", async () => {
+    // Otherwise ticking somebody on quietly leaves a verdict in the hands of an
+    // entrant, and the save comes back refused for a reason nobody can see.
+    const judged = { ...shootout, memberIds: [iris.id], judgeId: theo.id };
+    const onChange = mount([judged]);
+    await userEvent.setup().click(within(row("Drafting")).getByRole("checkbox", { name: /Theo/ }));
+
+    expect(onChange).toHaveBeenCalledWith([
+      { ...judged, memberIds: [iris.id, theo.id], judgeId: null },
+    ]);
   });
 });

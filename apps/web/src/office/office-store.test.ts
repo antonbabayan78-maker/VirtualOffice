@@ -14,6 +14,8 @@ import {
   type Employee,
   type EmployeeId,
   type OfficeId,
+  type Task,
+  type TaskId,
 } from "@vo/core";
 import { createOfficeStore, type OfficeStore } from "./office-store.js";
 import type { StoredLayout } from "./layout-storage.js";
@@ -1078,5 +1080,96 @@ describe("what the office has spent, on the canvas", () => {
     open([eng]);
     store.getState().loadSpend(null);
     expect(store.getState().spend).toBeNull();
+  });
+});
+
+describe("saying which entry won a contest, from the canvas", () => {
+  const entry = (id: string, assigneeId: string, status = "done"): Task =>
+    ({
+      id,
+      officeId,
+      departmentId: eng.id,
+      title: "Draft the launch note",
+      brief: "",
+      priority: "normal",
+      status,
+      assigneeId,
+      benchId: "bench-draft",
+      contestId: "contest-1",
+      won: null,
+      reviewerIds: [],
+      approvals: [],
+      stage: null,
+      gatedActions: [],
+      dependsOn: [],
+      artifacts: [],
+      route: [],
+      acceptanceCriteria: [],
+      checkedBy: [],
+      tokenBudget: null,
+      deadline: null,
+      history: [],
+      createdAt: new Date("2026-10-01T09:00:00Z"),
+      updatedAt: new Date("2026-10-01T09:00:00Z"),
+    }) as unknown as Task;
+
+  const withContest = () => {
+    open([eng], [ada, grace]);
+    store.getState().putTask(entry("task-a", ada.id));
+    store.getState().putTask(entry("task-b", grace.id));
+  };
+
+  const taskNamed = (id: string) => store.getState().tasks.find((task) => task.id === id);
+
+  it("marks the entry that won, with the reason", async () => {
+    withContest();
+    const outcome = await store.getState().recordContestWin("task-b" as TaskId, "clearer");
+
+    expect(outcome.ok).toBe(true);
+    expect(taskNamed("task-b")?.won?.reason).toBe("clearer");
+  });
+
+  it("says a person decided, since nobody else did", async () => {
+    withContest();
+    await store.getState().recordContestWin("task-b" as TaskId, "clearer");
+    expect(taskNamed("task-b")?.won?.decidedBy).toBeNull();
+  });
+
+  it("leaves the entries that lost alone", async () => {
+    withContest();
+    await store.getState().recordContestWin("task-b" as TaskId, "clearer");
+    expect(taskNamed("task-a")?.won).toBeNull();
+  });
+
+  it("refuses a second verdict, as the office would", async () => {
+    withContest();
+    await store.getState().recordContestWin("task-b" as TaskId, "clearer");
+    const again = await store.getState().recordContestWin("task-a" as TaskId, "on reflection");
+
+    expect(again.ok).toBe(false);
+    expect(taskNamed("task-b")?.won?.reason).toBe("clearer");
+  });
+
+  it("refuses an entry whose answer is not in", async () => {
+    open([eng], [ada, grace]);
+    store.getState().putTask(entry("task-a", ada.id, "in_progress"));
+    const outcome = await store.getState().recordContestWin("task-a" as TaskId, "a hunch");
+
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("says so for work that is not an entry in anything", async () => {
+    open([eng], [ada]);
+    store.getState().putTask({ ...entry("task-a", ada.id), contestId: null });
+    const outcome = await store.getState().recordContestWin("task-a" as TaskId, "clearer");
+
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("says so for a task the canvas does not hold", async () => {
+    open([eng], [ada]);
+    expect((await store.getState().recordContestWin("task-nowhere" as TaskId, "clearer")).ok).toBe(
+      false,
+    );
   });
 });
