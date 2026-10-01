@@ -226,6 +226,17 @@ describe("saying which one won", () => {
     expect(winner.won?.reason).toBe("clearer");
   });
 
+  it("names the entry that already won, not the question they all answered", () => {
+    // Every entry carries the same title, so saying the title would read as
+    // "Draft the launch note won it" — true of all of them and useful about none.
+    const entries = entriesFor().map(finished);
+    const first = unwrap(decide(entries, nth(entries, 0).id));
+    const decided = entries.map((one) => (one.id === first.id ? first : one));
+    const again = decide(decided, nth(entries, 1).id);
+
+    expect(isErr(again) && again.error[0]?.message).toContain(first.id);
+  });
+
   it("refuses a second verdict rather than overwriting the first", () => {
     // A verdict is a record of a judgement. Deciding again would quietly rewrite
     // what somebody concluded, and "decided" stops being one write.

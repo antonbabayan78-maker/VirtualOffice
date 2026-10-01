@@ -243,11 +243,18 @@ function reviveTask(raw: Record<string, unknown>): Task {
   // A verdict carries the only date nested inside another object, so it is the
   // one this cannot revive by spreading.
   const won = raw["won"];
+  const deadline = raw["deadline"];
   return {
     ...raw,
     acceptanceCriteria: listOr(raw["acceptanceCriteria"]),
     route: listOr(raw["route"]),
     artifacts: listOr(raw["artifacts"]),
+    // A task is typed as holding its own dates, like every other entity here.
+    // It was the one that did not, and the first thing to call getTime() on one
+    // got a string and took the canvas down with it.
+    createdAt: asDate(raw["createdAt"]),
+    updatedAt: asDate(raw["updatedAt"]),
+    deadline: deadline === null || deadline === undefined ? null : asDate(deadline),
     ...(typeof won === "object" && won !== null
       ? {
           won: {
