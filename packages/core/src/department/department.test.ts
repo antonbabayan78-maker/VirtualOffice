@@ -453,6 +453,7 @@ describe("benches in a department", () => {
     name: "Drafting",
     memberIds: [ada],
     strategy: "round_robin" as const,
+    judgeId: null,
   };
 
   const design = () =>

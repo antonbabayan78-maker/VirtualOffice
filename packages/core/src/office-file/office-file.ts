@@ -102,6 +102,7 @@ export function exportOfficeYaml(config: OfficeConfig): string {
                   // Round robin is the default, and a default in every file
                   // on every bench says nothing. Written when there is another.
                   strategy: (bench.strategy as string) === "round_robin" ? null : bench.strategy,
+                  judge: bench.judgeId,
                 }),
               )
             : null,
@@ -398,6 +399,7 @@ export function importOfficeYaml(
           (member: unknown): member is string => typeof member === "string",
         ) as EmployeeId[],
         strategy: isBenchStrategy(strategy) ? strategy : "round_robin",
+        judgeId: (str(bench, "judge") ?? null) as EmployeeId | null,
       };
     });
 
@@ -565,6 +567,7 @@ export function importOfficeYaml(
       validateBenchMembers(
         department.benches,
         employees.filter((one) => one.departmentId === department.id).map((one) => one.id),
+        employees.map((one) => one.id),
       ),
     );
   });

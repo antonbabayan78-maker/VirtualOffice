@@ -145,6 +145,7 @@ describe("handing work to a bench in the receiving department", () => {
     name: "Drafting",
     memberIds: [iris, theo],
     strategy: "round_robin",
+    judgeId: null,
   };
   const toBench = effect({ assign: { kind: "bench", benchId: bench.id } });
   const room = (placed: BenchPlacement[] = []) => ({ benches: [bench], placed });

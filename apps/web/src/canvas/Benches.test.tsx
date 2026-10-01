@@ -34,6 +34,7 @@ const drafting: Bench = {
   name: "Drafting",
   memberIds: [iris.id],
   strategy: "round_robin",
+  judgeId: null,
 };
 
 function mount(benches: readonly Bench[] = [], people: readonly Employee[] = [iris, theo]) {
@@ -67,7 +68,7 @@ describe("the benches in a department", () => {
     await user.click(within(panel()).getByRole("button", { name: /add bench/i }));
 
     expect(onChange).toHaveBeenCalledWith([
-      { id: "bench-new", name: "Drafting", memberIds: [], strategy: "round_robin" },
+      { id: "bench-new", name: "Drafting", memberIds: [], strategy: "round_robin", judgeId: null },
     ]);
   });
 

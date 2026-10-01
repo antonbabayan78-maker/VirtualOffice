@@ -419,7 +419,7 @@ describe("benches on the department drawer", () => {
     await user.click(screen.getByRole("button", { name: /save/i }));
 
     expect(saved()?.benches).toEqual([
-      { id: "bench-new", name: "Drafting", memberIds: [], strategy: "round_robin" },
+      { id: "bench-new", name: "Drafting", memberIds: [], strategy: "round_robin", judgeId: null },
     ]);
   });
 
@@ -456,6 +456,7 @@ describe("benches on the department drawer", () => {
       name: "Drafting",
       memberIds: [],
       strategy: "round_robin" as const,
+      judgeId: null,
     };
     store.getState().load([{ ...eng, benches: [drafting] }, sales], []);
     store.getState().select(eng.id);

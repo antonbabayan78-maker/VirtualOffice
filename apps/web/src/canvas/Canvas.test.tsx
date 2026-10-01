@@ -373,6 +373,7 @@ describe("a bench drawn inside its department", () => {
     name: "Drafting",
     memberIds: ["emp-ada" as EmployeeId],
     strategy: "round_robin" as const,
+    judgeId: null,
   };
 
   const openWith = (benches: readonly (typeof drafting)[]) => {

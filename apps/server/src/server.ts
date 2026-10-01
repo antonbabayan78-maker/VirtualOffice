@@ -516,7 +516,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       connectorsIn,
       refusals,
     );
-    refusals.push(...(await benchProblems(request.body as Record<string, unknown>, id)));
+    refusals.push(
+      ...(await benchProblems(request.body as Record<string, unknown>, id, department.officeId)),
+    );
     if (refusals.length > 0) return fail(reply, refusals);
 
     const siblings = await store.departments.list({ where: { officeId: department.officeId } });
@@ -1268,15 +1270,20 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const benchProblems = async (
     body: Record<string, unknown>,
     departmentId: string,
+    officeId: string,
   ): Promise<ValidationError[]> => {
     const benches = body["benches"];
     if (!Array.isArray(benches)) return [];
-    const staff = await store.employees.list({
-      where: { departmentId: departmentId as DepartmentId },
-    });
+    // The room's people for the members, and the office's for a judge: judging
+    // is not this room's work, and whoever does it usually sits outside it.
+    const [staff, everyone] = await Promise.all([
+      store.employees.list({ where: { departmentId: departmentId as DepartmentId } }),
+      store.employees.list({ where: { officeId: officeId as OfficeId } }),
+    ]);
     return validateBenchMembers(
       benches as never,
       staff.items.map((one) => one.id),
+      everyone.items.map((one) => one.id),
     );
   };
 

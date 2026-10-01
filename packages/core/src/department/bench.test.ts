@@ -4,6 +4,7 @@ import { isErr, unwrap } from "../shared/result.js";
 import {
   BENCH_STRATEGIES,
   nextFromBench,
+  placeOnBench,
   validateBenchMembers,
   validateBenchShape,
   type Bench,
@@ -21,6 +22,7 @@ const bench = (memberIds: readonly EmployeeId[], overrides: Partial<Bench> = {})
   name: "Drafting",
   memberIds,
   strategy: "round_robin",
+  judgeId: null,
   ...overrides,
 });
 
@@ -37,7 +39,77 @@ const placement = (assigneeId: EmployeeId | null, at = ++placed): BenchPlacement
 
 describe("what a bench can be set to do", () => {
   it("names its strategies", () => {
-    expect(BENCH_STRATEGIES).toEqual(["round_robin"]);
+    expect(BENCH_STRATEGIES).toEqual(["round_robin", "shootout"]);
+  });
+});
+
+describe("what a bench does with a piece of work", () => {
+  const members = [member(ada), member(bob), member(cleo)];
+
+  it("hands a round robin bench's work to one person", () => {
+    expect(placeOnBench(bench([ada, bob]), members, [])).toEqual({ kind: "one", employeeId: ada });
+  });
+
+  it("takes its turn from what the bench has already placed", () => {
+    expect(placeOnBench(bench([ada, bob]), members, [placement(ada)])).toEqual({
+      kind: "one",
+      employeeId: bob,
+    });
+  });
+
+  it("hands a shootout's work to everybody on it, so the input is identical", () => {
+    // The whole point: one job, every member, one answer each. A shootout that
+    // picked one person would be round robin with a different name.
+    expect(placeOnBench(bench([ada, bob], { strategy: "shootout" }), members, [])).toEqual({
+      kind: "every",
+      employeeIds: [ada, bob],
+    });
+  });
+
+  it("keeps the bench's own order, so the entries read the way the bench is written", () => {
+    const written = bench([cleo, ada, bob], { strategy: "shootout" });
+    expect(placeOnBench(written, members, [])).toEqual({
+      kind: "every",
+      employeeIds: [cleo, ada, bob],
+    });
+  });
+
+  it("asks a shootout again from scratch, whatever it placed before", () => {
+    // Nothing rotates: the same contest tomorrow goes to the same people.
+    const shootout = bench([ada, bob], { strategy: "shootout" });
+    expect(placeOnBench(shootout, members, [placement(ada), placement(bob)])).toEqual({
+      kind: "every",
+      employeeIds: [ada, bob],
+    });
+  });
+
+  it("leaves somebody who cannot work out of a shootout rather than waiting", () => {
+    const shootout = bench([ada, bob], { strategy: "shootout" });
+    expect(placeOnBench(shootout, [member(ada), member(bob, "paused")], [])).toEqual({
+      kind: "every",
+      employeeIds: [ada],
+    });
+  });
+
+  it("runs a shootout of one rather than refusing it", () => {
+    // One member left working is a contest of one: thin, but it is the work
+    // getting done. Refusing it would stop the office because somebody is away.
+    const shootout = bench([ada], { strategy: "shootout" });
+    expect(placeOnBench(shootout, [member(ada)], [])).toEqual({
+      kind: "every",
+      employeeIds: [ada],
+    });
+  });
+
+  it("places nothing when nobody on a shootout can work", () => {
+    const shootout = bench([ada, bob], { strategy: "shootout" });
+    expect(placeOnBench(shootout, [member(ada, "paused"), member(bob, "paused")], [])).toEqual({
+      kind: "nobody",
+    });
+  });
+
+  it("places nothing when a round robin bench has nobody on it", () => {
+    expect(placeOnBench(bench([]), members, [])).toEqual({ kind: "nobody" });
   });
 });
 
@@ -185,6 +257,35 @@ describe("whether a bench is shaped like one", () => {
     expect(isErr(result) && result.error.some((e) => e.path.includes("benches[1]"))).toBe(true);
   });
 
+  it("takes a judge from outside the bench", () => {
+    const judged = bench([ada, bob], { strategy: "shootout", judgeId: cleo });
+    expect(unwrap(validateBenchShape([judged]))[0]?.judgeId).toBe(cleo);
+  });
+
+  it("refuses a judge who is on the bench being judged", () => {
+    // An entrant marking its own entry is the one thing a shootout cannot
+    // survive: the comparison is the only output, and it would be rigged.
+    const rigged = bench([ada, bob], { strategy: "shootout", judgeId: ada });
+    expect(isErr(validateBenchShape([rigged]))).toBe(true);
+  });
+
+  it("keeps a judge on a round robin bench rather than refusing it", () => {
+    // The strategy is a switch, and switching it back must not lose who judges.
+    const idle = bench([ada], { judgeId: cleo });
+    expect(unwrap(validateBenchShape([idle]))[0]?.judgeId).toBe(cleo);
+  });
+
+  it("takes a bench that says nothing about judging, and reads it as nobody", () => {
+    const silent = { ...bench([ada]), judgeId: undefined } as unknown as Bench;
+    expect(unwrap(validateBenchShape([silent]))[0]?.judgeId).toBeNull();
+  });
+
+  it("takes a bench with nobody judging, which is a person deciding", () => {
+    expect(unwrap(validateBenchShape([bench([ada], { strategy: "shootout" })]))[0]?.judgeId).toBe(
+      null,
+    );
+  });
+
   it("says nothing about who works where, which it cannot know", () => {
     // Separate from validateBenchMembers for the reason validateGrantShape is
     // separate from validateToolGrants: this runs on every change, with no list
@@ -194,21 +295,54 @@ describe("whether a bench is shaped like one", () => {
 });
 
 describe("whether a bench's members work in the room", () => {
-  const inRoom = [ada, bob, cleo];
+  const inRoom = [ada, bob];
+  const inOffice = [ada, bob, cleo];
 
   it("accepts members who do", () => {
-    expect(validateBenchMembers([bench([ada, bob])], inRoom)).toEqual([]);
+    expect(validateBenchMembers([bench([ada, bob])], inRoom, inOffice)).toEqual([]);
   });
 
   it("refuses a member who does not work in this department", () => {
-    expect(validateBenchMembers([bench([ada, "emp-nope" as EmployeeId])], inRoom)).toHaveLength(1);
+    expect(
+      validateBenchMembers([bench([ada, "emp-nope" as EmployeeId])], inRoom, inOffice),
+    ).toHaveLength(1);
   });
 
   it("says which member on which bench", () => {
     const problems = validateBenchMembers(
       [bench([ada]), bench([bob, "emp-nope" as EmployeeId], { id: "b2" as BenchId })],
       inRoom,
+      inOffice,
     );
     expect(problems[0]?.path).toContain("benches[1].memberIds[1]");
+  });
+
+  it("accepts a judge from another department, as a reviewer may be", () => {
+    // Cleo works elsewhere in the office. Judging is not the room's work, and
+    // somebody outside it is often the only person with nothing at stake.
+    expect(validateBenchMembers([bench([ada, bob], { judgeId: cleo })], inRoom, inOffice)).toEqual(
+      [],
+    );
+  });
+
+  it("takes a bench that says nothing at all about judging", () => {
+    // What arrives over HTTP or out of a file has whatever keys it has, and a
+    // bench with no judge is the ordinary case — not one to refuse.
+    const silent = { ...bench([ada]), judgeId: undefined } as unknown as Bench;
+    expect(validateBenchMembers([silent], inRoom, inOffice)).toEqual([]);
+  });
+
+  it("refuses a judge nobody in the office has heard of", () => {
+    const stranger = bench([ada], { judgeId: "emp-nope" as EmployeeId });
+    expect(validateBenchMembers([stranger], inRoom, inOffice)).toHaveLength(1);
+  });
+
+  it("says which bench the unknown judge is on", () => {
+    const problems = validateBenchMembers(
+      [bench([ada]), bench([bob], { id: "b2" as BenchId, judgeId: "emp-nope" as EmployeeId })],
+      inRoom,
+      inOffice,
+    );
+    expect(problems[0]?.path).toBe("benches[1].judgeId");
   });
 });
