@@ -51,6 +51,9 @@ export async function startServer(
     verifyToken: tokenVerifier({ [config.token]: { ownerId: config.ownerId } }),
     notify: officeNotifier(storage.relational, undefined, options.onProblem),
     allowedOrigins: config.allowedOrigins,
+    // Served from the office's own origin when a deployment has one, which is
+    // what lets the browser hold no credential at all.
+    ...(config.webRoot === null ? {} : { webRoot: config.webRoot }),
     // Cut connections off rather than waiting for them to go idle: a refused
     // upgrade leaves a keep-alive socket nobody will use again.
     forceCloseConnections: true,

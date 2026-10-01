@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryBlobStore, InMemoryRelationalStore } from "@vo/storage";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import { OfficeEventLog } from "./events.js";
-import { buildServer } from "./server.js";
+import { buildServer, OFFICE_PATHS } from "./server.js";
 import { tokenVerifier } from "./auth.js";
 
 const TOKEN = "sk-owner";
@@ -3237,5 +3240,114 @@ describe("warning when the money is nearly gone", () => {
     expect(
       events.since(plain, 0).filter((e) => (e.data as { kind?: string }).kind === "budget.warned"),
     ).toHaveLength(0);
+  });
+});
+
+describe("an office that serves its own canvas", () => {
+  let canvas: string;
+  let serving: FastifyInstance;
+
+  beforeEach(async () => {
+    canvas = await mkdtemp(join(tmpdir(), "vo-canvas-"));
+    await writeFile(join(canvas, "index.html"), "<!doctype html><title>Virtual Office</title>");
+    await writeFile(join(canvas, "app.js"), "console.log('canvas')");
+    serving = buildServer({
+      store: new InMemoryRelationalStore(),
+      events: new OfficeEventLog({ now: () => 1_700_000_000_000 }),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-09-28T09:00:00.000Z"),
+      webRoot: canvas,
+    });
+    await serving.ready();
+  });
+
+  afterEach(async () => {
+    await serving.close();
+  });
+
+  const open = (url: string, headers: Record<string, string> = {}) =>
+    serving.inject({ method: "GET", url, headers });
+
+  it("serves the page to a browser that has no credential yet", async () => {
+    // It cannot have one: it has not been given the page that asks for it.
+    const response = await open("/");
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("Virtual Office");
+  });
+
+  it("serves what the page asks for next", async () => {
+    expect((await open("/app.js")).statusCode).toBe(200);
+  });
+
+  it("serves the page at an address inside the canvas, which is the router's", async () => {
+    // /usage is a section of the canvas, not a route this office has.
+    const response = await open("/usage", { accept: "text/html" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("Virtual Office");
+  });
+
+  it("still refuses the office itself without a credential", async () => {
+    // Serving a canvas opens the canvas, not the office behind it.
+    expect((await open("/offices")).statusCode).toBe(401);
+  });
+
+  it("answers an address under the office as an office, not as a canvas", async () => {
+    // A client asking for JSON and given HTML gets a parse error instead of a
+    // 404, which is a confusing way to find out a route does not exist.
+    const response = await open("/tasks/task-1/nothing-like-this", {
+      authorization: `Bearer ${TOKEN}`,
+      accept: "application/json",
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("json");
+  });
+
+  it("answers an office address with a 404 even to a browser", async () => {
+    // Somebody typing /offices into the address bar is looking at the API, and
+    // the canvas has no page at that address to give them.
+    const response = await open("/offices/office-1/nothing-like-this", {
+      authorization: `Bearer ${TOKEN}`,
+      accept: "text/html",
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("json");
+  });
+
+  it("lets a signed-in browser through to the office", async () => {
+    const response = await open("/offices", { cookie: `vo_session=${TOKEN}` });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("serves nothing but the office when there is no canvas to serve", async () => {
+    // Which is every deployment that ran before this, and the API-only one.
+    expect((await server.inject({ method: "GET", url: "/" })).statusCode).toBe(401);
+  });
+});
+
+describe("what counts as the office rather than the canvas", () => {
+  it("names every route this office has", async () => {
+    // Derived from the route table rather than listed by hand: a new top-level
+    // route that nobody added here would be served as the canvas — a 200 with
+    // an HTML page where an API answer belongs.
+    const app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs: new InMemoryBlobStore(),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+    });
+    await app.ready();
+    // Top-level entries only: `├── /tasks/:id` is the office's, and so is
+    // everything under it.
+    const segments = new Set(
+      [...app.printRoutes({ commonPrefix: false }).matchAll(/^[├└]──\s+(\/[a-z-]+)/gm)].map(
+        (match) => match[1] ?? "",
+      ),
+    );
+    await app.close();
+
+    expect(segments.size).toBeGreaterThan(5);
+    for (const segment of segments) {
+      expect(OFFICE_PATHS, segment).toContain(segment);
+    }
   });
 });

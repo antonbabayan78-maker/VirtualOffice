@@ -33,6 +33,11 @@ RUN pnpm deploy --filter @vo/server --prod /out/server \
 FROM node:24-alpine AS server
 WORKDIR /app
 COPY --from=build --chown=node:node /out/server ./
+# The canvas, served from the office's own origin. That is what lets a browser
+# hold no credential: the page and the API share an origin, so the cookie set at
+# sign-in is simply sent, and there is no token built into the bundle.
+COPY --from=build --chown=node:node /app/apps/web/dist ./web
+ENV VO_WEB_ROOT=/app/web
 # Where the office is kept. It exists in the image, owned by the user that runs,
 # because an empty named volume takes the ownership of whatever it is mounted
 # over — and a /data owned by root is a database the office cannot open. It
