@@ -34,5 +34,8 @@
     "@vo/orchestrator": "workspace:*",
     "@vo/storage": "workspace:*",
     "fastify": "^5.12.5"
+  },
+  "bin": {
+    "vo-server": "./dist/main.js"
   }
 }
