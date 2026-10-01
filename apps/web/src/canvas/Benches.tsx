@@ -18,30 +18,50 @@
  * fails for a reason nobody can see.
  */
 import { useState, type ReactNode } from "react";
-import type { Bench, BenchId, Employee, EmployeeId } from "@vo/core";
+import {
+  BENCH_STRATEGIES,
+  type Bench,
+  type BenchId,
+  type BenchStrategy,
+  type Employee,
+  type EmployeeId,
+} from "@vo/core";
 import { Button } from "../ui/button.js";
 import { Field, inputClass } from "../ui/field.js";
+
+const WHAT_IT_DOES: Readonly<Record<BenchStrategy, string>> = {
+  round_robin: "Takes work in turn",
+  shootout: "Everybody does the same job",
+};
 
 function OneBench({
   bench,
   people,
+  everyone,
   elsewhere,
   onChange,
   onRemove,
 }: {
   readonly bench: Bench;
   readonly people: readonly Employee[];
+  /** The whole office, for the judge: judging is not this room's work. */
+  readonly everyone: readonly Employee[];
   /** Who is on another bench here, and which one, so it can be said. */
   readonly elsewhere: ReadonlyMap<string, string>;
   readonly onChange: (bench: Bench) => void;
   readonly onRemove: () => void;
 }): ReactNode {
   const toggle = (id: EmployeeId, on: boolean): void => {
+    const memberIds = on
+      ? [...bench.memberIds, id]
+      : bench.memberIds.filter((candidate) => candidate !== id);
     onChange({
       ...bench,
-      memberIds: on
-        ? [...bench.memberIds, id]
-        : bench.memberIds.filter((candidate) => candidate !== id),
+      memberIds,
+      // Somebody put on the bench stops being its judge. The office refuses an
+      // entrant judging its own entry, and a save refused for a reason nobody
+      // can see is worse than a choice quietly going back to "a person decides".
+      ...(bench.judgeId !== null && memberIds.includes(bench.judgeId) ? { judgeId: null } : {}),
     });
   };
 
@@ -102,6 +122,57 @@ function OneBench({
         // letting work aimed at it pile up unassigned in a backlog.
         <p className="text-[10px] text-ink-muted">Nobody on it yet, so it will place nothing.</p>
       )}
+
+      <Field label="What it does">
+        <select
+          className={inputClass}
+          value={bench.strategy}
+          onChange={(event) => {
+            onChange({ ...bench, strategy: event.target.value as BenchStrategy });
+          }}
+        >
+          {BENCH_STRATEGIES.map((strategy) => (
+            <option key={strategy} value={strategy}>
+              {WHAT_IT_DOES[strategy]}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {bench.strategy === "shootout" && (
+        <>
+          <p className="text-[10px] text-ink-muted">
+            {/* Said before the money is spent rather than discovered on a bill:
+                every piece of work aimed here is done once per person. */}
+            Every piece of work sent here is done by all{" "}
+            {bench.memberIds.length === 0 ? "" : `${String(bench.memberIds.length)} `}
+            of them, so it costs that many times — and you compare the answers.
+          </p>
+          <Field label="Judge">
+            <select
+              className={inputClass}
+              value={bench.judgeId ?? ""}
+              onChange={(event) => {
+                onChange({
+                  ...bench,
+                  judgeId: event.target.value === "" ? null : (event.target.value as EmployeeId),
+                });
+              }}
+            >
+              <option value="">Nobody — I decide</option>
+              {/* The whole office minus this bench's own people: an entrant
+                  marking its own entry is the one thing this cannot survive. */}
+              {everyone
+                .filter((one) => !bench.memberIds.includes(one.id))
+                .map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+        </>
+      )}
     </div>
   );
 }
@@ -109,12 +180,15 @@ function OneBench({
 export function Benches({
   benches,
   people,
+  everyone,
   newId,
   onChange,
 }: {
   readonly benches: readonly Bench[];
   /** The department's own people; the office refuses anybody else. */
   readonly people: readonly Employee[];
+  /** Everybody in the office, for choosing a judge from outside the room. */
+  readonly everyone: readonly Employee[];
   readonly newId: () => string;
   readonly onChange: (benches: readonly Bench[]) => void;
 }): ReactNode {
@@ -138,8 +212,9 @@ export function Benches({
     >
       <p className="text-xs font-medium text-ink">Benches</p>
       <p className="text-[11px] text-ink-muted">
-        A box several people take work from in turn. Put two people on different models in one, and
-        the work splits between them — which is how you find out whose output is better.
+        A box several people take work from. Put two people on different models in one: either the
+        work splits between them in turn, or every one of them does the same job and you compare the
+        answers — which is how you find out whose output is better.
       </p>
 
       {benches.map((bench) => (
@@ -147,6 +222,7 @@ export function Benches({
           key={bench.id}
           bench={bench}
           people={people}
+          everyone={everyone}
           elsewhere={homeOf(bench.id)}
           onChange={(changed) => {
             onChange(benches.map((one) => (one.id === bench.id ? changed : one)));

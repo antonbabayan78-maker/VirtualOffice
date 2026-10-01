@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   createDepartment,
   createDocument,
@@ -303,5 +304,174 @@ describe("what each member's work cost", () => {
     const mine = work("One", iris.id);
     openWithSpend([mine], [spend("u1", mine.id, iris.id, null)]);
     expect(panel()).toHaveTextContent(/1 call|unpriced/i);
+  });
+});
+
+describe("a shootout: everybody's answer to the same question", () => {
+  const shootout: Bench = { ...bench, strategy: "shootout" };
+
+  /** One contest: the same job, one entry per person, in whatever state. */
+  const contest = (
+    contestId: string,
+    entries: readonly { readonly who: Employee; readonly status?: string }[],
+    title = "Draft the launch note",
+    ran = at,
+  ): readonly Task[] =>
+    entries.map(
+      (entry) =>
+        ({
+          ...work(title, entry.who.id),
+          contestId,
+          status: entry.status ?? "done",
+          createdAt: ran,
+        }) as Task,
+    );
+
+  function openContest(tasks: readonly Task[], documents: readonly Document[] = []) {
+    cleanup();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([design], [iris, theo], tasks, []);
+    store.getState().loadDocuments(documents);
+    return render(<BenchRecord store={store} bench={shootout} />);
+  }
+
+  const theContest = () => within(panel()).getByRole("group", { name: /draft the launch note/i });
+
+  it("states the question once, rather than once per entry", () => {
+    openContest(contest("contest-1", [{ who: iris }, { who: theo }]));
+    expect(within(panel()).getAllByText("Draft the launch note")).toHaveLength(1);
+  });
+
+  it("shows each person's answer with the model they ran", () => {
+    openContest(contest("contest-1", [{ who: iris }, { who: theo }]));
+    expect(theContest()).toHaveTextContent("Iris");
+    expect(theContest()).toHaveTextContent("claude-sonnet-5");
+    expect(theContest()).toHaveTextContent("Theo");
+    expect(theContest()).toHaveTextContent("claude-opus-5");
+  });
+
+  it("shows what each of them produced", () => {
+    const entries = contest("contest-1", [{ who: iris }, { who: theo }]);
+    openContest(entries, [
+      output("doc-1", entries[0]?.id ?? "", "iris-draft.md"),
+      output("doc-2", entries[1]?.id ?? "", "theo-draft.md"),
+    ]);
+
+    expect(theContest()).toHaveTextContent("iris-draft.md");
+    expect(theContest()).toHaveTextContent("theo-draft.md");
+  });
+
+  it("says it is still going while an answer is missing", () => {
+    openContest(contest("contest-1", [{ who: iris }, { who: theo, status: "in_progress" }]));
+    expect(theContest()).toHaveTextContent(/still|waiting|not in yet/i);
+  });
+
+  it("does not ask for a verdict before the answers are in", () => {
+    // Picking a winner against work nobody has finished is a coin toss.
+    openContest(contest("contest-1", [{ who: iris }, { who: theo, status: "in_progress" }]));
+    expect(within(theContest()).queryByRole("button", { name: /record verdict/i })).toBeNull();
+  });
+
+  it("asks which one won once they are all in", () => {
+    openContest(contest("contest-1", [{ who: iris }, { who: theo }]));
+    expect(within(theContest()).getByRole("button", { name: /record verdict/i })).toBeTruthy();
+  });
+
+  it("will not record a verdict with no reason", () => {
+    // A winner with no reason is a preference, and the reason is the only part
+    // anybody can act on later.
+    openContest(contest("contest-1", [{ who: iris }, { who: theo }]));
+    expect(within(theContest()).getByRole("button", { name: /record verdict/i })).toBeDisabled();
+  });
+
+  it("records the winner, with the reason", async () => {
+    const entries = contest("contest-1", [{ who: iris }, { who: theo }]);
+    openContest(entries);
+    const user = userEvent.setup();
+
+    await user.selectOptions(within(theContest()).getByLabelText(/winner/i), entries[1]?.id ?? "");
+    await user.type(within(theContest()).getByLabelText(/why/i), "tighter, and it kept the detail");
+    await user.click(within(theContest()).getByRole("button", { name: /record verdict/i }));
+
+    const winner = store.getState().tasks.find((task) => task.id === entries[1]?.id);
+    expect(winner?.won?.reason).toBe("tighter, and it kept the detail");
+  });
+
+  it("shows the verdict once it has one, and asks for no other", async () => {
+    const entries = contest("contest-1", [{ who: iris }, { who: theo }]);
+    openContest(entries);
+    const user = userEvent.setup();
+    await user.type(within(theContest()).getByLabelText(/why/i), "clearer");
+    await user.click(within(theContest()).getByRole("button", { name: /record verdict/i }));
+
+    expect(theContest()).toHaveTextContent(/won/i);
+    expect(theContest()).toHaveTextContent("clearer");
+    expect(within(theContest()).queryByRole("button", { name: /record verdict/i })).toBeNull();
+  });
+
+  it("says a person decided it", () => {
+    const decided = contest("contest-1", [{ who: iris }, { who: theo }]).map((entry, index) =>
+      index === 0
+        ? { ...entry, won: { reason: "clearer", decidedBy: null, decidedAt: at } }
+        : entry,
+    );
+    openContest(decided);
+
+    expect(theContest()).toHaveTextContent(/a person|you decided|by hand/i);
+  });
+
+  it("names the employee that decided it", () => {
+    const decided = contest("contest-1", [{ who: iris }, { who: theo }]).map((entry, index) =>
+      index === 0
+        ? { ...entry, won: { reason: "clearer", decidedBy: theo.id, decidedAt: at } }
+        : entry,
+    );
+    openContest(decided);
+
+    expect(theContest()).toHaveTextContent(/Theo/);
+  });
+
+  it("reads an answer out, because comparing file names tells nobody anything", async () => {
+    const entries = contest("contest-1", [{ who: iris }, { who: theo }]);
+    openContest(entries, [output("doc-1", entries[0]?.id ?? "", "iris-draft.md")]);
+    store.setState({
+      fetchBody: () => Promise.resolve(new TextEncoder().encode("# Iris says\nkeep it short")),
+    });
+
+    await userEvent
+      .setup()
+      .click(within(theContest()).getByRole("button", { name: /read iris-draft/i }));
+    expect(await screen.findByText(/keep it short/)).toBeTruthy();
+  });
+
+  it("keeps two contests apart, newest first", () => {
+    const older = contest("contest-1", [{ who: iris }], "The older question", at);
+    const newer = contest(
+      "contest-2",
+      [{ who: theo }],
+      "The newer question",
+      new Date("2026-09-30T15:00:00Z"),
+    );
+    openContest([...older, ...newer]);
+
+    const blocks = within(panel()).getAllByRole("group");
+    expect(blocks[0]).toHaveTextContent("The newer question");
+    expect(blocks[1]).toHaveTextContent("The older question");
+  });
+
+  it("says nothing has run off yet rather than showing an empty comparison", () => {
+    openContest([]);
+    expect(panel()).toHaveTextContent(/nothing yet/i);
+  });
+
+  it("still lists work in turn when the bench takes work in turn", () => {
+    // The flat record is not replaced: it is what a round robin bench is for.
+    open([work("Draw the export screen", iris.id)]);
+    expect(panel()).toHaveTextContent("Draw the export screen");
+    expect(within(panel()).queryByRole("button", { name: /record verdict/i })).toBeNull();
   });
 });

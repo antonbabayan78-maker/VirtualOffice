@@ -17,6 +17,7 @@ import {
   createDepartment,
   createEmployee,
   err,
+  recordContestWin,
   setRunState,
   TOOLS_BY_KIND,
   isErr,
@@ -168,6 +169,14 @@ export interface OfficeStoreState {
   activityOf(id: EmployeeId): ActivityState;
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
+  /**
+   * Says which entry in a shootout won, and why.
+   *
+   * Not optimistic. A verdict is a judgement, and the office is what refuses a
+   * second one — showing a winner the office then rejected would mean the canvas
+   * had told somebody the contest was settled when it was not.
+   */
+  recordContestWin(taskId: TaskId, reason: string): Promise<SaveOutcome>;
   removeTask(id: TaskId): void;
   loadUsage(usage: readonly UsageRecord[]): void;
   loadSpend(spend: SpendSummary | null): void;
@@ -610,6 +619,41 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           ? get().tasks.map((candidate) => (candidate.id === task.id ? task : candidate))
           : [...get().tasks, task];
         set({ tasks, activity: activityFromTasks(tasks) });
+      },
+
+      recordContestWin: async (taskId, reason) => {
+        const winner = get().tasks.find((candidate) => candidate.id === taskId);
+        if (winner === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such piece of work" }] };
+        }
+        if (winner.contestId === null) {
+          return {
+            ok: false,
+            problems: [{ path: "id", message: "that work is not an entry in a contest" }],
+          };
+        }
+
+        if (connected === undefined) {
+          // No office to ask, so the rules are applied here — the same ones, out
+          // of core, rather than a second opinion about what a verdict may be.
+          const entries = get().tasks.filter((task) => task.contestId === winner.contestId);
+          const decided = recordContestWin(entries, taskId, {
+            reason,
+            decidedBy: null,
+            at: deps.now(),
+          });
+          if (isErr(decided)) return { ok: false, problems: decided.error };
+          get().putTask(decided.value);
+          return { ok: true };
+        }
+
+        const answer = await connected.recordContestWin(taskId, { reason });
+        if (answer.ok) {
+          get().putTask(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 
       removeTask: (id) => {
