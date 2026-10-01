@@ -77,6 +77,34 @@ describe("the event stream", () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it("lets a signed-in browser in on its cookie, with no token in the URL", async () => {
+    // Which is the point of the cookie: a token in a query string is a token in
+    // every proxy log between here and the browser.
+    const response = await server.inject({
+      method: "GET",
+      url: "/ws?officeId=office-1",
+      headers: {
+        connection: "upgrade",
+        upgrade: "websocket",
+        cookie: `vo_session=${TOKEN}`,
+      },
+    });
+    expect(response.statusCode).not.toBe(401);
+  });
+
+  it("turns away a cookie it does not know", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/ws?officeId=office-1",
+      headers: {
+        connection: "upgrade",
+        upgrade: "websocket",
+        cookie: "vo_session=sk-nonsense",
+      },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
   it("sends what happens while a client is listening", async () => {
     const client = listen(`officeId=office-1&token=${TOKEN}`);
     await client.opened;
