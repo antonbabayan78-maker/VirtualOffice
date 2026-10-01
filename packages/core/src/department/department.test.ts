@@ -150,6 +150,7 @@ describe("createDepartment", () => {
       definitionOfDone: [],
       toolGrants: [],
       benches: [],
+      budget: null,
       schedule: { kind: "always" },
       runState: "running",
       createdAt: new Date("2026-09-22T00:00:00Z"),

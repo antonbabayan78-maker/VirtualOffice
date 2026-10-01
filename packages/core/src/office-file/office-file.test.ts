@@ -842,3 +842,82 @@ departments:
     expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
   });
 });
+
+describe("budgets in an office file", () => {
+  const YAML = `
+version: 1
+office:
+  id: office-1
+  name: Acme
+  budget: { limitUsd: 100, warnAtUsd: 80, period: month }
+departments:
+  - id: dept-design
+    name: Design
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    budget: { limitUsd: 20, period: day }
+  - { id: dept-eng, name: Engineering, color: "#cc3366", position: { x: 600, y: 0 } }
+employees:
+  - id: emp-iris
+    name: Iris
+    role: Designer
+    color: "#00aa66"
+    department: dept-design
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+    budget: { limitUsd: 5, period: day }
+`;
+
+  it("reads the office's budget", () => {
+    expect(unwrap(importOfficeYaml(YAML, deps)).office.budget).toEqual({
+      limitUsd: 100,
+      warnAtUsd: 80,
+      period: "month",
+    });
+  });
+
+  it("reads a department's, warning at the limit when none was named", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).departments, 0).budget).toEqual({
+      limitUsd: 20,
+      warnAtUsd: null,
+      period: "day",
+    });
+  });
+
+  it("reads a person's", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).employees, 0).budget?.limitUsd).toBe(5);
+  });
+
+  it("leaves a level that says nothing with no ceiling", () => {
+    expect(at(unwrap(importOfficeYaml(YAML, deps)).departments, 1).budget).toBeNull();
+  });
+
+  it("survives a round trip through the file and back", () => {
+    const once = unwrap(importOfficeYaml(YAML, deps));
+    const again = unwrap(importOfficeYaml(exportOfficeYaml(once), deps));
+
+    expect(again.office.budget).toEqual({ limitUsd: 100, warnAtUsd: 80, period: "month" });
+    expect(at(again.departments, 0).budget?.limitUsd).toBe(20);
+    expect(at(again.employees, 0).budget?.limitUsd).toBe(5);
+  });
+
+  it("keeps a level with no budget out of the file", () => {
+    const plain = `
+version: 1
+office: { id: office-1, name: Acme }
+departments:
+  - { id: dept-a, name: A, color: "#3366ff", position: { x: 0, y: 0 } }
+`;
+    expect(exportOfficeYaml(unwrap(importOfficeYaml(plain, deps)))).not.toContain("budget");
+  });
+
+  it("refuses a warning above the limit", () => {
+    const wrong = YAML.replace("warnAtUsd: 80", "warnAtUsd: 180");
+    expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
+  });
+
+  it("refuses a period nobody has heard of", () => {
+    expect(isErr(importOfficeYaml(YAML.replace("period: day", "period: fortnight"), deps))).toBe(
+      true,
+    );
+  });
+});

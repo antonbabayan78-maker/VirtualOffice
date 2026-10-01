@@ -19,6 +19,7 @@ describe("createOffice", () => {
       schedule: { kind: "always" },
       priority: "normal",
       runState: "running",
+      budget: null,
       configVersion: 1,
       createdAt: new Date("2026-09-22T00:00:00Z"),
     });
