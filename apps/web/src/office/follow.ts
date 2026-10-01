@@ -157,6 +157,12 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     // deliberately, since one per model call would wake every canvas.
     const usage = await api.listUsage(officeId);
     if (usage.ok) store.getState().loadUsage(usage.value);
+
+    // What each level has spent against its budget. Left null when it cannot
+    // be read: a drawer showing $0.00 for an office nobody could ask would be
+    // saying something false about the money.
+    const spend = await api.officeSpend(officeId, "day");
+    store.getState().loadSpend(spend.ok ? spend.value : null);
   };
 
   return { apply, reload };

@@ -22,6 +22,8 @@ export interface DepartmentNodeData extends Record<string, unknown> {
    * worse lie than no mark at all, because its own switch really is on.
    */
   readonly stopped: "this department" | "the whole office" | null;
+  /** Reached its own spending limit: the clock clears this, not a person. */
+  readonly overBudget: boolean;
   readonly employees: readonly {
     readonly id: string;
     readonly name: string;
@@ -99,6 +101,14 @@ export function DepartmentNode({ data, selected }: NodeProps<DepartmentNodeType>
           style={{ backgroundColor: data.color }}
         >
           <span>{data.name}</span>
+          {data.stopped === null && data.overBudget && (
+            <span
+              className="rounded bg-white/25 px-1.5 py-0.5 text-[10px] font-normal"
+              title="Budget reached: this department picks nothing up until the period rolls."
+            >
+              Budget
+            </span>
+          )}
           {data.stopped !== null && (
             <span
               className="rounded bg-white/25 px-1.5 py-0.5 text-[10px] font-normal"

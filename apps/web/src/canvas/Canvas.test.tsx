@@ -430,3 +430,104 @@ describe("a bench drawn inside its department", () => {
     expect(within(room()).getByRole("group", { name: /Drafting/ })).toBeTruthy();
   });
 });
+
+describe("work stopped by a budget, seen without opening anything", () => {
+  const capped = { limitUsd: 10, warnAtUsd: 8, period: "day" as const };
+  const acme: Office = {
+    id: officeId,
+    name: "Acme Robotics",
+    schedule: { kind: "always" },
+    priority: "normal",
+    runState: "running",
+    budget: null,
+    configVersion: 1,
+    createdAt: at,
+  };
+
+  const openWith = (
+    office: Office,
+    departments = [eng, sales, ops],
+    spent?: Record<string, unknown>,
+  ) => {
+    const store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "dept-new",
+      now: () => at,
+    });
+    store.getState().loadOffice(office);
+    store.getState().load(departments, [employee("emp-ada", "Ada", "dept-eng")], [], []);
+    if (spent !== undefined) store.getState().loadSpend(spent as never);
+    render(<Canvas store={store} />);
+    return store;
+  };
+
+  const room = () => {
+    const found = screen
+      .getAllByTestId("department")
+      .find((one) => one.textContent.includes("Engineering"));
+    if (found === undefined) throw new Error("no Engineering room on the canvas");
+    return found;
+  };
+
+  it("says nothing while there is room in the budget", () => {
+    openWith({ ...acme, budget: capped }, undefined, {
+      officeUsd: 4,
+      unpricedCalls: 0,
+      byDepartment: {},
+      byEmployee: {},
+    });
+    expect(screen.queryByRole("status", { name: /budget/i })).toBeNull();
+  });
+
+  it("says the office has reached its budget", () => {
+    openWith({ ...acme, budget: capped }, undefined, {
+      officeUsd: 10,
+      unpricedCalls: 0,
+      byDepartment: {},
+      byEmployee: {},
+    });
+    expect(screen.getByRole("status", { name: /budget/i })).toHaveTextContent(/budget/i);
+  });
+
+  it("reads differently from somebody having stopped it", () => {
+    // A person stopped it and a limit stopped it need different reactions:
+    // one waits for a human, the other for the clock.
+    openWith({ ...acme, budget: capped }, undefined, {
+      officeUsd: 10,
+      unpricedCalls: 0,
+      byDepartment: {},
+      byEmployee: {},
+    });
+    const said = screen.getByRole("status", { name: /budget/i }).textContent;
+
+    expect(said).not.toMatch(/somebody stopped/i);
+    expect(said).toMatch(/starts again|rolls|resumes/i);
+  });
+
+  it("marks a room that has reached its own budget", () => {
+    openWith(acme, [{ ...eng, budget: capped }, sales, ops], {
+      officeUsd: 99,
+      unpricedCalls: 0,
+      byDepartment: { "dept-eng": 10 },
+      byEmployee: {},
+    });
+    expect(room()).toHaveTextContent(/budget/i);
+  });
+
+  it("leaves a room inside its budget unmarked", () => {
+    openWith(acme, [{ ...eng, budget: capped }, sales, ops], {
+      officeUsd: 1,
+      unpricedCalls: 0,
+      byDepartment: { "dept-eng": 1 },
+      byEmployee: {},
+    });
+    expect(room()).not.toHaveTextContent(/budget/i);
+  });
+
+  it("says nothing when the office has not been asked what it spent", () => {
+    // Unknown is not over: a canvas that could not reach the office must not
+    // announce that work has stopped.
+    openWith({ ...acme, budget: capped });
+    expect(screen.queryByRole("status", { name: /budget/i })).toBeNull();
+  });
+});

@@ -12,6 +12,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type {
   Bench,
+  Budget,
   Department,
   GatedAction,
   TaskPriority,
@@ -22,6 +23,7 @@ import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { BenchRecord } from "./BenchRecord.js";
+import { BudgetField } from "./BudgetField.js";
 import { Benches } from "./Benches.js";
 import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
@@ -66,6 +68,7 @@ interface Draft {
   readonly hours: HoursDraft;
   readonly toolGrants: readonly ToolGrant[];
   readonly benches: readonly Bench[];
+  readonly budget: Budget | null;
 }
 
 function draftOf(department: Department): Draft {
@@ -78,6 +81,7 @@ function draftOf(department: Department): Draft {
     policy: policyDraftOf(department.reviewPolicy),
     toolGrants: department.toolGrants,
     benches: department.benches,
+    budget: department.budget,
     hours:
       department.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -99,6 +103,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
   const departments = store((state) => state.departments);
   const employees = store((state) => state.employees);
   const connectors = store((state) => state.connectors);
+  const spend = store((state) => state.spend);
 
   const department = departments.find((candidate) => candidate.id === selectedId) ?? null;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -138,6 +143,7 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
         reviewPolicy: policyFromDraft(draft.policy),
         toolGrants: draft.toolGrants,
         benches: draft.benches,
+        budget: draft.budget,
         schedule: draft.hours.own
           ? {
               kind: "windows",
@@ -468,6 +474,15 @@ export function DepartmentDrawer({ store }: { readonly store: OfficeStore }): Re
           </Button>
         </div>
       </div>
+
+      <BudgetField
+        what="department"
+        value={draft.budget}
+        {...(spend === null ? {} : { spentUsd: spend.byDepartment[department.id] ?? 0 })}
+        onChange={(budget) => {
+          edit({ budget });
+        }}
+      />
 
       {/* Part of this drawer's draft, unlike the office's connectors: a bench
           is a field of the department, so Save commits it and Cancel drops it. */}
