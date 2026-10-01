@@ -108,3 +108,23 @@ describe("the office the whole application shares", () => {
     expect(officeStore.getState().departments).toBe(loaded);
   });
 });
+
+describe("the usage section", () => {
+  beforeEach(() => {
+    for (const name of ["VITE_VO_API_URL", "VITE_VO_API_TOKEN", "VITE_VO_OFFICE_ID"]) {
+      vi.stubEnv(name, "");
+    }
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is the figures themselves, not a page about them", () => {
+    // It was an explicit placeholder saying "Not built yet"; the data behind it
+    // has existed since telemetry reached the server.
+    const view = mount("/usage");
+    expect(screen.getByRole("group", { name: /what this office has spent/i })).toBeTruthy();
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    view.unmount();
+  });
+});
