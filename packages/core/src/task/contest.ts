@@ -135,7 +135,9 @@ export function recordContestWin(
   if (already !== undefined) {
     errors.push({
       path: "contest",
-      message: `already decided: "${already.title}" won it`,
+      // The entry, not its title: every entry in a contest carries the same
+      // title, so naming it would be true of all of them and useful about none.
+      message: `already decided: entry "${already.id}" won it`,
     });
   }
 

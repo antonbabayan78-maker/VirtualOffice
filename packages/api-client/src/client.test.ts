@@ -242,6 +242,9 @@ describe("telling the office what an agent did", () => {
     approvals: [],
     stage: null,
     gatedActions: [],
+    deadline: null,
+    createdAt: "2026-09-28T09:00:00.000Z",
+    updatedAt: "2026-09-28T10:00:00.000Z",
     history: [{ type: "submitted", at: "2026-09-28T09:00:00.000Z" }],
   };
 
@@ -264,6 +267,33 @@ describe("telling the office what an agent did", () => {
 
     await client().postTaskEvent("task-1", { type: "approve", actorId: "emp-grace" });
     expect(sent).toEqual({ type: "approve", actorId: "emp-grace" });
+  });
+
+  it("turns the task's own dates back into dates", async () => {
+    // Everything that reads a task off the wire is typed as holding Dates, and
+    // the first thing to call `.getTime()` on one of these found a string.
+    server.use(http.post(`${BASE}/tasks/task-1/events`, () => HttpResponse.json(task)));
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+
+    if (!result.ok) throw new Error("expected the office to accept the event");
+    expect(result.value.createdAt).toBeInstanceOf(Date);
+    expect(result.value.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves a task with no deadline without one, rather than inventing a date", async () => {
+    server.use(http.post(`${BASE}/tasks/task-1/events`, () => HttpResponse.json(task)));
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+    if (result.ok) expect(result.value.deadline).toBeNull();
+  });
+
+  it("turns a deadline into a date when there is one", async () => {
+    server.use(
+      http.post(`${BASE}/tasks/task-1/events`, () =>
+        HttpResponse.json({ ...task, deadline: "2026-10-05T17:00:00.000Z" }),
+      ),
+    );
+    const result = await client().postTaskEvent("task-1", { type: "submit", actorId: "emp-ada" });
+    if (result.ok) expect(result.value.deadline).toBeInstanceOf(Date);
   });
 
   it("turns the task's history back into dates", async () => {
