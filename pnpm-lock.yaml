@@ -395,7 +395,11 @@ importers:
 
   packages/memory: {}
 
-  packages/notifications: {}
+  packages/notifications:
+    dependencies:
+      '@vo/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/orchestrator:
     dependencies:
