@@ -299,6 +299,94 @@ describe("telling the office what an agent did", () => {
   });
 });
 
+describe("saying which entry won a contest", () => {
+  const winner = {
+    id: "task-1",
+    officeId: "office-1",
+    departmentId: "dept-eng",
+    assigneeId: "emp-ada",
+    title: "Draft the launch note",
+    status: "done",
+    priority: "normal",
+    contestId: "contest-1",
+    won: {
+      reason: "tighter, and it kept the detail",
+      decidedBy: "emp-grace",
+      decidedAt: "2026-10-01T09:00:00.000Z",
+    },
+    history: [],
+  };
+
+  it("brings back the entry, marked as the one that won", async () => {
+    server.use(http.post(`${BASE}/tasks/task-1/win`, () => HttpResponse.json(winner)));
+
+    const result = await client().recordContestWin("task-1", { reason: "tighter" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.won?.reason).toBe("tighter, and it kept the detail");
+  });
+
+  it("turns when it was decided back into a date", async () => {
+    // Nested inside the verdict, which is the one date `reviveTask` would
+    // otherwise hand on as the string it arrived as.
+    server.use(http.post(`${BASE}/tasks/task-1/win`, () => HttpResponse.json(winner)));
+    const result = await client().recordContestWin("task-1", { reason: "tighter" });
+    if (result.ok) expect(result.value.won?.decidedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves a task nobody has decided about with no verdict", async () => {
+    server.use(
+      http.post(`${BASE}/tasks/task-1/win`, () => HttpResponse.json({ ...winner, won: null })),
+    );
+    const result = await client().recordContestWin("task-1", { reason: "tighter" });
+    if (result.ok) expect(result.value.won).toBeNull();
+  });
+
+  it("sends the reason, and who decided when an employee did", async () => {
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/tasks/task-1/win`, async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json(winner);
+      }),
+    );
+
+    await client().recordContestWin("task-1", { reason: "tighter", decidedBy: "emp-grace" });
+    expect(sent).toEqual({ reason: "tighter", decidedBy: "emp-grace" });
+  });
+
+  it("says a person decided when nobody is named, rather than sending a null", async () => {
+    let sent: unknown = null;
+    server.use(
+      http.post(`${BASE}/tasks/task-1/win`, async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json(winner);
+      }),
+    );
+
+    await client().recordContestWin("task-1", { reason: "tighter" });
+    expect(sent).toEqual({ reason: "tighter" });
+  });
+
+  it("says a verdict the office refused was refused", async () => {
+    server.use(
+      http.post(`${BASE}/tasks/task-1/win`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "contest", message: 'already decided: "Iris" won it' }] },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const result = await client().recordContestWin("task-1", { reason: "on reflection" });
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.message).toMatch(/already decided/);
+    } else {
+      throw new Error("expected the office to refuse a second verdict");
+    }
+  });
+});
+
 describe("changing the office itself", () => {
   const office = {
     id: "office-1",

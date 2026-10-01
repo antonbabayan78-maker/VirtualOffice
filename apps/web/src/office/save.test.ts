@@ -63,6 +63,7 @@ function scriptedApi(): {
     downloadDocument: () => Promise.reject(new Error("not used here")),
     deleteDocument: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.reject(new Error("not used here")),
+    recordContestWin: () => Promise.reject(new Error("not used here")),
   };
 
   return {

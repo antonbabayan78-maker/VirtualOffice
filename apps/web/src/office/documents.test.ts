@@ -49,6 +49,7 @@ function scriptedApi(): Scripted {
     patchDepartment: unused,
     patchEmployee: unused,
     postTaskEvent: unused,
+    recordContestWin: unused,
     getDocument: unused,
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     createConnector: unused,

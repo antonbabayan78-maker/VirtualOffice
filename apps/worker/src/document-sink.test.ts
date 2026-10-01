@@ -29,6 +29,7 @@ function api(answer: ApiResult<Document>, sent: { value?: UploadDocument } = {})
     patchDepartment: unused,
     patchEmployee: unused,
     postTaskEvent: unused,
+    recordContestWin: unused,
     getDocument: unused,
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     createConnector: unused,

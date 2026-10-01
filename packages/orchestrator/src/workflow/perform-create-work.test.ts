@@ -103,9 +103,18 @@ describe("choosing who takes handed-on work", () => {
   });
 });
 
+/** The one placement a handoff usually makes. */
+function only<T>(placements: readonly T[]): T {
+  if (placements.length !== 1)
+    throw new Error(`expected one placement, got ${String(placements.length)}`);
+  const first = placements[0];
+  if (first === undefined) throw new Error("no placement");
+  return first;
+}
+
 describe("making the next department's work", () => {
   const placed = (candidates: readonly PeerCandidate[] = [person("emp-theo")]) =>
-    unwrap(performCreateWork(effect(), officeId, candidates, deps));
+    only(unwrap(performCreateWork(effect(), officeId, candidates, deps)));
 
   it("puts it in the department the work was handed to", () => {
     expect(placed().task.departmentId).toBe(design);
@@ -200,12 +209,77 @@ describe("handing work to a bench in the receiving department", () => {
       deps,
       room(),
     );
-    expect(unwrap(placement).task.benchId).toBe(bench.id);
-    expect(unwrap(placement).task.assigneeId).toBe(iris);
+    expect(only(unwrap(placement)).task.benchId).toBe(bench.id);
+    expect(only(unwrap(placement)).task.assigneeId).toBe(iris);
   });
 
   it("records no bench on work an arrow placed by skill", () => {
     const placement = performCreateWork(effect(), officeId, [person(iris)], deps);
-    expect(unwrap(placement).task.benchId).toBeNull();
+    expect(only(unwrap(placement)).task.benchId).toBeNull();
+  });
+});
+
+describe("handing work to a shootout bench", () => {
+  const iris = "emp-iris" as EmployeeId;
+  const theo = "emp-theo" as EmployeeId;
+  const shootout: Bench = {
+    id: "bench-draft" as BenchId,
+    name: "Drafting",
+    memberIds: [iris, theo],
+    strategy: "shootout",
+    judgeId: null,
+  };
+  const toBench = effect({ assign: { kind: "bench", benchId: shootout.id } });
+  const room = { benches: [shootout], placed: [] };
+  let made = 0;
+  const ids = { id: () => `made-${String(++made)}` as TaskId, now: deps.now };
+
+  const entries = (people: readonly PeerCandidate[] = [person(iris), person(theo)]) =>
+    unwrap(performCreateWork(toBench, officeId, people, ids, room));
+
+  it("makes one piece of work for each member, not one for the room", () => {
+    expect(entries()).toHaveLength(2);
+  });
+
+  it("gives each of them to a different member", () => {
+    expect(entries().map((placement) => placement.assignedTo)).toEqual([iris, theo]);
+  });
+
+  it("puts them in one contest", () => {
+    const made = entries();
+    const contests = new Set(made.map((placement) => placement.task.contestId));
+    expect(contests.size).toBe(1);
+    expect([...contests][0]).not.toBeNull();
+  });
+
+  it("asks all of them the same question", () => {
+    const [first, second] = entries();
+    expect(first?.task.title).toBe(second?.task.title);
+    expect(first?.task.artifacts).toEqual(second?.task.artifacts);
+    expect(first?.task.route).toEqual(second?.task.route);
+  });
+
+  it("records the bench on every entry, so its record holds the contest", () => {
+    expect(entries().every((placement) => placement.task.benchId === shootout.id)).toBe(true);
+  });
+
+  it("leaves somebody who cannot work out of it", () => {
+    const made = entries([person(iris), person(theo, { status: "paused" })]);
+    expect(made.map((placement) => placement.assignedTo)).toEqual([iris]);
+  });
+
+  it("leaves one piece of work waiting when nobody on the bench can take it", () => {
+    // Not a contest of nobody, and not N unassigned tasks: one piece of work in
+    // the department's backlog, exactly as a round robin bench leaves it.
+    const made = entries([person(iris, { status: "paused" }), person(theo, { status: "paused" })]);
+    expect(made).toHaveLength(1);
+    expect(only(made).assignedTo).toBeNull();
+    expect(only(made).task.contestId).toBeNull();
+  });
+
+  it("gives separate contests separate ids", () => {
+    const first = entries();
+    const second = entries();
+    expect(first[0]?.task.contestId).not.toBe(second[0]?.task.contestId);
   });
 });
