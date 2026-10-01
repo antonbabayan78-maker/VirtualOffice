@@ -49,6 +49,7 @@ const bench: Bench = {
   name: "Drafting",
   memberIds: [iris.id, theo.id],
   strategy: "round_robin",
+  judgeId: null,
 };
 
 let made = 0;

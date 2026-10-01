@@ -2221,6 +2221,46 @@ describe("a bench taking work in turn, over the wire", () => {
     expect(response.statusCode).toBe(400);
   });
 
+  it("takes a judge who works in another department", async () => {
+    // Judging is not the room's work, and somebody outside it is often the only
+    // person with nothing at stake in the comparison.
+    const other = await aDepartment(officeId, "Engineering");
+    const created = await post(`/offices/${officeId}/employees`, {
+      name: "Ada",
+      role: "Lead",
+      color: "#112233",
+      department: other,
+      llm: { provider: "anthropic", model: "claude-opus-5" },
+    });
+    const response = await patch(`/departments/${departmentId}`, {
+      benches: [
+        {
+          id: benchId,
+          name: "Drafting",
+          memberIds: [iris, theo],
+          strategy: "shootout",
+          judgeId: created.json<{ id: string }>().id,
+        },
+      ],
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("refuses a judge who does not work in this office at all", async () => {
+    const response = await patch(`/departments/${departmentId}`, {
+      benches: [
+        {
+          id: benchId,
+          name: "Drafting",
+          memberIds: [iris],
+          strategy: "shootout",
+          judgeId: "emp-nowhere",
+        },
+      ],
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it("hands the first piece of work to the first member", async () => {
     expect(assignee(await workFor("One", { benchId }))).toBe(iris);
   });

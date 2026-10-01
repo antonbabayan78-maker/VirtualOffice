@@ -25,7 +25,15 @@ import { err, ok, type Result, type ValidationError } from "../shared/result.js"
 declare const benchIdBrand: unique symbol;
 export type BenchId = string & { readonly [benchIdBrand]: true };
 
-export const BENCH_STRATEGIES = ["round_robin"] as const;
+/**
+ * What a bench does with a piece of work.
+ *
+ * `round_robin` hands it to one member and the comparison is across tasks —
+ * cheap, statistical, and it runs on real work. `shootout` hands the same job to
+ * every member and the comparison is on identical input — exact, and it costs as
+ * many times as there are people on the bench.
+ */
+export const BENCH_STRATEGIES = ["round_robin", "shootout"] as const;
 export type BenchStrategy = (typeof BENCH_STRATEGIES)[number];
 
 export function isBenchStrategy(value: unknown): value is BenchStrategy {
@@ -38,6 +46,14 @@ export interface Bench {
   /** In turn order. The order they were put in is the order they are used. */
   readonly memberIds: readonly EmployeeId[];
   readonly strategy: BenchStrategy;
+  /**
+   * Who decides a shootout, or null when only a person does.
+   *
+   * Never a member of this bench: an entrant marking its own entry is the one
+   * thing a comparison cannot survive, since the comparison is the only output.
+   * May work in another department, as a reviewer may.
+   */
+  readonly judgeId: EmployeeId | null;
 }
 
 /** A member as the department knows them: on the bench, and able to work or not. */
@@ -101,6 +117,40 @@ export function nextFromBench(
   return turn[(lastAt + 1) % turn.length] ?? null;
 }
 
+/**
+ * What this bench does with one piece of work: one person, or all of them.
+ *
+ * A discriminated answer rather than an employee or a list, because the two
+ * strategies place work differently and a caller that forgets one of them
+ * should not compile. `nobody` is a bench that can place nothing — empty, or
+ * with nobody on it able to work — which is not an error and not a reason to
+ * drop the work on whoever is nearest.
+ */
+export type BenchChoice =
+  | { readonly kind: "one"; readonly employeeId: EmployeeId }
+  | { readonly kind: "every"; readonly employeeIds: readonly EmployeeId[] }
+  | { readonly kind: "nobody" };
+
+export function placeOnBench(
+  bench: Bench,
+  members: readonly BenchMember[],
+  placed: readonly BenchPlacement[],
+): BenchChoice {
+  if (bench.strategy === "shootout") {
+    const canWork = new Set(
+      members.filter((one) => one.status === "active").map((one) => one.id as string),
+    );
+    // The bench's own order, so the entries read the way the bench is written.
+    // Nothing here depends on what was placed before: a shootout does not
+    // rotate, and the same job tomorrow goes to the same people.
+    const entrants = bench.memberIds.filter((id) => canWork.has(id));
+    return entrants.length === 0 ? { kind: "nobody" } : { kind: "every", employeeIds: entrants };
+  }
+
+  const turn = nextFromBench(bench, members, placed);
+  return turn === null ? { kind: "nobody" } : { kind: "one", employeeId: turn };
+}
+
 const NAMED = (path: string, message: string): ValidationError => ({ path, message });
 
 /**
@@ -136,6 +186,13 @@ export function validateBenchShape(benches: readonly Bench[]): Result<readonly B
     }
 
     const members: readonly EmployeeId[] = Array.isArray(bench.memberIds) ? bench.memberIds : [];
+    // Checked whatever the strategy is, so switching a bench to a shootout
+    // cannot turn a saved judge into a rigged one. A judge on a round robin
+    // bench is idle rather than wrong, and switching back must not lose it.
+    const judgeId = bench.judgeId ?? null;
+    if (judgeId !== null && members.includes(judgeId)) {
+      errors.push(NAMED(`${at}.judgeId`, `"${judgeId}" is on this bench, so cannot judge it`));
+    }
     members.forEach((memberId, position) => {
       // Two benches over one person means "whose turn" has two answers, and
       // each spends the same person's time without seeing the other.
@@ -160,16 +217,26 @@ export function validateBenchShape(benches: readonly Bench[]): Result<readonly B
       name: bench.name.trim(),
       memberIds: [...bench.memberIds],
       strategy: bench.strategy,
+      judgeId: bench.judgeId ?? null,
     })),
   );
 }
 
-/** Checks each member against the people the department actually holds. */
+/**
+ * Checks each member against the people the department actually holds, and each
+ * judge against the office's.
+ *
+ * Two lists because the two answer to different rooms: a member takes the
+ * bench's work, so they work here, while a judge only reads what came out of it
+ * and is often better for having nothing at stake in this department.
+ */
 export function validateBenchMembers(
   benches: readonly Bench[],
   employeesInDepartment: readonly EmployeeId[],
+  employeesInOffice: readonly EmployeeId[],
 ): ValidationError[] {
   const works = new Set(employeesInDepartment as readonly string[]);
+  const anywhere = new Set(employeesInOffice as readonly string[]);
   const errors: ValidationError[] = [];
   benches.forEach((bench, index) => {
     bench.memberIds.forEach((memberId, position) => {
@@ -182,6 +249,14 @@ export function validateBenchMembers(
         );
       }
     });
+    // Absent means nobody judges, which is what a body or a file that says
+    // nothing about it means. Only a judge who was named has to exist.
+    const judgeId = bench.judgeId ?? null;
+    if (judgeId !== null && !anywhere.has(judgeId)) {
+      errors.push(
+        NAMED(`benches[${String(index)}].judgeId`, `"${judgeId}" does not work in this office`),
+      );
+    }
   });
   return errors;
 }

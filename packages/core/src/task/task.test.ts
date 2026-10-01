@@ -53,6 +53,8 @@ describe("createTask", () => {
       status: "backlog",
       assigneeId: null,
       benchId: null,
+      contestId: null,
+      won: null,
       reviewerIds: [],
       approvals: [],
       stage: null,

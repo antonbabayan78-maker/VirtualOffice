@@ -179,6 +179,7 @@ export function Benches({
                 name: name.trim(),
                 memberIds: [],
                 strategy: "round_robin",
+                judgeId: null,
               },
             ]);
             setName("");

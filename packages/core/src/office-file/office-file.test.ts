@@ -807,6 +807,7 @@ employees:
         name: "Drafting",
         memberIds: ["emp-iris", "emp-theo"],
         strategy: "round_robin",
+        judgeId: null,
       },
     ]);
   });
@@ -839,6 +840,49 @@ departments:
 
   it("refuses a strategy nobody has heard of", () => {
     const wrong = YAML.replace("name: Drafting,", "name: Drafting, strategy: vibes,");
+    expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
+  });
+
+  it("reads a shootout and who judges it", () => {
+    const shootout = YAML.replace(
+      "name: Drafting,",
+      "name: Drafting, strategy: shootout, judge: emp-ada,",
+    ).replace(
+      "employees:",
+      'employees:\n  - { id: emp-ada, name: Ada, role: Lead, color: "#112233", department: dept-eng, llm: { provider: anthropic, model: claude-opus-5 } }',
+    );
+    const design = at(unwrap(importOfficeYaml(shootout, deps)).departments, 0);
+
+    expect(design.benches[0]?.strategy).toBe("shootout");
+    expect(design.benches[0]?.judgeId).toBe("emp-ada");
+  });
+
+  it("carries a shootout and its judge back out to the file", () => {
+    // A round robin bench writes no strategy, because a default on every bench
+    // in every file says nothing — so a shootout has to write both of these.
+    const shootout = YAML.replace(
+      "members: [emp-iris, emp-theo]",
+      "members: [emp-iris], strategy: shootout, judge: emp-theo",
+    );
+    const written = exportOfficeYaml(unwrap(importOfficeYaml(shootout, deps)));
+
+    expect(written).toContain("shootout");
+    expect(written).toContain("judge: emp-theo");
+    const again = unwrap(importOfficeYaml(written, deps));
+    expect(at(again.departments, 0).benches[0]?.judgeId).toBe("emp-theo");
+  });
+
+  it("keeps a bench nobody judges out of the file", () => {
+    expect(exportOfficeYaml(unwrap(importOfficeYaml(YAML, deps)))).not.toContain("judge");
+  });
+
+  it("refuses a judge who is on the bench being judged", () => {
+    const rigged = YAML.replace("name: Drafting,", "name: Drafting, judge: emp-iris,");
+    expect(isErr(importOfficeYaml(rigged, deps))).toBe(true);
+  });
+
+  it("refuses a judge who does not work in this office", () => {
+    const wrong = YAML.replace("name: Drafting,", "name: Drafting, judge: emp-nobody,");
     expect(isErr(importOfficeYaml(wrong, deps))).toBe(true);
   });
 });

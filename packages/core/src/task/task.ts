@@ -12,6 +12,9 @@ import type { EmployeeId } from "../employee/employee.js";
 import type { OfficeId } from "../office/office.js";
 import { GATED_ACTIONS, isGatedAction, type GatedAction } from "../shared/gated-action.js";
 import { err, ok, type Result, type ValidationError } from "../shared/result.js";
+// Types only, and erased: a contest is made of tasks, so the module that knows
+// how one works depends on this one, never the other way round at runtime.
+import type { ContestId, ContestWin } from "./contest.js";
 
 declare const taskIdBrand: unique symbol;
 export type TaskId = string & { readonly [taskIdBrand]: true };
@@ -114,6 +117,23 @@ export interface Task {
    * rather than kept as a second list somebody has to remember to update.
    */
   readonly benchId: BenchId | null;
+  /**
+   * The contest this task is an entry in, when a shootout bench fanned one job
+   * out to every member. Null for ordinary work, which is nearly all of it.
+   *
+   * A contest is its entries and nothing else: there is no parent task, because
+   * a parent would be a row nobody works, in a status it does not deserve.
+   */
+  readonly contestId: ContestId | null;
+  /**
+   * The verdict, on the entry that won its contest. Null on every other task,
+   * including the entries that lost — losing is not something that happens to a
+   * piece of work, and the work they did still stands.
+   *
+   * Named `won` rather than `verdict` so it cannot be read as the review verdict
+   * a reviewer gives.
+   */
+  readonly won: ContestWin | null;
   readonly reviewerIds: readonly EmployeeId[];
 
   /**
@@ -170,6 +190,8 @@ export interface CreateTaskInput {
   readonly priority?: string;
   readonly assigneeId?: EmployeeId;
   readonly benchId?: BenchId;
+  /** The contest this is an entry in. Set by `createContest`, not by hand. */
+  readonly contestId?: ContestId;
   readonly reviewerIds?: readonly EmployeeId[];
   /** Where this work has already been, when it was handed on from somewhere. */
   readonly route?: readonly DepartmentId[];
@@ -319,6 +341,8 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
     status,
     assigneeId,
     benchId: input.benchId ?? null,
+    contestId: input.contestId ?? null,
+    won: null,
     reviewerIds: [...reviewerIds],
     approvals: [],
     stage: null,
