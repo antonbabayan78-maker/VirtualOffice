@@ -177,3 +177,31 @@ describe("who takes the work next door", () => {
     expect(effects[0]?.assign).toEqual({ kind: "anyone" });
   });
 });
+
+describe("an entry in a shootout", () => {
+  it("hands nothing on, however the departments are wired", () => {
+    // Every member answered the same question. Handing each answer on would
+    // give the next department the same job as many times as there were
+    // entrants, and a comparison is not a delivery.
+    expect(handoffEffects(task({ contestId: "contest-1" }), context([arrow()]))).toEqual([]);
+  });
+
+  it("hands on a task stored before contests existed, which says nothing about one", () => {
+    // Its JSON has no such field, and an office that was handing work on must
+    // not stop because a field was added.
+    expect(handed([arrow()], {}, task({ contestId: undefined }))).toHaveLength(1);
+  });
+
+  it("still hands on work a bench merely chose somebody for", () => {
+    // Round robin places one person on one real piece of work: it travels.
+    expect(handed([arrow()], {}, task({ benchId: "bench-draft" }))).toHaveLength(1);
+  });
+
+  it("does not escalate an entry that has been round the houses either", () => {
+    // Silence rather than a complaint: nothing was supposed to travel.
+    const been = [engineering, engineering] as DepartmentId[];
+    expect(
+      handoffEffects(task({ contestId: "contest-1", route: been }), context([arrow()])),
+    ).toEqual([]);
+  });
+});

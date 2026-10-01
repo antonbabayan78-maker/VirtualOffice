@@ -424,6 +424,14 @@ describe("one brief travelling the length of the studio", () => {
     const result = await theDayAfter();
     expect(result.tasks.every((task) => task.status === "done")).toBe(true);
   });
+
+  it("makes one piece of work per handoff, not a pile of them", async () => {
+    // A handoff can now place several — a shootout bench answers with one entry
+    // per member — so the ordinary arrow has to keep placing exactly one.
+    const result = await theDayAfter();
+    expect(result.tasks.filter((task) => task.contestId !== null)).toEqual([]);
+    expect(result.tasks).toHaveLength(4);
+  });
 });
 
 /** A department's name, for reading a route out loud. */

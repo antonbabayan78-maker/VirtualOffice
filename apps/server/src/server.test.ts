@@ -2427,6 +2427,313 @@ describe("work handed across to a bench", () => {
   });
 });
 
+describe("a shootout, over the wire", () => {
+  interface Entry {
+    readonly id: string;
+    readonly title: string;
+    readonly assigneeId: string | null;
+    readonly benchId: string | null;
+    readonly contestId: string | null;
+    readonly status: string;
+    readonly won: { readonly reason: string; readonly decidedBy: string | null } | null;
+  }
+
+  let officeId: string;
+  let departmentId: string;
+  let iris: string;
+  let theo: string;
+
+  const hire = async (name: string, department = departmentId) =>
+    (
+      await post(`/offices/${officeId}/employees`, {
+        name,
+        role: "Designer",
+        color: "#00aa66",
+        department,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+
+  /** One job sent to the bench, and the entries it became. */
+  const runOff = async (title = "Draft the launch note") => {
+    const response = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title,
+      acceptanceCriteria: ["It fits on one screen"],
+      benchId: "bench-draft",
+    });
+    return response;
+  };
+
+  const entriesOf = (response: LightMyRequestResponse) =>
+    response.json<{ contestId: string; items: Entry[] }>();
+
+  /** Takes one entry all the way to done, as its own run would. */
+  const finish = async (id: string, actorId: string | null) => {
+    await post(`/tasks/${id}/events`, { type: "start", actorId });
+    // Says what it met, because the contest asked for something in particular
+    // and a submission that claims nothing is sent back.
+    await post(`/tasks/${id}/events`, {
+      type: "submit",
+      actorId,
+      met: ["It fits on one screen"],
+    });
+  };
+
+  const read = async (id: string) => (await get(`/tasks/${id}`)).json<Entry>();
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = (
+      await post(`/offices/${officeId}/departments`, {
+        name: "Design",
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "direct" },
+      })
+    ).json<{ id: string }>().id;
+    iris = await hire("Iris");
+    theo = await hire("Theo");
+    await patch(`/departments/${departmentId}`, {
+      benches: [
+        { id: "bench-draft", name: "Drafting", memberIds: [iris, theo], strategy: "shootout" },
+      ],
+    });
+  });
+
+  it("answers one request with one piece of work per member", async () => {
+    const made = entriesOf(await runOff());
+    expect(made.items).toHaveLength(2);
+    expect(made.items.map((entry) => entry.assigneeId)).toEqual([iris, theo]);
+  });
+
+  it("puts them in one contest, and says which", async () => {
+    const made = entriesOf(await runOff());
+    expect(made.contestId).toBeTruthy();
+    expect(made.items.every((entry) => entry.contestId === made.contestId)).toBe(true);
+  });
+
+  it("asks every one of them the same thing", async () => {
+    const [first, second] = entriesOf(await runOff()).items;
+    const a = await read(first?.id ?? "");
+    const b = await read(second?.id ?? "");
+    expect(a.title).toBe(b.title);
+    expect(a.benchId).toBe("bench-draft");
+    expect(b.benchId).toBe("bench-draft");
+  });
+
+  it("still answers with one task when the bench takes work in turn", async () => {
+    // The old shape is untouched: only a shootout fans out.
+    await patch(`/departments/${departmentId}`, {
+      benches: [
+        { id: "bench-draft", name: "Drafting", memberIds: [iris, theo], strategy: "round_robin" },
+      ],
+    });
+    const response = await runOff();
+    expect(response.json<{ id: string }>().id).toBeTruthy();
+    expect(response.json<{ items?: unknown }>().items).toBeUndefined();
+  });
+
+  it("says a piece of work arrived for each entry, not one for the contest", async () => {
+    const before = events.since(officeId, 0).length;
+    await runOff();
+    const created = events
+      .since(officeId, before)
+      .filter((event) => (event.data as { kind?: string }).kind === "task.created");
+    expect(created).toHaveLength(2);
+  });
+
+  it("records a verdict on the entry that won", async () => {
+    const made = entriesOf(await runOff());
+    const winner = made.items[1];
+    await finish(winner?.id ?? "", winner?.assigneeId ?? null);
+
+    const decided = await post(`/tasks/${winner?.id ?? ""}/win`, {
+      reason: "tighter, and it kept the detail",
+    });
+
+    expect(decided.statusCode).toBe(200);
+    expect(decided.json<Entry>().won?.reason).toBe("tighter, and it kept the detail");
+    expect((await read(made.items[0]?.id ?? "")).won).toBeNull();
+  });
+
+  it("names the employee that decided, when one did", async () => {
+    const made = entriesOf(await runOff());
+    const winner = made.items[0];
+    await finish(winner?.id ?? "", winner?.assigneeId ?? null);
+    const judge = await hire("Ada");
+
+    const decided = await post(`/tasks/${winner?.id ?? ""}/win`, {
+      reason: "clearer",
+      decidedBy: judge,
+    });
+    expect(decided.json<Entry>().won?.decidedBy).toBe(judge);
+  });
+
+  it("refuses a second verdict rather than overwriting the first", async () => {
+    const made = entriesOf(await runOff());
+    const [first, second] = made.items;
+    await finish(first?.id ?? "", first?.assigneeId ?? null);
+    await finish(second?.id ?? "", second?.assigneeId ?? null);
+    await post(`/tasks/${first?.id ?? ""}/win`, { reason: "clearer" });
+
+    const again = await post(`/tasks/${second?.id ?? ""}/win`, { reason: "on reflection" });
+    expect(again.statusCode).toBe(400);
+    expect((await read(first?.id ?? "")).won?.reason).toBe("clearer");
+  });
+
+  it("refuses a verdict on an entry whose answer is not in", async () => {
+    const made = entriesOf(await runOff());
+    const response = await post(`/tasks/${made.items[0]?.id ?? ""}/win`, { reason: "a hunch" });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("refuses a verdict with no reason", async () => {
+    const made = entriesOf(await runOff());
+    const winner = made.items[0];
+    await finish(winner?.id ?? "", winner?.assigneeId ?? null);
+    expect((await post(`/tasks/${winner?.id ?? ""}/win`, { reason: "  " })).statusCode).toBe(400);
+  });
+
+  it("refuses a verdict on work that is not in a contest at all", async () => {
+    const ordinary = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Ordinary work",
+      assigneeId: iris,
+    });
+    const id = ordinary.json<{ id: string }>().id;
+    await finish(id, iris);
+
+    expect((await post(`/tasks/${id}/win`, { reason: "it is the only one" })).statusCode).toBe(400);
+  });
+
+  it("says nothing about a task that is not there", async () => {
+    expect((await post("/tasks/task-nowhere/win", { reason: "clearer" })).statusCode).toBe(404);
+  });
+
+  it("says the entry changed, so a canvas showing it keeps up", async () => {
+    const made = entriesOf(await runOff());
+    const winner = made.items[0];
+    await finish(winner?.id ?? "", winner?.assigneeId ?? null);
+    const before = events.since(officeId, 0).length;
+    await post(`/tasks/${winner?.id ?? ""}/win`, { reason: "clearer" });
+
+    const said = events
+      .since(officeId, before)
+      .map((event) => (event.data as { kind: string }).kind);
+    expect(said).toContain("task.updated");
+  });
+
+  it("leaves one piece of work waiting when nobody on the bench can take it", async () => {
+    await put(`/employees/${iris}/status`, { status: "paused" });
+    await put(`/employees/${theo}/status`, { status: "paused" });
+    const response = await runOff();
+
+    const task = response.json<Entry>();
+    expect(task.assigneeId).toBeNull();
+    expect(task.contestId).toBeNull();
+  });
+});
+
+describe("work handed across to a shootout bench", () => {
+  /** Product hands on to a Design bench that runs everything twice. */
+  async function wired() {
+    const officeId = await anOffice();
+    const make = async (name: string): Promise<string> =>
+      (
+        await post(`/offices/${officeId}/departments`, {
+          name,
+          color: "#3366ff",
+          position: { x: 0, y: 0 },
+          reviewPolicy: { kind: "direct" },
+        })
+      ).json<{ id: string }>().id;
+    const product = await make("Product");
+    const design = await make("Design");
+    const build = await make("Build");
+
+    const hire = async (name: string, departmentId: string) =>
+      (
+        await post(`/offices/${officeId}/employees`, {
+          name,
+          role: "Maker",
+          color: "#00aa66",
+          department: departmentId,
+          llm: { provider: "anthropic", model: "claude-sonnet-5" },
+        })
+      ).json<{ id: string }>().id;
+    const pam = await hire("Pam", product);
+    const iris = await hire("Iris", design);
+    const theo = await hire("Theo", design);
+    await hire("Bo", build);
+
+    await patch(`/departments/${design}`, {
+      benches: [
+        { id: "bench-draft", name: "Drafting", memberIds: [iris, theo], strategy: "shootout" },
+      ],
+    });
+    await post(`/offices/${officeId}/connections`, {
+      fromId: product,
+      toId: design,
+      kind: "handoff",
+      rules: { assign: { bench: "bench-draft" } },
+    });
+    // Design hands on to Build, which is what must not happen N times.
+    await post(`/offices/${officeId}/connections`, {
+      fromId: design,
+      toId: build,
+      kind: "handoff",
+    });
+    return { officeId, product, design, build, pam, iris, theo };
+  }
+
+  const handOver = async (office: { officeId: string; product: string; pam: string }) => {
+    const task = await post(`/offices/${office.officeId}/tasks`, {
+      departmentId: office.product,
+      title: "Draft the launch note",
+      assigneeId: office.pam,
+    });
+    const id = task.json<{ id: string }>().id;
+    await post(`/tasks/${id}/events`, { type: "start", actorId: office.pam });
+    await post(`/tasks/${id}/events`, { type: "submit", actorId: office.pam });
+  };
+
+  const tasksIn = async (officeId: string, departmentId: string) =>
+    (await get(`/offices/${officeId}/tasks`))
+      .json<{
+        items: {
+          id: string;
+          departmentId: string;
+          assigneeId: string | null;
+          contestId: string | null;
+        }[];
+      }>()
+      .items.filter((one) => one.departmentId === departmentId);
+
+  it("runs the handed-on work off between every member of the bench", async () => {
+    const office = await wired();
+    await handOver(office);
+
+    const entries = await tasksIn(office.officeId, office.design);
+    expect(entries.map((one) => one.assigneeId).sort()).toEqual([office.iris, office.theo].sort());
+    expect(new Set(entries.map((one) => one.contestId)).size).toBe(1);
+  });
+
+  it("does not hand the same job on to the next department once per entry", async () => {
+    // The thing that makes a shootout affordable to wire into a pipeline at all:
+    // two entries finishing must not become two pieces of work next door.
+    const office = await wired();
+    await handOver(office);
+    const entries = await tasksIn(office.officeId, office.design);
+    for (const entry of entries) {
+      await post(`/tasks/${entry.id}/events`, { type: "start", actorId: entry.assigneeId });
+      await post(`/tasks/${entry.id}/events`, { type: "submit", actorId: entry.assigneeId });
+    }
+
+    expect(await tasksIn(office.officeId, office.build)).toHaveLength(0);
+  });
+});
+
 describe("what the office was spent on", () => {
   let officeId: string;
 

@@ -264,16 +264,20 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
         );
         continue;
       }
-      tasks.set(placed.value.task.id, placed.value.task);
+      // Usually one piece of work; a shootout bench makes one per entrant, and
+      // each needs its own copy of what arrived.
+      for (const one of placed.value) {
+        tasks.set(one.task.id, one.task);
 
-      // Copies naming one body, so the department that made it still holds it.
-      await copyIntoTray(
-        store.documents,
-        effect.documents,
-        { kind: "task", id: placed.value.task.id },
-        "in",
-        { id: documentId, now },
-      );
+        // Copies naming one body, so the department that made it still holds it.
+        await copyIntoTray(
+          store.documents,
+          effect.documents,
+          { kind: "task", id: one.task.id },
+          "in",
+          { id: documentId, now },
+        );
+      }
     }
     return outcome.value.task;
   };

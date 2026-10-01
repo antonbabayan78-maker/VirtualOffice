@@ -25,7 +25,9 @@ import {
   isDocumentTray,
   isEmployeeStatus,
   isRunState,
-  nextFromBench,
+  placeOnBench,
+  createContest,
+  recordContestWin,
   validateBenchMembers,
   openTaskCounts,
   RUN_STATES,
@@ -49,7 +51,9 @@ import {
   type ConnectorId,
   type NotificationChannelId,
   type Office,
+  type BenchChoice,
   type BenchId,
+  type ContestId,
   type DepartmentId,
   type DocumentId,
   type DocumentOwnerKind,
@@ -1015,7 +1019,8 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       return fail(reply, [{ path: "benchId", message: "name somebody or name a bench, not both" }]);
     }
 
-    let chosen: EmployeeId | null = named;
+    let chosen: BenchChoice =
+      named === null ? { kind: "nobody" } : { kind: "one", employeeId: named };
     if (wantsBench !== null) {
       const department = await store.departments.get(departmentId);
       const bench = department?.benches.find((candidate) => candidate.id === wantsBench);
@@ -1028,29 +1033,94 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         store.employees.list({ where: { departmentId: departmentId as DepartmentId } }),
         store.tasks.list({ where: { departmentId: departmentId as DepartmentId } }),
       ]);
-      chosen = nextFromBench(bench, staff.items, placed.items);
+      chosen = placeOnBench(bench, staff.items, placed.items);
+    }
+
+    const asked = {
+      officeId: officeId as OfficeId,
+      departmentId: departmentId as DepartmentId,
+      title,
+      ...(brief === undefined ? {} : { brief }),
+      ...(Array.isArray(body["acceptanceCriteria"])
+        ? { acceptanceCriteria: body["acceptanceCriteria"] as string[] }
+        : {}),
+      // Only when a bench actually placed it: a bench that could place nothing
+      // leaves ordinary unassigned work, not a record of something it handed out.
+      ...(wantsBench !== null && chosen.kind !== "nobody" ? { benchId: wantsBench } : {}),
+    };
+    const taskDeps = { id: () => newId() as TaskId, now };
+
+    /**
+     * A shootout answers with every entry it made, and one contest id.
+     *
+     * Deliberately a different shape from the single task every other creation
+     * returns, because what happened is different: the office now holds N pieces
+     * of work, and answering with one of them would hide the rest. Only a caller
+     * that asked a shootout bench for work can see this.
+     */
+    if (chosen.kind === "every") {
+      const contestId = newId() as ContestId;
+      const entries = createContest(asked, chosen.employeeIds, contestId, taskDeps);
+      if (isErr(entries)) return fail(reply, entries.error);
+      for (const entry of entries.value) {
+        await store.tasks.put(entry);
+        events.publish(officeId, { kind: "task.created", id: entry.id });
+      }
+      return reply.code(201).send({ contestId, items: entries.value });
     }
 
     return created(
       reply,
       createTask(
         {
-          officeId: officeId as OfficeId,
-          departmentId: departmentId as DepartmentId,
-          title,
-          ...(brief === undefined ? {} : { brief }),
-          ...(Array.isArray(body["acceptanceCriteria"])
-            ? { acceptanceCriteria: body["acceptanceCriteria"] as string[] }
-            : {}),
-          ...(chosen === null ? {} : { assigneeId: chosen }),
-          ...(typeof body["benchId"] === "string" ? { benchId: body["benchId"] as BenchId } : {}),
+          ...asked,
+          ...(chosen.kind === "one" ? { assigneeId: chosen.employeeId } : {}),
         },
-        { id: () => newId() as TaskId, now },
+        taskDeps,
       ),
       officeId,
       "task.created",
       (task) => store.tasks.put(task),
     );
+  });
+
+  /**
+   * Which entry in a contest won, and why.
+   *
+   * Its own route rather than a PATCH, for the reason the run-state switch is:
+   * this is not editing a field of a task, it is recording a judgement about a
+   * set of them — and core refuses a second one, so there is nothing here for a
+   * `sinceOffset` to protect.
+   */
+  app.post("/tasks/:id/win", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const winner = await store.tasks.get(id);
+    if (winner === null) return missing(reply, "task");
+    if (winner.contestId === null) {
+      return fail(reply, [{ path: "id", message: "that work is not an entry in a contest" }]);
+    }
+
+    const body = request.body as Record<string, unknown>;
+    const problems: ValidationError[] = [];
+    const reason = text(body, "reason", problems);
+    if (problems.length > 0) return fail(reply, problems);
+    const decidedBy =
+      typeof body["decidedBy"] === "string" ? (body["decidedBy"] as EmployeeId) : null;
+
+    // The contest is its entries, so they are read out of the room it ran in.
+    const inRoom = await store.tasks.list({ where: { departmentId: winner.departmentId } });
+    const entries = inRoom.items.filter((task) => task.contestId === winner.contestId);
+
+    const decided = recordContestWin(entries, winner.id, { reason, decidedBy, at: now() });
+    if (isErr(decided)) return fail(reply, decided.error);
+
+    await store.tasks.put(decided.value);
+    events.publish(winner.officeId, {
+      kind: "task.updated",
+      id: decided.value.id,
+      status: decided.value.status,
+    });
+    return decided.value;
   });
 
   app.get("/tasks/:id", async (request, reply) => {
@@ -1158,28 +1228,33 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         );
         continue;
       }
-      await store.tasks.put(placed.value.task);
-      events.publish(task.officeId, { kind: "task.created", id: placed.value.task.id });
+      // Usually one. A shootout bench answers with one piece of work per
+      // entrant, and every one of them needs its own copy of what arrived —
+      // the identical input is the only thing that makes the answers comparable.
+      for (const one of placed.value) {
+        await store.tasks.put(one.task);
+        events.publish(task.officeId, { kind: "task.created", id: one.task.id });
 
-      // The documents come across as copies naming one body, so both desks hold
-      // the work and neither can take the other's away.
-      const carried = await copyIntoTray(
-        store.documents,
-        effect.documents,
-        { kind: "task", id: placed.value.task.id },
-        "in",
-        { id: () => newId() as DocumentId, now },
-      );
-      for (const document of carried) {
-        events.publish(task.officeId, {
-          kind: "document.added",
-          id: document.id,
-          ownerKind: document.ownerKind,
-          ownerId: document.ownerId,
-          tray: document.tray,
-          by: document.addedBy,
-          byKind: document.addedBy === null ? "person" : "employee",
-        });
+        // The documents come across as copies naming one body, so both desks hold
+        // the work and neither can take the other's away.
+        const carried = await copyIntoTray(
+          store.documents,
+          effect.documents,
+          { kind: "task", id: one.task.id },
+          "in",
+          { id: () => newId() as DocumentId, now },
+        );
+        for (const document of carried) {
+          events.publish(task.officeId, {
+            kind: "document.added",
+            id: document.id,
+            ownerKind: document.ownerKind,
+            ownerId: document.ownerId,
+            tray: document.tray,
+            by: document.addedBy,
+            byKind: document.addedBy === null ? "person" : "employee",
+          });
+        }
       }
     }
 

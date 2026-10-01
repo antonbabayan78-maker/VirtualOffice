@@ -56,6 +56,7 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     downloadDocument: () => Promise.reject(new Error("not used here")),
     deleteDocument: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.resolve({ ok: true, value: task as never }),
+    recordContestWin: () => Promise.reject(new Error("not used here")),
     ...overrides,
   };
 }

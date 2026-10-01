@@ -80,6 +80,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     patchConnection: () => Promise.reject(new Error("not used here")),
     patchDepartment: () => Promise.reject(new Error("not used here")),
     postTaskEvent: () => Promise.reject(new Error("not used here")),
+    recordContestWin: () => Promise.reject(new Error("not used here")),
     patchEmployee: () => Promise.reject(new Error("not used here")),
     getDocument: () => Promise.reject(new Error("not used here")),
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),

@@ -44,6 +44,20 @@ function visits(route: readonly DepartmentId[], department: DepartmentId): numbe
  * Empty when the department hands off to nobody, which is most of them.
  */
 export function handoffEffects(task: Task, context: WorkflowContext): readonly WorkflowEffect[] {
+  /**
+   * An entry in a shootout travels nowhere.
+   *
+   * Every member of the bench answered the same question, so handing each
+   * answer on would give the next department the same job as many times as
+   * there were entrants — and a comparison is not a delivery. A shootout ends
+   * with the verdict; a round-robin bench, which puts one person on one real
+   * piece of work, hands on exactly as it always did.
+   *
+   * Nullish rather than null: a task stored before contests existed says nothing
+   * about one, and it has to keep travelling.
+   */
+  if ((task.contestId ?? null) !== null) return [];
+
   const connections = context.escalationGraph?.connections ?? [];
   const outgoing = connections.filter(
     (connection) =>

@@ -67,6 +67,17 @@ export interface ApiClient {
    * the move.
    */
   postTaskEvent(taskId: string, event: Readonly<Record<string, unknown>>): Promise<ApiResult<Task>>;
+  /**
+   * Which entry in a shootout won, and why.
+   *
+   * Not a patch of a field: it is a judgement about a set of entries, and the
+   * office refuses a second one — so there is nothing for an offset to protect.
+   * `decidedBy` is left out when a person decided, which is what null means.
+   */
+  recordContestWin(
+    taskId: string,
+    decision: { readonly reason: string; readonly decidedBy?: string },
+  ): Promise<ApiResult<Task>>;
   /** What this office can reach: every connector, granted or not. */
   listConnectors(officeId: string): Promise<ApiResult<readonly Connector[]>>;
   createConnector(
@@ -229,11 +240,22 @@ function reviveTask(raw: Record<string, unknown>): Task {
   const history = Array.isArray(raw["history"])
     ? (raw["history"] as Record<string, unknown>[])
     : [];
+  // A verdict carries the only date nested inside another object, so it is the
+  // one this cannot revive by spreading.
+  const won = raw["won"];
   return {
     ...raw,
     acceptanceCriteria: listOr(raw["acceptanceCriteria"]),
     route: listOr(raw["route"]),
     artifacts: listOr(raw["artifacts"]),
+    ...(typeof won === "object" && won !== null
+      ? {
+          won: {
+            ...(won as Record<string, unknown>),
+            decidedAt: asDate((won as Record<string, unknown>)["decidedAt"]),
+          },
+        }
+      : {}),
     history: history.map((event) => ({ ...event, at: asDate(event["at"]) })),
   } as unknown as Task;
 }
@@ -492,6 +514,18 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     setEmployeeStatus: async (id, status) =>
       interpret(await put(`/employees/${id}/status`, { status }), reviveEmployee),
+
+    recordContestWin: async (taskId, decision) =>
+      interpret(
+        await call(`/tasks/${taskId}/win`, {
+          method: "POST",
+          body: JSON.stringify({
+            reason: decision.reason,
+            ...(decision.decidedBy === undefined ? {} : { decidedBy: decision.decidedBy }),
+          }),
+        }),
+        reviveTask,
+      ),
 
     recordUsage: async (officeId, event) =>
       interpret(
