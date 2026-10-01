@@ -8,10 +8,11 @@ import { NavLink, Route, Routes } from "react-router";
 import { Button } from "../ui/button.js";
 import { cn } from "../ui/cn.js";
 import { useTheme } from "../ui/theme.js";
-import { Placeholder, ROUTES } from "./routes.js";
+import { Placeholder, ROUTES, type RouteDefinition } from "./routes.js";
 import { CanvasScreen } from "../canvas/CanvasScreen.js";
 import { officeStore } from "../office/store.js";
 import { useOffice } from "../office/useOffice.js";
+import { UsageScreen } from "../usage/UsageScreen.js";
 
 function ThemeToggle(): ReactNode {
   const { resolved, toggle } = useTheme();
@@ -24,6 +25,13 @@ function ThemeToggle(): ReactNode {
       {resolved === "dark" ? "Light" : "Dark"}
     </Button>
   );
+}
+
+/** The screen a section shows; the rest are still their own tasks. */
+function screenFor(route: RouteDefinition): ReactNode {
+  if (route.path === "/") return <CanvasScreen />;
+  if (route.path === "/usage") return <UsageScreen store={officeStore} />;
+  return <Placeholder route={route} />;
 }
 
 export function App(): ReactNode {
@@ -67,11 +75,7 @@ export function App(): ReactNode {
         ) : (
           <Routes>
             {ROUTES.map((route) => (
-              <Route
-                key={route.path}
-                path={route.path}
-                element={route.path === "/" ? <CanvasScreen /> : <Placeholder route={route} />}
-              />
+              <Route key={route.path} path={route.path} element={screenFor(route)} />
             ))}
             <Route
               path="*"
