@@ -80,7 +80,13 @@ import {
   type BlobStore,
   type RelationalStore,
 } from "@vo/storage";
-import { bearerToken, type TokenVerifier } from "./auth.js";
+import {
+  bearerToken,
+  clearedSessionCookie,
+  sessionCookie,
+  sessionCookieHeader,
+  type TokenVerifier,
+} from "./auth.js";
 import { OfficeEventLog } from "./events.js";
 
 export interface ServerOptions {
@@ -135,13 +141,22 @@ const KNOWN_EVENTS: readonly string[] = [
   "gate_decided",
 ];
 
-/** Paths anyone may call: a health probe has no credentials to offer. */
-const OPEN_PATHS: readonly string[] = ["/health"];
+/** Where a browser goes to turn a token into a cookie, and back again. */
+const SESSION_PATH = "/session";
+
+/**
+ * Paths anyone may call: a health probe has no credentials to offer, and the
+ * sign-in route is where a browser goes to get one — asking it for the thing it
+ * is asking for would be a locked door with the key inside.
+ */
+const OPEN_PATHS: readonly string[] = ["/health", SESSION_PATH];
 
 /**
  * A browser cannot set headers on a WebSocket, so the stream takes its token in
- * the query string instead. It is checked before the socket is accepted, never
- * after — an unauthenticated socket is never opened at all.
+ * the query string instead — or, once somebody has signed in, in the cookie the
+ * upgrade carries on its own, which is a credential that never reaches a log.
+ * Either is checked before the socket is accepted, never after: an
+ * unauthenticated socket is never opened at all.
  */
 const WS_PATH = "/ws";
 
@@ -318,14 +333,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     }
     if (path === WS_PATH) {
       const query = request.query as { token?: string };
-      if (query.token === undefined || options.verifyToken(query.token) === null) {
+      const offered = query.token ?? sessionCookie(request.headers.cookie);
+      if (offered === null || options.verifyToken(offered) === null) {
         void reply.code(401).send({ error: "a valid token is required" });
         return;
       }
       done();
       return;
     }
-    const token = bearerToken(request.headers.authorization);
+    // Either a header or the cookie: a browser that has signed in holds no
+    // credential of its own, and a worker or a curl carries one as it always did.
+    const token =
+      bearerToken(request.headers.authorization) ?? sessionCookie(request.headers.cookie);
     if (token === null || options.verifyToken(token) === null) {
       void reply.code(401).send({ error: "a valid bearer token is required" });
       return;
@@ -348,6 +367,36 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   };
 
   app.get("/health", () => ({ status: "ok" }));
+
+  /**
+   * Signing in: the token once, and after that the browser holds nothing.
+   *
+   * The office sets it as a cookie the page cannot read, so there is no token in
+   * the bundle, none in storage and none in the WebSocket URL. It is the office
+   * token rather than a session of its own, which means signing out clears this
+   * browser and nothing else — sessions with an id, an expiry and a way to
+   * revoke one are a task about identity.
+   */
+  app.post(SESSION_PATH, (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const offered = typeof body["token"] === "string" ? body["token"] : "";
+    if (options.verifyToken(offered) === null) {
+      return reply.code(401).send({ error: "that is not a token this office knows" });
+    }
+    // Secure only over https: on a plain-http localhost — which is where the
+    // whole kit runs first — a secure cookie is dropped, and signing in would
+    // appear to work and never be there.
+    const secure = request.headers["x-forwarded-proto"] === "https" || request.protocol === "https";
+    return reply
+      .header("set-cookie", sessionCookieHeader(offered, { secure }))
+      .send({ signedIn: true });
+  });
+
+  /** Signing out. Open, because clearing a cookie harms nobody — and a sign-out
+   *  that needed a sign-in would strand a browser holding something stale. */
+  app.delete(SESSION_PATH, (_request, reply) =>
+    reply.header("set-cookie", clearedSessionCookie()).send({ signedIn: false }),
+  );
 
   // -- the event stream ------------------------------------------------------
 

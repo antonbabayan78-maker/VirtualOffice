@@ -92,6 +92,102 @@ describe("letting anyone in", () => {
   });
 });
 
+describe("signing in, so a browser holds nothing", () => {
+  const signIn = (token: string, headers: Record<string, string> = {}) =>
+    server.inject({
+      method: "POST",
+      url: "/session",
+      headers: { "content-type": "application/json", ...headers },
+      payload: { token },
+    });
+
+  /** The Set-Cookie the office answered with, as one string. */
+  const cookieFrom = (response: LightMyRequestResponse): string => {
+    const header = response.headers["set-cookie"];
+    return Array.isArray(header) ? header.join("; ") : (header ?? "");
+  };
+
+  it("takes the token once and answers with a cookie", async () => {
+    const response = await signIn(TOKEN);
+    expect(response.statusCode).toBe(200);
+    expect(cookieFrom(response)).toContain("vo_session=");
+  });
+
+  it("sets one the page cannot read and nobody else's page can send", async () => {
+    const cookie = cookieFrom(await signIn(TOKEN));
+    expect(cookie).toMatch(/HttpOnly/i);
+    expect(cookie).toMatch(/SameSite=Strict/i);
+  });
+
+  it("refuses a token it does not know, and sets nothing", async () => {
+    const response = await signIn("sk-nonsense");
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("refuses a body with no token in it at all", async () => {
+    const response = await server.inject({
+      method: "POST",
+      url: "/session",
+      headers: { "content-type": "application/json" },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("can be signed in to without being signed in, which is the point", async () => {
+    // The page has no credential to send yet: that is what it is asking for.
+    expect((await signIn(TOKEN)).statusCode).toBe(200);
+  });
+
+  it("marks the cookie secure when the office was reached over https", async () => {
+    const response = await signIn(TOKEN, { "x-forwarded-proto": "https" });
+    expect(cookieFrom(response)).toMatch(/Secure/);
+  });
+
+  it("does not mark it secure on plain http, or the browser would drop it", async () => {
+    expect(cookieFrom(await signIn(TOKEN))).not.toMatch(/Secure/);
+  });
+
+  it("lets a request in on that cookie, with no header at all", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/offices",
+      headers: { cookie: `vo_session=${TOKEN}` },
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("keeps everybody else out, cookie or not", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/offices",
+      headers: { cookie: "vo_session=sk-nonsense" },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("still takes a bearer token, which is what workers and curl carry", async () => {
+    expect((await get("/offices")).statusCode).toBe(200);
+  });
+
+  it("signs out by clearing the cookie", async () => {
+    const response = await server.inject({
+      method: "DELETE",
+      url: "/session",
+      headers: { cookie: `vo_session=${TOKEN}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(cookieFrom(response)).toMatch(/Max-Age=0/);
+  });
+
+  it("signs out somebody who was never signed in, rather than refusing them", async () => {
+    // Clearing a cookie harms nobody, and a sign-out that needs a sign-in is a
+    // dead end for a browser holding something the office no longer accepts.
+    expect((await server.inject({ method: "DELETE", url: "/session" })).statusCode).toBe(200);
+  });
+});
+
 describe("offices", () => {
   it("creates one and gives it back", async () => {
     const response = await post("/offices", { name: "Acme" });
