@@ -11,13 +11,14 @@
  * system then rejects on save.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Employee, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
+import type { Budget, Employee, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { Grants } from "./Grants.js";
 import { PriorityField } from "./PriorityField.js";
+import { BudgetField } from "./BudgetField.js";
 import { Produced } from "./Produced.js";
 import { RunSwitch } from "./RunSwitch.js";
 import { Tray } from "./Tray.js";
@@ -49,6 +50,7 @@ interface Draft {
   readonly priority: TaskPriority;
   readonly hours: HoursDraft;
   readonly toolGrants: readonly ToolGrant[];
+  readonly budget: Budget | null;
 }
 
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -80,6 +82,7 @@ function draftOf(employee: Employee): Draft {
     workspace: employee.workspaceRef ?? "",
     priority: employee.priority,
     toolGrants: employee.toolGrants,
+    budget: employee.budget,
     hours:
       employee.schedule === null || employee.schedule.kind === "always"
         ? DEFAULT_HOURS
@@ -98,6 +101,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
   const employees = store((state) => state.employees);
   const departments = store((state) => state.departments);
   const connectors = store((state) => state.connectors);
+  const spend = store((state) => state.spend);
 
   const employee = employees.find((candidate) => candidate.id === selectedEmployeeId) ?? null;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -154,6 +158,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
         workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
         toolGrants: draft.toolGrants,
+        budget: draft.budget,
         // Null hands the employee back to their department's hours.
         schedule: draft.hours.own
           ? {
@@ -420,6 +425,15 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           }}
         />
       </Field>
+
+      <BudgetField
+        what="person"
+        value={draft.budget}
+        {...(spend === null ? {} : { spentUsd: spend.byEmployee[employee.id] ?? 0 })}
+        onChange={(budget) => {
+          edit({ budget });
+        }}
+      />
 
       {/* Terminating is final, so it is not offered here: a settings panel is
           not where somebody's employment ends, and a disabled switch would

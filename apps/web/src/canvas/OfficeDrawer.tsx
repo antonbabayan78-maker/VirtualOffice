@@ -8,10 +8,11 @@
  * panels that behave differently is three things to learn.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { TaskPriority, ValidationError } from "@vo/core";
+import type { Budget, TaskPriority, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
+import { BudgetField } from "./BudgetField.js";
 import { Connectors } from "./Connectors.js";
 import { RunSwitch } from "./RunSwitch.js";
 import { PriorityField } from "./PriorityField.js";
@@ -19,17 +20,19 @@ import { PriorityField } from "./PriorityField.js";
 interface Draft {
   readonly name: string;
   readonly priority: TaskPriority;
+  readonly budget: Budget | null;
 }
 
 export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactNode {
   const office = store((state) => state.office);
   const isOpen = store((state) => state.officeOpen);
-  const [draft, setDraft] = useState<Draft>({ name: "", priority: "normal" });
+  const spend = store((state) => state.spend);
+  const [draft, setDraft] = useState<Draft>({ name: "", priority: "normal", budget: null });
   const [problems, setProblems] = useState<readonly ValidationError[]>([]);
 
   useEffect(() => {
     if (office === null) return;
-    setDraft({ name: office.name, priority: office.priority });
+    setDraft({ name: office.name, priority: office.priority, budget: office.budget });
     setProblems([]);
   }, [office]);
 
@@ -45,7 +48,7 @@ export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactN
   const save = (): void => {
     void store
       .getState()
-      .saveOffice({ name: draft.name, priority: draft.priority })
+      .saveOffice({ name: draft.name, priority: draft.priority, budget: draft.budget })
       .then((result) => {
         if (result.ok) {
           close();
@@ -85,6 +88,15 @@ export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactN
         }}
         note="The organisation's own standing. It outranks every department, so nothing set below can overturn it."
         className={inputClass}
+      />
+
+      <BudgetField
+        what="office"
+        value={draft.budget}
+        {...(spend === null ? {} : { spentUsd: spend.officeUsd })}
+        onChange={(budget) => {
+          edit({ budget });
+        }}
       />
 
       {/* Pressed, not drafted, for the same reason the connectors below are

@@ -140,3 +140,45 @@ describe("stopping the office from its own panel", () => {
     expect(store.getState().office?.runState).toBe("running");
   });
 });
+
+describe("a spending limit on the office", () => {
+  it("offers the control", () => {
+    expect(screen.getByRole("group", { name: /spending limit/i })).toBeTruthy();
+  });
+
+  it("sets one and saves it with the rest of the office", async () => {
+    const user = userEvent.setup();
+    const panel = screen.getByRole("group", { name: /spending limit/i });
+    await user.type(within(panel).getByLabelText(/^Limit/), "25");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(store.getState().office?.budget).toEqual({
+      limitUsd: 25,
+      warnAtUsd: null,
+      period: "day",
+    });
+  });
+
+  it("shows what the office has spent against it", () => {
+    act(() => {
+      store.getState().loadOffice({
+        ...acme,
+        budget: { limitUsd: 25, warnAtUsd: 20, period: "day" },
+      });
+      store
+        .getState()
+        .loadSpend({ officeUsd: 9, unpricedCalls: 0, byDepartment: {}, byEmployee: {} });
+    });
+
+    expect(screen.getByRole("group", { name: /spending limit/i })).toHaveTextContent("$9.00");
+  });
+
+  it("changes nothing when the edit is abandoned", async () => {
+    const user = userEvent.setup();
+    const panel = screen.getByRole("group", { name: /spending limit/i });
+    await user.type(within(panel).getByLabelText(/^Limit/), "25");
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(store.getState().office?.budget).toBeNull();
+  });
+});

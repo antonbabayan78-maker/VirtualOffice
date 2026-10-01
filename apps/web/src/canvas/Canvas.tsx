@@ -17,6 +17,7 @@ import {
   useReactFlow,
   type NodeChange,
 } from "@xyflow/react";
+import { budgetStanding } from "@vo/core";
 import type { DepartmentId, EmployeeId } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { ActivityLegend } from "./ActivityLegend.js";
@@ -46,6 +47,7 @@ function CanvasSurface({
   const links = store((state) => state.links);
   const office = store((state) => state.office);
   const officeStopped = office?.runState === "paused";
+  const spend = store((state) => state.spend);
 
   const boxes = useMemo(
     () =>
@@ -73,6 +75,11 @@ function CanvasSurface({
           color: department.color,
           // The office's switch marks every room: a room whose own switch is
           // on still picks nothing up while the office is stopped.
+          // Over budget is said apart from stopped: one waits for a person and
+          // the other for the clock, and they need different reactions.
+          overBudget:
+            spend !== null &&
+            budgetStanding(department.budget, spend.byDepartment[department.id] ?? 0) === "over",
           stopped: officeStopped
             ? ("the whole office" as const)
             : department.runState === "paused"
@@ -97,7 +104,7 @@ function CanvasSurface({
           },
         },
       })),
-    [departments, employees, tasks, activity, selectedId, officeStopped, store],
+    [departments, employees, tasks, activity, selectedId, officeStopped, spend, store],
   );
 
   const onNodesChange = useCallback(
@@ -180,6 +187,14 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
   const settings = store((state) => state.settings);
   const notice = store((state) => state.notice);
   const officeStopped = store((state) => state.office?.runState) === "paused";
+  const office = store((state) => state.office);
+  const spend = store((state) => state.spend);
+  // Asked for explicitly rather than defaulting the unknown to zero. Zero is
+  // never over — a limit is always above it — so the two agree today; writing
+  // it this way means a later change to that reasoning cannot quietly turn an
+  // office nobody could reach into one that announces work has stopped.
+  const officeOverBudget =
+    spend !== null && budgetStanding(office?.budget ?? null, spend.officeUsd) === "over";
   // Actions are called through getState rather than selected: selecting a
   // method hands its reference around, separated from the store it belongs to.
   const onSnapChange = (event: { readonly target: { readonly checked: boolean } }): void => {
@@ -214,6 +229,19 @@ export function Canvas({ store }: { readonly store: OfficeStore }): ReactNode {
               className="text-xs font-medium text-ink"
             >
               Stopped. Nothing in this office is being picked up.
+            </span>
+          </>
+        )}
+
+        {!officeStopped && officeOverBudget && (
+          <>
+            <span className="h-4 w-px bg-border" />
+            <span
+              role="status"
+              aria-label="This office has reached its budget"
+              className="text-xs font-medium text-ink"
+            >
+              Budget reached. Nothing is being picked up; work starts again when the period rolls.
             </span>
           </>
         )}

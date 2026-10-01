@@ -84,7 +84,11 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     getDocument: () => Promise.reject(new Error("not used here")),
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     listUsage: () => Promise.resolve({ ok: true, value: [] }),
-    officeSpend: () => Promise.reject(new Error("not used here")),
+    officeSpend: () =>
+      Promise.resolve({
+        ok: true,
+        value: { officeUsd: 0, unpricedCalls: 0, byDepartment: {}, byEmployee: {} },
+      }),
     createConnector: () => Promise.reject(new Error("not used here")),
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
@@ -617,5 +621,47 @@ describe("what the office has been spent on, when the canvas loads", () => {
     await follow(api).reload();
     expect(store.getState().departments).toHaveLength(1);
     expect(store.getState().usage).toEqual([]);
+  });
+});
+
+describe("what the office has spent, when the canvas loads", () => {
+  it("asks for it on a reload", async () => {
+    const officeSpend = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: { officeUsd: 9, unpricedCalls: 0, byDepartment: {}, byEmployee: {} },
+      }),
+    );
+    await follow(fakeApi({ officeSpend })).reload();
+
+    expect(officeSpend).toHaveBeenCalledWith(officeId, "day");
+    expect(store.getState().spend?.officeUsd).toBe(9);
+  });
+
+  it("opens an office that cannot say, leaving the figures unknown", async () => {
+    await follow(
+      fakeApi({
+        officeSpend: () => Promise.resolve({ ok: false, kind: "transport", message: "no figures" }),
+      } as never),
+    ).reload();
+
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().spend).toBeNull();
+  });
+
+  it("asks again when a usage row might have changed the picture", async () => {
+    // Spend has no event of its own — one per model call would wake every
+    // canvas — so it is refreshed whenever the office is reloaded.
+    const officeSpend = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: { officeUsd: 1, unpricedCalls: 0, byDepartment: {}, byEmployee: {} },
+      }),
+    );
+    const follower = follow(fakeApi({ officeSpend }));
+    await follower.reload();
+    await follower.reload();
+
+    expect(officeSpend).toHaveBeenCalledTimes(2);
   });
 });

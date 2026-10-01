@@ -1052,3 +1052,31 @@ describe("what the office has been spent on", () => {
     expect(store.getState().usage).toHaveLength(1);
   });
 });
+
+describe("what the office has spent, on the canvas", () => {
+  it("knows nothing until it is told", () => {
+    open([eng]);
+    expect(store.getState().spend).toBeNull();
+  });
+
+  it("holds what the office reported", () => {
+    open([eng]);
+    store.getState().loadSpend({
+      officeUsd: 9,
+      unpricedCalls: 0,
+      byDepartment: { [eng.id]: 4 },
+      byEmployee: { "emp-ada": 2 },
+    });
+
+    expect(store.getState().spend?.officeUsd).toBe(9);
+    expect(store.getState().spend?.byDepartment[eng.id]).toBe(4);
+  });
+
+  it("stays null when the office could not be asked, which is not nil spent", () => {
+    // Zero and unknown look identical on a drawer, and one of them means the
+    // figures could not be read.
+    open([eng]);
+    store.getState().loadSpend(null);
+    expect(store.getState().spend).toBeNull();
+  });
+});

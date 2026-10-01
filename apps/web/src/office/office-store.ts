@@ -52,7 +52,7 @@ import {
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
-import type { ApiClient } from "@vo/api-client";
+import type { ApiClient, SpendSummary } from "@vo/api-client";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
 import { activityFromTasks } from "./activity.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";
@@ -118,6 +118,12 @@ export interface OfficeStoreState {
    */
   readonly usage: readonly UsageRecord[];
   /**
+   * What each level has spent in the current period, or null when the office
+   * has not been asked. Null rather than zeroes: nothing spent and never asked
+   * look identical as numbers, and one of them means the office was unreachable.
+   */
+  readonly spend: SpendSummary | null;
+  /**
    * Whether a document is on its way to the office. The only thing the canvas
    * does that is not instant: bytes have to travel before the office can name
    * what arrived, so there is nothing to show optimistically.
@@ -164,6 +170,7 @@ export interface OfficeStoreState {
   putTask(task: Task): void;
   removeTask(id: TaskId): void;
   loadUsage(usage: readonly UsageRecord[]): void;
+  loadSpend(spend: SpendSummary | null): void;
   loadConnectors(connectors: readonly Connector[]): void;
   /** Told about one, from the office's event stream. */
   putConnector(connector: Connector): void;
@@ -418,6 +425,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       uploading: false,
       connectors: [],
       usage: [],
+      spend: null,
 
       load: (departments, employees = [], tasks = [], connections = []) => {
         const layout = deps.storage.readLayout();
@@ -611,6 +619,10 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
 
       loadUsage: (usage) => {
         set({ usage });
+      },
+
+      loadSpend: (spend) => {
+        set({ spend });
       },
 
       loadConnectors: (connectors) => {
