@@ -89,13 +89,25 @@ describe("the office the whole application shares", () => {
     vi.unstubAllEnvs();
   });
 
+  /**
+   * The nav appearing means the shell knows what it is connected to; the office
+   * arrives in the store a tick later, when the effect that loads it runs.
+   * Asserting straight after the nav is a race that only shows up on a busy
+   * machine — which CI is, and this laptop is not.
+   */
+  const loaded = async (): Promise<void> => {
+    await vi.waitFor(() => {
+      expect(officeStore.getState().departments.length).toBeGreaterThan(0);
+    });
+  };
+
   it("is loaded even when the canvas was never opened", async () => {
     // It used to be loaded by the canvas, so landing anywhere else gave an
     // empty store and a section that looked broken.
     officeStore.setState({ departments: [], employees: [] });
     const view = await mount("/usage");
 
-    expect(officeStore.getState().departments.length).toBeGreaterThan(0);
+    await loaded();
     view.unmount();
   });
 
@@ -103,7 +115,7 @@ describe("the office the whole application shares", () => {
     officeStore.setState({ departments: [], employees: [] });
     const view = await mount("/");
 
-    expect(officeStore.getState().departments.length).toBeGreaterThan(0);
+    await loaded();
     view.unmount();
   });
 
@@ -111,10 +123,11 @@ describe("the office the whole application shares", () => {
     // Switching tabs used to tear the stream down and build it again.
     officeStore.setState({ departments: [], employees: [] });
     await mount("/");
-    const loaded = officeStore.getState().departments;
+    await loaded();
+    const held = officeStore.getState().departments;
 
     await userEvent.setup().click(screen.getByRole("link", { name: "Usage" }));
-    expect(officeStore.getState().departments).toBe(loaded);
+    expect(officeStore.getState().departments).toBe(held);
   });
 });
 
