@@ -230,4 +230,25 @@ describe("looking back over somebody's work", () => {
 
     expect(JSON.stringify(provider.calls[0])).toContain("Reply quickly.");
   });
+
+  it("charges the look back to the office and to whoever was read", async () => {
+    // It is a call made about one person, on their model: the bill belongs to
+    // them and not to whatever work happened to be in flight.
+    let seen: Record<string, unknown> = {};
+    const provider = proposing({
+      instructions: "Better.",
+      because: "Because.",
+      evidence: [{ taskId: "task-1", what: "went back twice" }],
+    });
+
+    await llmRetrospectiveTurn({
+      provider,
+      wrapProvider: (inner, attribution) => {
+        seen = attribution as unknown as Record<string, unknown>;
+        return inner;
+      },
+    })(record());
+
+    expect(seen).toEqual({ officeId, employeeId: sam.id });
+  });
 });

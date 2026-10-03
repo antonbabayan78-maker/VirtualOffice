@@ -5020,6 +5020,77 @@ describe("looking back over somebody's work, over the wire", () => {
   });
 });
 
+describe("a proposal a worker made", () => {
+  const office = async () => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-10-04T09:00:00.000Z"),
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const hired = await post(`/offices/${officeId}/employees`, {
+      name: "Sam",
+      role: "Clerk",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      selfImprovement: true,
+    });
+    return { officeId, departmentId, id: hired.json<{ id: string }>().id };
+  };
+
+  const draft = {
+    because: "It went back twice for want of an order number.",
+    changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+    evidence: [{ taskId: "task-1", what: "went back twice" }],
+  };
+
+  it("is written down for a person to decide", async () => {
+    // A worker has its own model and reads the office over this API; this is
+    // where what it thought becomes something somebody can answer.
+    const { officeId, id } = await office();
+
+    const made = await post(`/employees/${id}/proposals`, draft);
+
+    expect(made.statusCode).toBe(201);
+    expect(made.json()).toMatchObject({ employeeId: id, status: "waiting" });
+    expect(
+      (await get(`/offices/${officeId}/proposals`)).json<{ items: unknown[] }>().items,
+    ).toHaveLength(1);
+  });
+
+  it("goes through the same guardrail, because a worker is not more trusted", async () => {
+    const { id } = await office();
+
+    const refused = await post(`/employees/${id}/proposals`, {
+      ...draft,
+      changes: [{ field: "budget", before: null, after: { limitUsd: 1000 } }],
+    });
+
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("is refused for somebody who is not switched on", async () => {
+    const { officeId, departmentId } = await office();
+    const other = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Mal",
+        role: "Clerk",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+
+    expect((await post(`/employees/${other}/proposals`, draft)).statusCode).toBe(400);
+  });
+});
+
 describe("deciding a proposal", () => {
   const office = async () => {
     events = new OfficeEventLog({ now: () => 1_700_000_000_000 });

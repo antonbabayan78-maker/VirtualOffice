@@ -1146,6 +1146,46 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     return reply.code(200).send(proposal.value);
   });
 
+  /**
+   * A proposal somebody else made: a worker, which has its own model and reads
+   * this office over the API.
+   *
+   * It goes through the same guardrail as one the office made itself, because a
+   * worker is not more trusted than a model — it *is* a model, one step further
+   * away.
+   */
+  app.post("/employees/:id/proposals", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    if (employee === null) return missing(reply, "employee");
+    if (!employee.selfImprovement) {
+      return fail(reply, [
+        {
+          path: "selfImprovement",
+          message: "this person is not switched on for self-improvement",
+        },
+      ]);
+    }
+
+    const body = request.body as Record<string, unknown>;
+    return created(
+      reply,
+      createProposal(
+        {
+          officeId: employee.officeId,
+          employeeId: employee.id,
+          because: typeof body["because"] === "string" ? body["because"] : "",
+          changes: body["changes"],
+          evidence: body["evidence"],
+        },
+        { id: () => newId() as ProposalId, now },
+      ),
+      employee.officeId,
+      "proposal.made",
+      (proposal) => store.proposals.put(proposal),
+    );
+  });
+
   app.get("/offices/:officeId/proposals", async (request, reply) => {
     const { officeId } = request.params as { officeId: string };
     if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
