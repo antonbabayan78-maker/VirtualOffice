@@ -10,6 +10,7 @@ import {
   createEmployee,
   createLlmService,
   createMemoryItem,
+  createProposal,
   createOffice,
   createTask,
   parseSkill,
@@ -30,6 +31,8 @@ import {
   type MemoryItemId,
   type Office,
   type OfficeId,
+  type Proposal,
+  type ProposalId,
   type Skill,
   type Task,
   type TaskId,
@@ -167,6 +170,21 @@ export function llmService(id: string, officeId: string, name = `svc-${id}`): Ll
       },
       [],
       { id: () => id as LlmServiceId, now: () => T0 },
+    ),
+  );
+}
+
+export function proposal(id: string, officeId: string, employeeId = "e1"): Proposal {
+  return unwrap(
+    createProposal(
+      {
+        officeId,
+        employeeId,
+        because: "It went back twice for the same reason.",
+        changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+        evidence: [{ taskId: "t1", what: "went back twice: no order number" }],
+      },
+      { id: () => id as ProposalId, now: () => T0 },
     ),
   );
 }

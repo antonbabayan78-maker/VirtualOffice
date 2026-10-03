@@ -393,6 +393,7 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
         skills: fc.uniqueArray(word, { maxLength: 3 }),
         // A paragraph, as somebody would type one: newlines and all.
         instructions: fc.option(fc.lorem({ maxCount: 12, mode: "sentences" }), { nil: undefined }),
+        selfImprovement: fc.boolean(),
         understudy: fc.option(
           fc.record({
             person: fc.lorem({ maxCount: 2 }),
@@ -483,6 +484,7 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
             },
             skillIds: e.skills,
             ...(e.instructions === undefined ? {} : { instructions: e.instructions }),
+            selfImprovement: e.selfImprovement,
             ...(e.understudy === undefined
               ? {}
               : {
@@ -1316,5 +1318,53 @@ connections: []
     expect(yaml).toContain("understudy");
     expect(yaml).not.toContain("Dear Sir or Madam");
     expect(yaml).not.toContain("corrections");
+  });
+});
+
+describe("what an office file says about improving itself", () => {
+  const file = (employee: string): string => `
+version: 1
+office:
+  name: Tiny
+departments:
+  - id: dept-support
+    name: Support
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+employees:
+  - id: emp-sam
+    department: dept-support
+    name: Sam
+    role: Clerk
+    color: "#00aa66"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+${employee}
+connections: []
+`;
+
+  it("reads a person the office may look back over", () => {
+    const config = unwrap(importOfficeYaml(file("    selfImprovement: true"), deps));
+
+    expect(config.employees[0]?.selfImprovement).toBe(true);
+  });
+
+  it("leaves it off when the file says nothing, as every office before it", () => {
+    expect(unwrap(importOfficeYaml(file(""), deps)).employees[0]?.selfImprovement).toBe(false);
+  });
+
+  it("writes nothing about somebody who does not improve themselves", () => {
+    // Off is the default, and a default on every person in every file says
+    // nothing worth reading.
+    const yaml = exportOfficeYaml(unwrap(importOfficeYaml(file(""), deps)));
+
+    expect(yaml).not.toContain("selfImprovement");
+  });
+
+  it("writes it down for somebody who does", () => {
+    const yaml = exportOfficeYaml(
+      unwrap(importOfficeYaml(file("    selfImprovement: true"), deps)),
+    );
+
+    expect(yaml).toContain("selfImprovement: true");
   });
 });

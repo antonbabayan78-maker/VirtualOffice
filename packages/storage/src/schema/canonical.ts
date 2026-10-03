@@ -175,6 +175,22 @@ export const SERVICES_TABLE: TableDef = table(
   [["office_id"], ["office_id", "name"]],
 );
 
+export const PROPOSALS_TABLE: TableDef = table(
+  "proposals",
+  [
+    id,
+    officeId,
+    // Who it is about and whether it is still waiting: a proposals list is
+    // "what is waiting in this office" and "what has been said about this
+    // person", and both are equality filters rather than a scan.
+    { name: "employee_id", type: "text" },
+    { name: "status", type: "text" },
+    { name: "made_at", type: "timestamp" },
+    data,
+  ],
+  [["office_id", "status"], ["employee_id"]],
+);
+
 export const CANONICAL_TABLES: readonly TableDef[] = [
   ...INITIAL_TABLES,
   SNAPSHOTS_TABLE,
@@ -182,6 +198,7 @@ export const CANONICAL_TABLES: readonly TableDef[] = [
   USAGE_TABLE,
   CHANNELS_TABLE,
   SERVICES_TABLE,
+  PROPOSALS_TABLE,
 ];
 
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
@@ -214,5 +231,10 @@ export const CANONICAL_MIGRATIONS: readonly Migration[] = [
     id: "0006_services",
     up: [{ op: "createTable", table: SERVICES_TABLE }],
     down: [{ op: "dropTable", name: SERVICES_TABLE.name }],
+  },
+  {
+    id: "0007_proposals",
+    up: [{ op: "createTable", table: PROPOSALS_TABLE }],
+    down: [{ op: "dropTable", name: PROPOSALS_TABLE.name }],
   },
 ];

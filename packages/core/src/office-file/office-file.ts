@@ -143,6 +143,9 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         // empty keys per person for a feature nobody used is a file nobody
         // wants to read.
         instructions: e.instructions,
+        // Off is the default, and a default on every person in every file says
+        // nothing worth reading.
+        selfImprovement: e.selfImprovement ? true : null,
         examples: e.examples.length > 0 ? e.examples.map((one) => omitNull({ ...one })) : null,
         // The card and the consent travel; the drafts behind them do not. What
         // the real person changed is theirs, and a file is a thing people paste
@@ -640,6 +643,7 @@ export function importOfficeYaml(
         ...("instructions" in e ? { instructions: e["instructions"] } : {}),
         ...("examples" in e ? { examples: e["examples"] } : {}),
         ...("understudy" in e ? { understudy: e["understudy"] } : {}),
+        ...("selfImprovement" in e ? { selfImprovement: e["selfImprovement"] } : {}),
       },
       { department: { id: departmentId as DepartmentId, officeId }, supervisor },
       { id: () => id as EmployeeId, now: () => created },

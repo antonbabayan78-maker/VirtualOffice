@@ -28,5 +28,6 @@ export * from "./memory/memory.js";
 export * from "./usage/usage-record.js";
 export * from "./connector/connector.js";
 export * from "./llm-service/llm-service.js";
+export * from "./proposal/proposal.js";
 export * from "./snapshot/snapshot.js";
 export * from "./office-file/office-file.js";

@@ -17,6 +17,7 @@ import type {
   MemoryItem,
   Office,
   OfficeSnapshot,
+  Proposal,
   Skill,
   Task,
   NotificationChannelRecord,
@@ -376,6 +377,7 @@ function collections(
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
     services: repo<LlmService>("services"),
+    proposals: repo<Proposal>("proposals"),
     skills: repo<Skill>("skills"),
     memories: repo<MemoryItem>("memories"),
     snapshots: repo<OfficeSnapshot>("snapshots"),
@@ -397,6 +399,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
   readonly services: EntityRepository<LlmService>;
+  readonly proposals: EntityRepository<Proposal>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
   readonly snapshots: EntityRepository<OfficeSnapshot>;
@@ -440,6 +443,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.connections = this.all.connections;
     this.connectors = this.all.connectors;
     this.services = this.all.services;
+    this.proposals = this.all.proposals;
     this.skills = this.all.skills;
     this.memories = this.all.memories;
     this.snapshots = this.all.snapshots;
