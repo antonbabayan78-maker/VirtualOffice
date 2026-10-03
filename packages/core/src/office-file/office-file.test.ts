@@ -9,6 +9,11 @@ import {
   type Employee,
   type EmployeeId,
 } from "../employee/employee.js";
+import {
+  createLlmService,
+  type LlmService,
+  type LlmServiceId,
+} from "../llm-service/llm-service.js";
 import { createOffice, type Office, type OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
 import type { OfficeConfig } from "../snapshot/snapshot.js";
@@ -122,12 +127,26 @@ function sampleConfig(): OfficeConfig {
       { id: () => "c-1" as ConnectionId, now: () => t0 },
     ),
   );
+  const workshop = unwrap(
+    createLlmService(
+      {
+        officeId,
+        kind: "openai-compatible",
+        name: "workshop",
+        baseUrl: "http://10.0.0.12:11434/v1",
+        models: [{ id: "qwen3-coder", pricing: { inputPerMTok: 0, outputPerMTok: 0 } }],
+      },
+      [],
+      { id: () => "svc-workshop" as LlmServiceId, now: () => t0 },
+    ),
+  );
   return {
     office,
     departments: [eng, sales],
     employees: [boss, paused],
     connections: [handoff],
     connectors: [github],
+    services: [workshop],
   };
 }
 
@@ -140,6 +159,7 @@ function normalize(config: OfficeConfig): OfficeConfig {
     employees: sortById(config.employees),
     connections: sortById(config.connections),
     connectors: sortById(config.connectors),
+    services: sortById(config.services),
   };
 }
 
@@ -356,6 +376,14 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
     }),
     colors: fc.array(hex, { minLength: 8, maxLength: 8 }),
     connectorNames: fc.uniqueArray(kebab, { minLength: 0, maxLength: 3 }),
+    services: fc.uniqueArray(
+      fc.record({
+        name: kebab,
+        local: fc.boolean(),
+        priced: fc.boolean(),
+      }),
+      { maxLength: 3, selector: (s) => s.name },
+    ),
     employees: fc.array(
       fc.record({
         name: label,
@@ -445,6 +473,27 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
         e.status === "active" ? created : unwrap(transitionEmployee(created, e.status, t0)),
       );
     });
+    const services: LlmService[] = [];
+    g.services.forEach((svc, i) => {
+      const r = createLlmService(
+        {
+          officeId,
+          kind: "openai-compatible",
+          name: svc.name,
+          baseUrl: svc.local ? "http://localhost:11434/v1" : "https://api.openai.com/v1",
+          ...(svc.local ? {} : { tokenEnv: "OPENAI_API_KEY" }),
+          models: [
+            {
+              id: "a-model",
+              ...(svc.priced ? { pricing: { inputPerMTok: 1, outputPerMTok: 2 } } : {}),
+            },
+          ],
+        },
+        services,
+        mk(`s${String(i)}` as LlmServiceId),
+      );
+      if (r.ok) services.push(r.value);
+    });
     const connections: Connection[] = [];
     for (const c of g.connections) {
       if (departments.length < 2) break;
@@ -457,7 +506,7 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
       );
       if (r.ok) connections.push(r.value);
     }
-    return { office, departments, employees, connections, connectors };
+    return { office, departments, employees, connections, connectors, services };
   });
 
 describe("property: export then import is the identity", () => {
@@ -963,5 +1012,115 @@ departments:
     expect(isErr(importOfficeYaml(YAML.replace("period: day", "period: fortnight"), deps))).toBe(
       true,
     );
+  });
+});
+
+describe("the services an office can call a model on", () => {
+  const file = (services: string): string => `
+version: 1
+office:
+  name: Tiny
+departments: []
+employees: []
+connections: []
+${services}
+`;
+
+  it("reads a local server with no key at all, which is why the block exists", () => {
+    // `vo run office.yaml` against a model on this machine should need nothing
+    // in the environment: no key to name, and none to keep.
+    const config = unwrap(
+      importOfficeYaml(
+        file(`services:
+  - id: svc-local
+    kind: openai-compatible
+    name: workshop
+    baseUrl: http://localhost:11434/v1
+    models:
+      - id: qwen3-coder`),
+        deps,
+      ),
+    );
+
+    expect(config.services).toEqual([
+      expect.objectContaining({
+        id: "svc-local",
+        name: "workshop",
+        baseUrl: "http://localhost:11434/v1",
+        tokenEnv: null,
+        secretRef: null,
+        models: [{ id: "qwen3-coder" }],
+      }),
+    ]);
+  });
+
+  it("reads the variable that holds a key, and what a model costs", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        file(`services:
+  - id: svc-openai
+    kind: openai-compatible
+    name: openai
+    baseUrl: https://api.openai.com/v1
+    tokenEnv: OPENAI_API_KEY
+    models:
+      - id: gpt-5
+        displayName: GPT-5
+        contextWindow: 400000
+        pricing: { inputPerMTok: 1.25, outputPerMTok: 10 }`),
+        deps,
+      ),
+    );
+
+    expect(config.services[0]?.tokenEnv).toBe("OPENAI_API_KEY");
+    expect(config.services[0]?.models[0]).toEqual({
+      id: "gpt-5",
+      displayName: "GPT-5",
+      contextWindow: 400_000,
+      pricing: { inputPerMTok: 1.25, outputPerMTok: 10 },
+    });
+  });
+
+  it("gives an office none when it says nothing", () => {
+    expect(unwrap(importOfficeYaml(file(""), deps)).services).toEqual([]);
+  });
+
+  it("says where the trouble is, in the file's own words", () => {
+    const bad = importOfficeYaml(
+      file(`services:
+  - id: svc-bad
+    kind: openai-compatible
+    name: Open AI
+    baseUrl: http://api.openai.com/v1`),
+      deps,
+    );
+
+    expect(isErr(bad)).toBe(true);
+    if (isErr(bad)) {
+      expect(bad.error.map((e) => e.path)).toEqual(["services[0].name", "services[0].baseUrl"]);
+      expect(bad.error[0]?.line).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses two services with the same id, which would silently lose one", () => {
+    const bad = importOfficeYaml(
+      file(`services:
+  - id: svc-1
+    kind: anthropic
+    name: one
+  - id: svc-1
+    kind: anthropic
+    name: two`),
+      deps,
+    );
+
+    expect(isErr(bad)).toBe(true);
+  });
+
+  it("never writes a key out, because a file is a thing people paste", () => {
+    const yaml = exportOfficeYaml(sampleConfig());
+
+    expect(yaml).toContain("services:");
+    expect(yaml).not.toMatch(/sk-[a-z]/);
   });
 });

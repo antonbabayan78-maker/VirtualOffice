@@ -9,6 +9,7 @@ import type {
   Department,
   Document,
   Employee,
+  LlmService,
   MemoryItem,
   Office,
   OfficeSnapshot,
@@ -92,6 +93,7 @@ function collections(tables: () => Tables, maxPageSize: number): RelationalColle
     channels: repo<NotificationChannelRecord>("channels"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
+    services: repo<LlmService>("services"),
     skills: repo<Skill>("skills"),
     memories: repo<MemoryItem>("memories"),
     snapshots: repo<OfficeSnapshot>("snapshots"),
@@ -120,6 +122,7 @@ export class InMemoryRelationalStore implements RelationalStore {
   readonly channels: EntityRepository<NotificationChannelRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
+  readonly services: EntityRepository<LlmService>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
   readonly snapshots: EntityRepository<OfficeSnapshot>;
@@ -139,6 +142,7 @@ export class InMemoryRelationalStore implements RelationalStore {
     this.channels = c.channels;
     this.connections = c.connections;
     this.connectors = c.connectors;
+    this.services = c.services;
     this.skills = c.skills;
     this.memories = c.memories;
     this.snapshots = c.snapshots;

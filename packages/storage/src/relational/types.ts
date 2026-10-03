@@ -10,6 +10,7 @@ import type {
   Department,
   Document,
   Employee,
+  LlmService,
   MemoryItem,
   Office,
   OfficeSnapshot,
@@ -67,6 +68,8 @@ export interface RelationalCollections {
   /** One row per metered call. Append-only; VO-93 makes it scale. */
   readonly usage: EntityRepository<UsageRecord>;
   readonly channels: EntityRepository<NotificationChannelRecord>;
+  /** The AI services this office can reach, by the name an employee asks for. */
+  readonly services: EntityRepository<LlmService>;
 }
 
 export const COLLECTION_NAMES = [
@@ -82,6 +85,7 @@ export const COLLECTION_NAMES = [
   "snapshots",
   "usage",
   "channels",
+  "services",
 ] as const satisfies readonly (keyof RelationalCollections)[];
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
 

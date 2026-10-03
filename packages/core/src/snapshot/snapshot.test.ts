@@ -3,6 +3,11 @@ import type { DepartmentId } from "../department/department.js";
 import { createDepartment, type Department } from "../department/department.js";
 import type { EmployeeId } from "../employee/employee.js";
 import { createEmployee, type Employee } from "../employee/employee.js";
+import {
+  createLlmService,
+  type LlmService,
+  type LlmServiceId,
+} from "../llm-service/llm-service.js";
 import { createOffice, type Office, type OfficeId } from "../office/office.js";
 import { unwrap } from "../shared/result.js";
 import {
@@ -46,12 +51,26 @@ const ada: Employee = unwrap(
   ),
 );
 
+const workshop: LlmService = unwrap(
+  createLlmService(
+    {
+      officeId,
+      kind: "openai-compatible",
+      name: "workshop",
+      baseUrl: "http://localhost:11434/v1",
+    },
+    [],
+    deps("s1" as LlmServiceId),
+  ),
+);
+
 const base: OfficeConfig = {
   office,
   departments: [eng],
   employees: [ada],
   connections: [],
   connectors: [],
+  services: [],
 };
 
 describe("diffValues", () => {
@@ -107,6 +126,7 @@ describe("diffOfficeConfig", () => {
       employees: [renamedAda],
       connections: [],
       connectors: [],
+      services: [],
     };
     const diff = diffOfficeConfig(base, after);
     expect(diff.office).toEqual([
@@ -130,5 +150,30 @@ describe("diffOfficeConfig", () => {
     const shuffled: OfficeConfig = { ...base, departments: [sales, eng], employees: [ada] };
     const reordered: OfficeConfig = { ...base, departments: [eng, sales], employees: [ada] };
     expect(isEmptyDiff(diffOfficeConfig(shuffled, reordered))).toBe(true);
+  });
+});
+
+describe("a service added to an office", () => {
+  it("is a change to the configuration, so a snapshot can put it back", () => {
+    // A service is config, not runtime: restoring an office without the
+    // services its employees name would restore an office that cannot work.
+    const after: OfficeConfig = { ...base, services: [workshop] };
+
+    const diff = diffOfficeConfig(base, after);
+
+    expect(diff.services.added.map((s) => s.id)).toEqual(["s1"]);
+    expect(isEmptyDiff(diff)).toBe(false);
+    expect(countChanges(diff)).toBe(1);
+  });
+
+  it("notices one switched off", () => {
+    const before: OfficeConfig = { ...base, services: [workshop] };
+    const after: OfficeConfig = { ...base, services: [{ ...workshop, enabled: false }] };
+
+    const diff = diffOfficeConfig(before, after);
+
+    expect(diff.services.changed[0]?.fields).toEqual([
+      { path: "enabled", before: true, after: false },
+    ]);
   });
 });

@@ -34,6 +34,14 @@ import {
   type EmployeeId,
   type EmployeeStatus,
 } from "../employee/employee.js";
+import {
+  createLlmService,
+  type LlmService,
+  type LlmServiceId,
+  type LlmServiceKind,
+  type ModelOffer,
+  type ModelPrice,
+} from "../llm-service/llm-service.js";
 import { createOffice, type Office, type OfficeId } from "../office/office.js";
 import { isRunState, RUN_STATES, setRunState, type RunState } from "../office/run-state.js";
 import { err, ok, type Result, type ValidationError } from "../shared/result.js";
@@ -164,6 +172,33 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         tools: k.tools,
         enabled: k.enabled,
         createdAt: k.createdAt.toISOString(),
+      }),
+    ),
+    // Where the office's models are, and never a key: a file is a thing people
+    // paste into a message. `tokenEnv` is the name of a variable and `secretRef`
+    // a reference the vault can resolve; both are useless on their own.
+    services: byId(config.services).map((s) =>
+      omitNull({
+        id: s.id,
+        kind: s.kind,
+        name: s.name,
+        baseUrl: s.baseUrl,
+        tokenEnv: s.tokenEnv,
+        secretRef: s.secretRef,
+        models:
+          s.models.length > 0
+            ? s.models.map((model) =>
+                omitNull({
+                  id: model.id,
+                  displayName: model.displayName,
+                  contextWindow: model.contextWindow,
+                  maxOutputTokens: model.maxOutputTokens,
+                  pricing: model.pricing,
+                }),
+              )
+            : null,
+        enabled: s.enabled ? null : false,
+        createdAt: s.createdAt.toISOString(),
       }),
     ),
   };
@@ -481,6 +516,54 @@ export function importOfficeYaml(
     else c.addAll(path, r.error);
   });
 
+  // Services -------------------------------------------------------------
+  /** A `models:` block on a service. Absent means one nobody has asked yet. */
+  const modelsOf = (raw: Raw, path: string): ModelOffer[] =>
+    (Array.isArray(raw["models"]) ? (raw["models"] as unknown[]) : []).map((one, index) => {
+      const model = isRecord(one) ? one : {};
+      if (!isRecord(one)) c.add(`${path}.models[${String(index)}]`, "must be a mapping");
+      return {
+        id: asText(model["id"]),
+        ...(typeof model["displayName"] === "string" ? { displayName: model["displayName"] } : {}),
+        ...(typeof model["contextWindow"] === "number"
+          ? { contextWindow: model["contextWindow"] }
+          : {}),
+        ...(typeof model["maxOutputTokens"] === "number"
+          ? { maxOutputTokens: model["maxOutputTokens"] }
+          : {}),
+        ...(isRecord(model["pricing"])
+          ? { pricing: model["pricing"] as unknown as ModelPrice }
+          : {}),
+      };
+    });
+
+  const services: LlmService[] = [];
+  const seenServiceIds = new Set<string>();
+  list(raw, "services", c).forEach((svc, i) => {
+    const path = `services[${String(i)}]`;
+    const id = str(svc, "id") ?? deps.id();
+    if (seenServiceIds.has(id)) c.add(`${path}.id`, `duplicate service id "${id}"`);
+    seenServiceIds.add(id);
+    if (!requireStrings(svc, ["kind", "name"], path, c)) return;
+    const created = date(svc, "createdAt", deps.now(), report, path);
+    const r = createLlmService(
+      {
+        officeId,
+        kind: svc["kind"] as LlmServiceKind,
+        name: svc["name"] as string,
+        ...(typeof svc["baseUrl"] === "string" ? { baseUrl: svc["baseUrl"] } : {}),
+        ...(typeof svc["tokenEnv"] === "string" ? { tokenEnv: svc["tokenEnv"] } : {}),
+        ...(typeof svc["secretRef"] === "string" ? { secretRef: svc["secretRef"] } : {}),
+        models: modelsOf(svc, path),
+        ...(typeof svc["enabled"] === "boolean" ? { enabled: svc["enabled"] } : {}),
+      },
+      services,
+      { id: () => id as LlmServiceId, now: () => created },
+    );
+    if (r.ok) services.push(r.value);
+    else c.addAll(path, r.error);
+  });
+
   // A department's grants are checked once the connectors are known, since the
   // rooms are read before them and a grant means nothing without its connector.
   departments.forEach((department, i) => {
@@ -598,5 +681,5 @@ export function importOfficeYaml(
   });
 
   if (c.errors.length > 0 || office === null) return err(c.errors);
-  return ok({ office, departments, employees, connections, connectors });
+  return ok({ office, departments, employees, connections, connectors, services });
 }

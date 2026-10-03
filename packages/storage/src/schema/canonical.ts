@@ -160,12 +160,28 @@ export const CHANNELS_TABLE: TableDef = table(
   [["office_id"]],
 );
 
+export const SERVICES_TABLE: TableDef = table(
+  "services",
+  [
+    id,
+    officeId,
+    // The name is what an employee's `llm.provider` says, so resolving a turn's
+    // provider is an equality filter and not a scan of the office's services.
+    { name: "name", type: "text" },
+    { name: "kind", type: "text" },
+    { name: "enabled", type: "boolean" },
+    data,
+  ],
+  [["office_id"], ["office_id", "name"]],
+);
+
 export const CANONICAL_TABLES: readonly TableDef[] = [
   ...INITIAL_TABLES,
   SNAPSHOTS_TABLE,
   DOCUMENTS_TABLE,
   USAGE_TABLE,
   CHANNELS_TABLE,
+  SERVICES_TABLE,
 ];
 
 export const CANONICAL_MIGRATIONS: readonly Migration[] = [
@@ -193,5 +209,10 @@ export const CANONICAL_MIGRATIONS: readonly Migration[] = [
     id: "0005_channels",
     up: [{ op: "createTable", table: CHANNELS_TABLE }],
     down: [{ op: "dropTable", name: CHANNELS_TABLE.name }],
+  },
+  {
+    id: "0006_services",
+    up: [{ op: "createTable", table: SERVICES_TABLE }],
+    down: [{ op: "dropTable", name: SERVICES_TABLE.name }],
   },
 ];

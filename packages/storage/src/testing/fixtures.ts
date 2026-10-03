@@ -8,6 +8,7 @@ import {
   createDepartment,
   createDocument,
   createEmployee,
+  createLlmService,
   createMemoryItem,
   createOffice,
   createTask,
@@ -23,6 +24,8 @@ import {
   type DocumentId,
   type Employee,
   type EmployeeId,
+  type LlmService,
+  type LlmServiceId,
   type MemoryItem,
   type MemoryItemId,
   type Office,
@@ -151,6 +154,23 @@ export function connector(id: string, officeId: string, name = `conn-${id}`): Co
   );
 }
 
+export function llmService(id: string, officeId: string, name = `svc-${id}`): LlmService {
+  return unwrap(
+    createLlmService(
+      {
+        officeId: officeId as OfficeId,
+        kind: "openai-compatible",
+        name,
+        baseUrl: "https://api.openai.com/v1",
+        tokenEnv: "OPENAI_API_KEY",
+        models: [{ id: "gpt-5", pricing: { inputPerMTok: 1.25, outputPerMTok: 10 } }],
+      },
+      [],
+      { id: () => id as LlmServiceId, now: () => T0 },
+    ),
+  );
+}
+
 export function skill(name: string, version = "1.0.0"): Skill {
   return unwrap(
     parseSkill(
@@ -197,6 +217,7 @@ export function snapshot(id: string, officeId: string): OfficeSnapshot {
       employees: [employee("e1", officeId, "d1")],
       connections: [],
       connectors: [connector("k1", officeId)],
+      services: [llmService("s1", officeId)],
     },
   };
 }

@@ -59,6 +59,15 @@ describe("canonical schema", () => {
     ).toBe(true);
   });
 
+  it("keeps no key on a service, not even in a column nobody reads", () => {
+    // A service says where its key is — a variable's name, or a reference the
+    // vault knows. A column holding the key itself would be in every backup.
+    const services = CANONICAL_TABLES.find((t) => t.name === "services");
+    const columns = (services?.columns ?? []).map((c) => c.name);
+    for (const column of ["name", "kind", "enabled"]) expect(columns).toContain(column);
+    for (const column of columns) expect(column).not.toMatch(/key|token|secret/);
+  });
+
   it("creates every canonical table across its migrations and can drop them all", () => {
     expect(CANONICAL_MIGRATIONS.map((m) => m.id)).toEqual([
       "0001_initial",
@@ -66,6 +75,7 @@ describe("canonical schema", () => {
       "0003_documents",
       "0004_usage",
       "0005_channels",
+      "0006_services",
     ]);
     const created = CANONICAL_MIGRATIONS.flatMap((m) =>
       m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),

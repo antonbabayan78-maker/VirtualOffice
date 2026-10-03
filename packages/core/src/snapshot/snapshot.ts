@@ -1,6 +1,6 @@
 /**
  * Office configuration snapshots (plan §9): the office plus its departments,
- * employees, connections and connectors at a given configVersion, and a
+ * employees, connections, connectors and services at a given configVersion, and a
  * field-level diff between two configurations. Runtime data (tasks, memory,
  * events) is not configuration and never appears here.
  */
@@ -8,6 +8,7 @@ import type { Connection } from "../connection/connection.js";
 import type { Connector } from "../connector/connector.js";
 import type { Department } from "../department/department.js";
 import type { Employee } from "../employee/employee.js";
+import type { LlmService } from "../llm-service/llm-service.js";
 import type { Office, OfficeId } from "../office/office.js";
 
 declare const snapshotIdBrand: unique symbol;
@@ -19,6 +20,7 @@ export interface OfficeConfig {
   readonly employees: readonly Employee[];
   readonly connections: readonly Connection[];
   readonly connectors: readonly Connector[];
+  readonly services: readonly LlmService[];
 }
 
 export interface OfficeSnapshot {
@@ -56,6 +58,7 @@ export interface ConfigDiff {
   readonly employees: CollectionDiff<Employee>;
   readonly connections: CollectionDiff<Connection>;
   readonly connectors: CollectionDiff<Connector>;
+  readonly services: CollectionDiff<LlmService>;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -122,10 +125,11 @@ export function diffOfficeConfig(before: OfficeConfig, after: OfficeConfig): Con
     employees: diffCollection(before.employees, after.employees),
     connections: diffCollection(before.connections, after.connections),
     connectors: diffCollection(before.connectors, after.connectors),
+    services: diffCollection(before.services, after.services),
   };
 }
 
-const COLLECTIONS = ["departments", "employees", "connections", "connectors"] as const;
+const COLLECTIONS = ["departments", "employees", "connections", "connectors", "services"] as const;
 
 export function countChanges(diff: ConfigDiff): number {
   return (
