@@ -68,6 +68,12 @@ describe("canonical schema", () => {
     for (const column of columns) expect(column).not.toMatch(/key|token|secret/);
   });
 
+  it("promotes what a proposals list filters on: the office, the person, and whether it waits", () => {
+    const proposals = CANONICAL_TABLES.find((t) => t.name === "proposals");
+    const columns = (proposals?.columns ?? []).map((c) => c.name);
+    for (const column of ["office_id", "employee_id", "status"]) expect(columns).toContain(column);
+  });
+
   it("creates every canonical table across its migrations and can drop them all", () => {
     expect(CANONICAL_MIGRATIONS.map((m) => m.id)).toEqual([
       "0001_initial",
@@ -76,6 +82,7 @@ describe("canonical schema", () => {
       "0004_usage",
       "0005_channels",
       "0006_services",
+      "0007_proposals",
     ]);
     const created = CANONICAL_MIGRATIONS.flatMap((m) =>
       m.up.filter((s) => s.op === "createTable").map((s) => s.table.name),

@@ -14,6 +14,7 @@ import type {
   MemoryItem,
   Office,
   OfficeSnapshot,
+  Proposal,
   Skill,
   NotificationChannelRecord,
   UsageRecord,
@@ -70,6 +71,8 @@ export interface RelationalCollections {
   readonly channels: EntityRepository<NotificationChannelRecord>;
   /** The AI services this office can reach, by the name an employee asks for. */
   readonly services: EntityRepository<LlmService>;
+  /** Changes the office has proposed about its own people, waiting for a person. */
+  readonly proposals: EntityRepository<Proposal>;
 }
 
 export const COLLECTION_NAMES = [
@@ -86,6 +89,7 @@ export const COLLECTION_NAMES = [
   "usage",
   "channels",
   "services",
+  "proposals",
 ] as const satisfies readonly (keyof RelationalCollections)[];
 export type CollectionName = (typeof COLLECTION_NAMES)[number];
 

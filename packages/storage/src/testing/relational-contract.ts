@@ -41,6 +41,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         const c = fx.connection("c1", "o1", "d1", "d2");
         const k = fx.connector("k1", "o1");
         const svc = fx.llmService("svc1", "o1");
+        const prop = fx.proposal("prop1", "o1");
         const s = fx.skill("tdd");
         const m = fx.memory("m1", "o1", "e1");
         const doc = fx.document("doc1", "o1", "e1");
@@ -54,6 +55,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         await store.connections.put(c);
         await store.connectors.put(k);
         await store.services.put(svc);
+        await store.proposals.put(prop);
         await store.skills.put(s);
         await store.memories.put(m);
         await store.documents.put(doc);
@@ -66,6 +68,7 @@ export function relationalStoreContract(name: string, factory: RelationalStoreFa
         expect(await store.connections.get(c.id)).toEqual(c);
         expect(await store.connectors.get(k.id)).toEqual(k);
         expect(await store.services.get(svc.id)).toEqual(svc);
+        expect(await store.proposals.get(prop.id)).toEqual(prop);
         expect(await store.skills.get(s.id)).toEqual(s);
         expect(await store.memories.get(m.id)).toEqual(m);
         expect(await store.documents.get(doc.id)).toEqual(doc);

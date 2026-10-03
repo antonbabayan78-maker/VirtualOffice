@@ -51,6 +51,7 @@ describe("createEmployee", () => {
       instructions: null,
       examples: [],
       understudy: null,
+      selfImprovement: false,
       llm: { provider: "anthropic", model: "claude-sonnet-5", params: {}, fallbacks: [] },
       skillIds: [],
       toolGrants: [],
@@ -772,5 +773,30 @@ describe("what the real person changed", () => {
   it("refuses to correct somebody who stands in for nobody", () => {
     // There is no voice to correct, and nowhere honest to keep it.
     expect(isErr(recordCorrection(make(), pair, { now: () => now }))).toBe(true);
+  });
+});
+
+describe("whether a person improves themselves", () => {
+  it("does not, unless somebody switched it on", () => {
+    // Off for every office that predates the switch, and for everybody hired
+    // since: a loop nobody asked for is a loop nobody is watching.
+    expect(make().selfImprovement).toBe(false);
+  });
+
+  it("is switched on by the office", () => {
+    expect(make({ selfImprovement: true }).selfImprovement).toBe(true);
+  });
+
+  it("is switched off again without anything else changing", () => {
+    const on = make({ selfImprovement: true, instructions: "Keep me." });
+
+    const off = unwrap(updateEmployee(on, { selfImprovement: false }, { supervisor: null }));
+
+    expect(off.selfImprovement).toBe(false);
+    expect(off.instructions).toBe("Keep me.");
+  });
+
+  it("refuses anything that is not a yes or a no", () => {
+    expect(isErr(createEmployee({ ...base, selfImprovement: "yes" }, ctx, deps))).toBe(true);
   });
 });

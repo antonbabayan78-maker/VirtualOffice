@@ -47,6 +47,7 @@ describe("SqliteRelationalStore", () => {
         "0004_usage",
         "0005_channels",
         "0006_services",
+        "0007_proposals",
       ],
       pending: [],
     });
@@ -66,6 +67,7 @@ describe("SqliteRelationalStore", () => {
         "0004_usage",
         "0005_channels",
         "0006_services",
+        "0007_proposals",
       ],
     });
     await store.migrateUp();
@@ -92,6 +94,7 @@ describe("SqliteRelationalStore", () => {
         "0004_usage",
         "0005_channels",
         "0006_services",
+        "0007_proposals",
       ],
       pending: [],
     });

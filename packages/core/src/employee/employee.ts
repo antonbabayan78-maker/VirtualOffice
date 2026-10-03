@@ -125,6 +125,17 @@ export interface Employee {
   readonly examples: readonly WorkExample[];
   /** The real person this employee stands in for, or null for one that writes as itself. */
   readonly understudy: Understudy | null;
+  /**
+   * Whether the office may look back over this person's work and propose
+   * changes to how they work.
+   *
+   * Off unless somebody switched it on: an office will want it on for the
+   * drafting clerk and off for the one that touches money, and a loop nobody
+   * asked for is a loop nobody is watching. What a proposal may change is fixed
+   * elsewhere and is deliberately narrow — never a grant, a budget, a gate, or
+   * this switch.
+   */
+  readonly selfImprovement: boolean;
   readonly status: EmployeeStatus;
   readonly statusChangedAt: Date;
   readonly createdAt: Date;
@@ -149,6 +160,7 @@ export interface CreateEmployeeInput {
   readonly examples?: unknown;
   /** Who this person stands in for, if anybody. */
   readonly understudy?: unknown;
+  readonly selfImprovement?: unknown;
 }
 
 /** Facts the caller resolved from storage so the domain stays pure. */
@@ -423,6 +435,11 @@ export function createEmployee(
   const understudy = validateUnderstudy(input.understudy, null, deps.now());
   if (!understudy.ok) errors.push(...understudy.error);
 
+  const selfImprovement = input.selfImprovement ?? false;
+  if (typeof selfImprovement !== "boolean") {
+    errors.push({ path: "selfImprovement", message: "must be true or false" });
+  }
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -441,6 +458,7 @@ export function createEmployee(
     !instructions.ok ||
     !examples.ok ||
     !understudy.ok ||
+    typeof selfImprovement !== "boolean" ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -465,6 +483,7 @@ export function createEmployee(
     instructions: instructions.value,
     examples: examples.value,
     understudy: understudy.value,
+    selfImprovement,
     priority,
     status: "active",
     statusChangedAt: now,
@@ -495,6 +514,7 @@ export interface UpdateEmployeeInput {
   readonly examples?: unknown;
   /** Null stops them standing in for anybody, which takes the card with it. */
   readonly understudy?: unknown;
+  readonly selfImprovement?: unknown;
 }
 
 export interface UpdateEmployeeContext {
@@ -576,6 +596,11 @@ export function updateEmployee(
       : validateUnderstudy(changes.understudy, employee.understudy, employee.statusChangedAt);
   if (!understudy.ok) errors.push(...understudy.error);
 
+  const selfImprovement = changes.selfImprovement ?? employee.selfImprovement;
+  if (typeof selfImprovement !== "boolean") {
+    errors.push({ path: "selfImprovement", message: "must be true or false" });
+  }
+
   const priority = changes.priority ?? employee.priority;
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -592,6 +617,7 @@ export function updateEmployee(
     !instructions.ok ||
     !examples.ok ||
     !understudy.ok ||
+    typeof selfImprovement !== "boolean" ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -612,6 +638,7 @@ export function updateEmployee(
     instructions: instructions.value,
     examples: examples.value,
     understudy: understudy.value,
+    selfImprovement,
     priority,
   });
 }
