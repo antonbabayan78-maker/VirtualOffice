@@ -98,6 +98,9 @@ export function webBroker(options: WebConnectorOptions): ToolBroker {
         },
         required: ["url"],
       },
+      // Considered and empty, not forgotten: reading a page the office named is
+      // none of the categories a gate holds, and the allowlist is the control.
+      gates: [],
     },
   ];
 

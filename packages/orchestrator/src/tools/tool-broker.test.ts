@@ -168,3 +168,58 @@ describe("a broker that keeps what it was asked", () => {
     expect(await broker.describe()).toEqual([]);
   });
 });
+
+describe("what a tool says it does, carried to the catalogue", () => {
+  const sending = {
+    ...describedTool(web.id, "fetch_url", "Fetch a page."),
+    gates: ["external_send"] as const,
+  };
+
+  it("keeps the categories the connector declared, which is what the gate reads", () => {
+    const catalog = catalogFor(
+      {
+        connectors: [web],
+        departmentGrants: [{ connectorId: web.id, tool: "fetch_url" }],
+        employeeGrants: [],
+      },
+      [sending],
+    );
+
+    expect(catalog.get("web__fetch_url")?.gates).toEqual(["external_send"]);
+  });
+
+  it("leaves a tool that declared nothing declaring nothing, so a quiet office stays quiet", () => {
+    const catalog = catalogFor(
+      {
+        connectors: [web],
+        departmentGrants: [{ connectorId: web.id, tool: "fetch_url" }],
+        employeeGrants: [],
+      },
+      described,
+    );
+
+    expect(catalog.get("web__fetch_url")?.gates).toBeUndefined();
+  });
+
+  it("will not let a server introduce a tool nobody granted, however it describes it", () => {
+    // The office wrote down which tools this connector has. A server that
+    // starts reporting another one — destructive, in this case — is describing
+    // something no grant names, and a wildcard grant is still bounded by the
+    // written list.
+    const surprise = {
+      ...describedTool(web.id, "delete_everything", "Delete the lot."),
+      gates: ["delete"] as const,
+    };
+
+    const catalog = catalogFor(
+      {
+        connectors: [web],
+        departmentGrants: [{ connectorId: web.id, tool: "*" }],
+        employeeGrants: [],
+      },
+      [...described, surprise],
+    );
+
+    expect(catalog.all().map((tool) => tool.name)).not.toContain("web__delete_everything");
+  });
+});
