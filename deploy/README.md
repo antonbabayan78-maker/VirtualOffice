@@ -85,6 +85,46 @@ docker compose -f deploy/compose.yaml start office
 Stopped first on purpose: copying a SQLite file while something is writing to it
 copies a database halfway through a write.
 
+## Tools that act
+
+An office reaches outside itself through connectors, and an MCP server is one of
+them: either a command this office runs, or an `https` address it posts to. Add
+one on the canvas, press **Find its tools**, and grant them to a department or a
+person.
+
+Two things a deployment has to arrange:
+
+- **A command has to exist in the images.** `command: node` with
+  `args: ["/srv/mcp/post-room.mjs"]` means exactly that path inside the container —
+  both of them, because the worker runs the tool and the office runs the same
+  server once when you press Find its tools. Build it into the image, or mount it
+  into both services. A server reached over `https` needs none of this.
+- **A credential is named, never stored.** An HTTP server's token comes from an
+  environment variable the connector names (`tokenEnv: ACME_MCP_TOKEN`), read at
+  the moment of the call. Pass it to the office and the worker in `.env`; nothing
+  secret goes into the office's database.
+
+**Every tool stops for a person until you say otherwise.** That is the default on
+purpose — the alternative is that the first tool anybody adds can send mail with
+nobody asked. A run that reaches one stops before the call, the work shows as
+blocked with the tool and its arguments named, and it waits. Clear **Needs a
+person** beside a tool that only reads, and it stops asking.
+
+Answering is an API call for now, until the canvas grows an approvals inbox:
+
+```bash
+curl -X POST https://$VO_DOMAIN/tasks/$TASK/events \
+  -H "authorization: Bearer $VO_API_TOKEN" -H 'content-type: application/json' \
+  -d '{"type":"call_decided","key":"toolu_01…","decision":"approved","decidedBy":"you"}'
+```
+
+The key is the held call's, which `GET /tasks/$TASK/run-checkpoint` lists along
+with where the run got to. A refusal (`"decision":"declined"`, with a `reason`)
+is not a cancellation: the run is told, and carries on without that call.
+
+A parked run is kept at the office rather than in the worker, so the answer can
+arrive after the worker that asked has been restarted or replaced.
+
 ## What this kit is not
 
 - **Not more than one machine.** The job queue is in-process, so a second worker
@@ -97,3 +137,5 @@ copies a database halfway through a write.
   is in here; deciding when to run it is operations.
 - **Not an office you can import.** There is no route that takes an `office.yaml`
   yet, so a fresh office is configured through the API or from the canvas.
+- **Not an approvals inbox.** Work waiting for a person shows as blocked on the
+  canvas and is answered over the API; the inbox that lists them is its own task.

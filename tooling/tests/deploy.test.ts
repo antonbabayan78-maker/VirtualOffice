@@ -236,6 +236,19 @@ describe("the instructions beside it", () => {
     expect(readme()).toMatch(/volume/i);
   });
 
+  it("says what a deployment has to arrange for a tool that acts", () => {
+    // A command named in a connector has to exist inside both images, and a
+    // credential is named rather than stored — neither is guessable from the
+    // canvas, and both are how an MCP connector fails silently.
+    expect(readme()).toMatch(/tokenEnv/);
+    expect(readme()).toMatch(/mcp|MCP/);
+  });
+
+  it("says how work waiting for a person is answered, while there is no inbox", () => {
+    expect(readme()).toMatch(/call_decided/);
+    expect(readme()).toMatch(/run-checkpoint/);
+  });
+
   it("says what the kit does not do", () => {
     expect(readme()).toMatch(/not|yet/i);
   });

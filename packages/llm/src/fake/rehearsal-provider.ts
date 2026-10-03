@@ -42,6 +42,16 @@ const OFFICE_TOOLS: readonly string[] = ["find_tool", "file_document", "submit_w
  * are: this package sits underneath the one that builds the index. The shape is
  * `connector__tool (connectorId): description`, one per line.
  */
+/** Whether this run has already called a connector's tool. */
+function alreadyCalled(request: CompletionRequest): boolean {
+  for (const message of request.messages) {
+    for (const block of message.content) {
+      if (block.type === "tool_use" && block.name.includes("__")) return true;
+    }
+  }
+  return false;
+}
+
 function firstCatalogued(request: CompletionRequest): string | null {
   for (const line of systemText(request.system).split("\n")) {
     const match = /^([a-z0-9][a-z0-9_-]*__[a-z0-9_-]+) \(/i.exec(line.trim());
@@ -62,9 +72,6 @@ function criteriaIn(request: CompletionRequest): readonly string[] {
 }
 
 export function rehearsalProvider(): LlmProvider {
-  // One tool call per rehearsal: enough to prove the wiring, and an office
-  // whose work is a loop of the same call is not a rehearsal of anything.
-  let tried = false;
   return new FakeLlmProvider({
     // An office prices its models as anthropic ones, so answer as one.
     id: "anthropic",
@@ -86,12 +93,13 @@ export function rehearsalProvider(): LlmProvider {
         return toolCall("review_verdict", { approved: true, reason: "rehearsal: approved", met });
       }
 
-      // One granted tool, once. Already in the offered list means it has been
-      // loaded, so call it; otherwise ask for the first one the index names.
-      if (!tried) {
+      // One granted tool, once per run — read out of the conversation rather
+      // than remembered here. A worker builds one provider and uses it for
+      // every job it ever does, so a flag in this closure would mean the first
+      // task of the day tried a tool and none of the others did.
+      if (!alreadyCalled(request)) {
         const offered = tools.find((name) => !OFFICE_TOOLS.includes(name));
         if (offered !== undefined) {
-          tried = true;
           return toolCall(offered, {});
         }
         const named = firstCatalogued(request);
