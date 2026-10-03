@@ -27,6 +27,7 @@ import type { LlmProvider, ToolDefinition } from "@vo/llm";
 import { runAgent } from "./agent-run-loop.js";
 import type { HandedOver } from "./document-sink.js";
 import type { ProviderLookup } from "./provider-lookup.js";
+import { standingBlocks } from "./standing.js";
 
 /** What a judge calls to decide. */
 export const JUDGE_TOOL: ToolDefinition = {
@@ -141,7 +142,12 @@ export function llmJudgeTurn(options: JudgeTurnOptions): JudgeTurn {
       provider,
       model: request.judge.llm.model,
       system: {
-        stable: [`You are ${request.judge.name}, ${request.judge.role}.`],
+        stable: [
+          `You are ${request.judge.name}, ${request.judge.role}.`,
+          // A judge is an employee taking a turn, so what the office told them
+          // about how they work holds here too.
+          ...standingBlocks(request.judge),
+        ],
         dynamic,
       },
       messages: [

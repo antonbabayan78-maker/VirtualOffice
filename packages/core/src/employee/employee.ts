@@ -25,6 +25,19 @@ export function isEmployeeStatus(value: unknown): value is EmployeeStatus {
   return typeof value === "string" && (EMPLOYEE_STATUSES as readonly string[]).includes(value);
 }
 
+/**
+ * One piece of work somebody judged good.
+ *
+ * There is no counter-example on purpose: a model shown a bad example tends to
+ * copy it, and "avoid this" belongs in the instructions, where it is said once
+ * rather than demonstrated.
+ */
+export interface WorkExample {
+  /** The situation it was good for, in a few words. Null when it is general. */
+  readonly when: string | null;
+  readonly good: string;
+}
+
 export interface Employee {
   readonly id: EmployeeId;
   readonly officeId: OfficeId;
@@ -50,6 +63,21 @@ export interface Employee {
   readonly budget: Budget | null;
   /** Where the work is stored (connector reference). null means the department default. */
   readonly workspaceRef: string | null;
+  /**
+   * How this person works, in the owner's own words: standing, personal, and
+   * true of every piece of work they pick up.
+   *
+   * Null rather than an empty string, so "nothing written" has one
+   * representation — two people with nothing to say are identical, and no empty
+   * block can reach a prompt.
+   *
+   * This is not a skill and not a memory. A skill is a shared procedure with
+   * steps; a memory is what this person has learned for themselves. This is what
+   * the office told them.
+   */
+  readonly instructions: string | null;
+  /** Work somebody judged good, kept to show what good looks like here. */
+  readonly examples: readonly WorkExample[];
   readonly status: EmployeeStatus;
   readonly statusChangedAt: Date;
   readonly createdAt: Date;
@@ -69,6 +97,9 @@ export interface CreateEmployeeInput {
   readonly priority?: string;
   readonly workspaceRef?: string;
   readonly budget?: unknown;
+  /** How this person works. Loose on the way in, narrow on the entity. */
+  readonly instructions?: unknown;
+  readonly examples?: unknown;
 }
 
 /** Facts the caller resolved from storage so the domain stays pure. */
@@ -88,6 +119,12 @@ export interface EmployeeDeps {
 }
 
 export const EMPLOYEE_TEXT_MAX_LENGTH = 80;
+/** As long as a task's brief: this is a paragraph, not a name. */
+export const EMPLOYEE_INSTRUCTIONS_MAX_LENGTH = 20_000;
+export const WORK_EXAMPLE_MAX_LENGTH = 4_000;
+export const WORK_EXAMPLE_WHEN_MAX_LENGTH = 200;
+/** Few, because every one is carried in the prompt of every call this person makes. */
+export const MAX_WORK_EXAMPLES = 10;
 
 function validateText(raw: unknown, path: string): Result<string> {
   if (typeof raw !== "string") return err([{ path, message: "must be a string" }]);
@@ -99,6 +136,80 @@ function validateText(raw: unknown, path: string): Result<string> {
     ]);
   }
   return ok(value);
+}
+
+/**
+ * A paragraph somebody wrote, or nothing.
+ *
+ * Capped and otherwise left exactly as typed: the line breaks in it are part of
+ * what it says, which is why this is not `validateText` — that one is for a name
+ * and a role, trims them, and stops at eighty characters.
+ */
+function validateInstructions(raw: unknown, path: string): Result<string | null> {
+  if (raw === undefined || raw === null) return ok(null);
+  if (typeof raw !== "string") return err([{ path, message: "must be a string" }]);
+  if (raw.length > EMPLOYEE_INSTRUCTIONS_MAX_LENGTH) {
+    return err([
+      {
+        path,
+        message: `must be at most ${String(EMPLOYEE_INSTRUCTIONS_MAX_LENGTH)} characters`,
+      },
+    ]);
+  }
+  // Nothing but whitespace is nothing written.
+  return ok(raw.trim().length === 0 ? null : raw);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateExamples(raw: unknown): Result<readonly WorkExample[]> {
+  if (raw === undefined || raw === null) return ok([]);
+  if (!Array.isArray(raw)) {
+    return err([{ path: "examples", message: "must be a list of examples" }]);
+  }
+  if (raw.length > MAX_WORK_EXAMPLES) {
+    return err([
+      {
+        path: "examples",
+        message: `must be at most ${String(MAX_WORK_EXAMPLES)}; every one is carried in every call`,
+      },
+    ]);
+  }
+
+  const errors: ValidationError[] = [];
+  const examples: WorkExample[] = [];
+  raw.forEach((one: unknown, index) => {
+    const path = `examples[${String(index)}]`;
+    if (!isRecord(one)) {
+      errors.push({ path, message: "must be an example with the work in `good`" });
+      return;
+    }
+    const good = one["good"];
+    if (typeof good !== "string" || good.trim().length === 0) {
+      errors.push({ path: `${path}.good`, message: "must be the work that was good" });
+    } else if (good.length > WORK_EXAMPLE_MAX_LENGTH) {
+      errors.push({
+        path: `${path}.good`,
+        message: `must be at most ${String(WORK_EXAMPLE_MAX_LENGTH)} characters`,
+      });
+    }
+    const when = one["when"];
+    if (when !== undefined && when !== null && typeof when !== "string") {
+      errors.push({ path: `${path}.when`, message: "must be a string" });
+    } else if (typeof when === "string" && when.length > WORK_EXAMPLE_WHEN_MAX_LENGTH) {
+      errors.push({
+        path: `${path}.when`,
+        message: `must be at most ${String(WORK_EXAMPLE_WHEN_MAX_LENGTH)} characters`,
+      });
+    }
+    if (typeof good !== "string") return;
+    const said = typeof when === "string" ? when.trim() : "";
+    examples.push({ when: said.length === 0 ? null : said, good });
+  });
+
+  return errors.length > 0 ? err(errors) : ok(examples);
 }
 
 function validateSkillIds(raw: readonly string[] | undefined): Result<readonly string[]> {
@@ -171,6 +282,11 @@ export function createEmployee(
   const supervisorId = validateSupervisor(input.supervisorId, id, ctx);
   if (!supervisorId.ok) errors.push(...supervisorId.error);
 
+  const instructions = validateInstructions(input.instructions, "instructions");
+  if (!instructions.ok) errors.push(...instructions.error);
+  const examples = validateExamples(input.examples);
+  if (!examples.ok) errors.push(...examples.error);
+
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -186,6 +302,8 @@ export function createEmployee(
     !toolGrants.ok ||
     !budget.ok ||
     !supervisorId.ok ||
+    !instructions.ok ||
+    !examples.ok ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -207,6 +325,8 @@ export function createEmployee(
     schedule,
     supervisorId: supervisorId.value,
     workspaceRef: input.workspaceRef ?? null,
+    instructions: instructions.value,
+    examples: examples.value,
     priority,
     status: "active",
     statusChangedAt: now,
@@ -232,6 +352,9 @@ export interface UpdateEmployeeInput {
   readonly workspaceRef?: string | null;
   readonly priority?: string;
   readonly budget?: unknown;
+  /** Null unteaches somebody; absent leaves what they were told alone. */
+  readonly instructions?: string | null;
+  readonly examples?: unknown;
 }
 
 export interface UpdateEmployeeContext {
@@ -295,6 +418,18 @@ export function updateEmployee(
     else errors.push(...validated.error);
   }
 
+  const instructions =
+    changes.instructions === undefined
+      ? ok(employee.instructions)
+      : validateInstructions(changes.instructions, "instructions");
+  if (!instructions.ok) errors.push(...instructions.error);
+
+  // Replaced rather than added to: a list editor sends the list it is showing,
+  // and merging would make removing one impossible.
+  const examples =
+    changes.examples === undefined ? ok(employee.examples) : validateExamples(changes.examples);
+  if (!examples.ok) errors.push(...examples.error);
+
   const priority = changes.priority ?? employee.priority;
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -308,6 +443,8 @@ export function updateEmployee(
     !llm.ok ||
     !skillIds.ok ||
     !toolGrants.ok ||
+    !instructions.ok ||
+    !examples.ok ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -325,6 +462,8 @@ export function updateEmployee(
     schedule,
     supervisorId,
     workspaceRef: changes.workspaceRef === undefined ? employee.workspaceRef : changes.workspaceRef,
+    instructions: instructions.value,
+    examples: examples.value,
     priority,
   });
 }

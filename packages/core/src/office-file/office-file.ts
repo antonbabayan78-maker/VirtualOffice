@@ -139,6 +139,11 @@ export function exportOfficeYaml(config: OfficeConfig): string {
           fallbacks: e.llm.fallbacks.length > 0 ? e.llm.fallbacks : null,
         }),
         skills: e.skillIds,
+        // Written only when there is something to write: a file that gains two
+        // empty keys per person for a feature nobody used is a file nobody
+        // wants to read.
+        instructions: e.instructions,
+        examples: e.examples.length > 0 ? e.examples.map((one) => omitNull({ ...one })) : null,
         tools: e.toolGrants.map((g) => ({ connector: g.connectorId, tool: g.tool })),
         schedule: e.schedule,
         supervisor: e.supervisorId,
@@ -616,6 +621,8 @@ export function importOfficeYaml(
         ...("budget" in e ? { budget: e["budget"] } : {}),
         ...(supervisorId === undefined ? {} : { supervisorId }),
         ...(typeof e["workspace"] === "string" ? { workspaceRef: e["workspace"] } : {}),
+        ...("instructions" in e ? { instructions: e["instructions"] } : {}),
+        ...("examples" in e ? { examples: e["examples"] } : {}),
       },
       { department: { id: departmentId as DepartmentId, officeId }, supervisor },
       { id: () => id as EmployeeId, now: () => created },

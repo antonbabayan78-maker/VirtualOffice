@@ -428,6 +428,11 @@ function reviveEmployee(raw: Record<string, unknown>): Employee {
   return {
     ...raw,
     toolGrants: grantsOr(raw["toolGrants"]),
+    // An office that predates a field says nothing about it, and a person who
+    // was never taught anything has no instructions and no examples — not
+    // undefined ones, which a turn would then try to read.
+    instructions: typeof raw["instructions"] === "string" ? raw["instructions"] : null,
+    examples: Array.isArray(raw["examples"]) ? raw["examples"] : [],
     createdAt: asDate(raw["createdAt"]),
     statusChangedAt: asDate(raw["statusChangedAt"]),
   } as unknown as Employee;

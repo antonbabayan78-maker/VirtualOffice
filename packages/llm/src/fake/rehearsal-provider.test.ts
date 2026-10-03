@@ -176,3 +176,47 @@ describe("rehearsing an office that was granted tools", () => {
     expect(response.content[0]).toMatchObject({ type: "tool_use", name: "review_verdict" });
   });
 });
+
+describe("rehearsing an office whose people have been told things", () => {
+  /** What a prompt looks like once somebody's standing instructions are in it. */
+  const taught = (said: string, after: string[] = []): CompletionRequest => ({
+    ...ask(["review_verdict"]),
+    system: [
+      { text: `You are Ada, Clerk.\nHow you work:\n${said}`, cache: true },
+      ...after.map((text) => ({ text, cache: false })),
+    ],
+  });
+
+  it("answers the office's criteria, not a sentence that reads like them", async () => {
+    // An owner writing "This work is done when: the customer replies" into
+    // somebody's instructions would otherwise have a rehearsal report criteria
+    // the office never set — a lie in the record of what was checked.
+    const response = await rehearsalProvider().complete(
+      taught("This work is done when: the customer is happy.", [
+        "This work is done when: handles malformed input | has tests",
+      ]),
+    );
+
+    const block = response.content[0];
+    if (block?.type !== "tool_use") throw new Error("expected a verdict");
+    expect(block.input).toMatchObject({ met: ["handles malformed input", "has tests"] });
+  });
+
+  it("does not reach for a tool because somebody's prose mentions one", async () => {
+    // The index lines are `name (connectorId): description`. A paragraph that
+    // names a tool in passing is not an index.
+    const response = await rehearsalProvider().complete({
+      ...ask(["find_tool", "submit_work"]),
+      system: [
+        {
+          text:
+            "You are Ada, Clerk.\nHow you work:\n" +
+            "post__send_email (the mail server our team uses): only with a person's say-so.",
+          cache: true,
+        },
+      ],
+    });
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+  });
+});

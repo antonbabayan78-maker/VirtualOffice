@@ -1728,3 +1728,62 @@ describe("the AI services an office can reach", () => {
     }
   });
 });
+
+describe("an employee from an office that predates being taught", () => {
+  it("has no instructions and no examples, rather than undefined ones", async () => {
+    // A row written before the field existed says nothing about it. A turn
+    // built from one must not fall over on a list that is not there.
+    server.use(
+      http.get(`${BASE}/employees/emp-ada`, () =>
+        HttpResponse.json({
+          id: "emp-ada",
+          officeId: "office-1",
+          departmentId: "dept-eng",
+          name: "Ada",
+          role: "Engineer",
+          color: "#00aa66",
+          llm: { provider: "anthropic", model: "claude-sonnet-5", params: {}, fallbacks: [] },
+          skillIds: [],
+          toolGrants: [],
+          schedule: null,
+          supervisorId: null,
+          priority: "normal",
+          budget: null,
+          workspaceRef: null,
+          status: "active",
+          statusChangedAt: "2026-09-30T09:00:00.000Z",
+          createdAt: "2026-09-30T09:00:00.000Z",
+        }),
+      ),
+    );
+
+    const result = await client().getEmployee("emp-ada");
+
+    if (!result.ok) throw new Error("expected this person to load");
+    expect(result.value.instructions).toBeNull();
+    expect(result.value.examples).toEqual([]);
+  });
+
+  it("keeps what a taught person was told", async () => {
+    server.use(
+      http.get(`${BASE}/employees/emp-sam`, () =>
+        HttpResponse.json({
+          id: "emp-sam",
+          name: "Sam",
+          role: "Clerk",
+          instructions: "Always check the order number.",
+          examples: [{ when: null, good: "Thank you for flagging this." }],
+          toolGrants: [],
+          createdAt: "2026-09-30T09:00:00.000Z",
+          statusChangedAt: "2026-09-30T09:00:00.000Z",
+        }),
+      ),
+    );
+
+    const result = await client().getEmployee("emp-sam");
+
+    if (!result.ok) throw new Error("expected this person to load");
+    expect(result.value.instructions).toBe("Always check the order number.");
+    expect(result.value.examples).toHaveLength(1);
+  });
+});
