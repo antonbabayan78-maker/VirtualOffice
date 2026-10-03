@@ -32,6 +32,12 @@ export const ROUTES: readonly RouteDefinition[] = [
     description: "Work waiting on a decision only a person can make.",
   },
   {
+    path: "/proposals",
+    label: "Proposals",
+    title: "Proposals",
+    description: "Changes this office would make to how its own people work.",
+  },
+  {
     path: "/usage",
     label: "Usage",
     title: "Usage",

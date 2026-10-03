@@ -29,6 +29,7 @@ import { BudgetField } from "./BudgetField.js";
 import { Produced } from "./Produced.js";
 import { RunSwitch } from "./RunSwitch.js";
 import { Teaching } from "./Teaching.js";
+import { SelfImprovement } from "./SelfImprovement.js";
 import { Understudy, voiceChangeOf, voiceDraftOf, type VoiceDraft } from "./Understudy.js";
 import { Tray } from "./Tray.js";
 
@@ -56,6 +57,7 @@ interface Draft {
   readonly skills: string;
   readonly instructions: string;
   readonly examples: readonly WorkExample[];
+  readonly selfImprovement: boolean;
   readonly voice: VoiceDraft;
   readonly supervisorId: string;
   readonly workspace: string;
@@ -92,6 +94,7 @@ function draftOf(employee: Employee): Draft {
     skills: employee.skillIds.join(", "),
     instructions: employee.instructions ?? "",
     examples: employee.examples,
+    selfImprovement: employee.selfImprovement,
     voice: voiceDraftOf(employee),
     supervisorId: employee.supervisorId ?? "",
     workspace: employee.workspaceRef ?? "",
@@ -175,6 +178,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         // here would be the same rule in two places.
         instructions: draft.instructions,
         examples: draft.examples,
+        selfImprovement: draft.selfImprovement,
         ...voiceChangeOf(draft.voice, employee),
         supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
         workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
@@ -331,6 +335,15 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         examples={draft.examples}
         onChange={(changes) => {
           edit(changes);
+        }}
+      />
+
+      <SelfImprovement
+        store={store}
+        employee={employee}
+        on={draft.selfImprovement}
+        onChange={(selfImprovement) => {
+          edit({ selfImprovement });
         }}
       />
 

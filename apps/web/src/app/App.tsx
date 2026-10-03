@@ -17,6 +17,7 @@ import { CanvasScreen } from "../canvas/CanvasScreen.js";
 import { officeStore } from "../office/store.js";
 import { useOffice, type OfficePlan } from "../office/useOffice.js";
 import { ApprovalsScreen } from "../approvals/ApprovalsScreen.js";
+import { ProposalsScreen } from "../proposals/ProposalsScreen.js";
 import { TasksScreen } from "../tasks/TasksScreen.js";
 import { UsageScreen } from "../usage/UsageScreen.js";
 import { ChooseOffice } from "./ChooseOffice.js";
@@ -42,6 +43,7 @@ function screenFor(route: RouteDefinition): ReactNode {
   if (route.path === "/") return <CanvasScreen />;
   if (route.path === "/usage") return <UsageScreen store={officeStore} />;
   if (route.path === "/approvals") return <ApprovalsScreen store={officeStore} />;
+  if (route.path === "/proposals") return <ProposalsScreen store={officeStore} />;
   if (route.path === "/tasks") return <TasksScreen store={officeStore} />;
   return <Placeholder route={route} />;
 }
@@ -52,16 +54,25 @@ function screenFor(route: RouteDefinition): ReactNode {
  * The only thing in the shell that counts anything, and it earns it: work that
  * stops for a person stops silently otherwise — the canvas shows somebody
  * waiting, which looks like somebody working from across the room.
+ *
+ * Two counts rather than one sum, because they are two different questions. A
+ * held call is work stopped until somebody answers; a proposal is a change to
+ * one of the office's own people, which nothing is waiting on. Added together,
+ * whichever is rarer would vanish into the other.
  */
 function WaitingCount({ path }: { readonly path: string }): ReactNode {
   const waiting = officeStore((state) => state.waiting.length);
-  if (path !== "/approvals" || waiting === 0) return null;
+  const proposed = officeStore(
+    (state) => state.proposals.filter((one) => one.status === "waiting").length,
+  );
+  const count = path === "/approvals" ? waiting : path === "/proposals" ? proposed : 0;
+  if (count === 0) return null;
   return (
     <span
-      aria-label={`${String(waiting)} waiting`}
+      aria-label={`${String(count)} waiting`}
       className="ml-1.5 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-canvas tabular-nums"
     >
-      {waiting}
+      {count}
     </span>
   );
 }

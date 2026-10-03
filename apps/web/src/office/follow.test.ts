@@ -12,6 +12,7 @@ import {
   type Employee,
   type EmployeeId,
   type OfficeId,
+  type Proposal,
 } from "@vo/core";
 import type { ApiClient, ApiResult, OfficeSnapshot } from "@vo/api-client";
 import { createOfficeStore, type OfficeStore } from "./office-store.js";
@@ -110,7 +111,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     discoverServiceModels: () => Promise.reject(new Error("not used here")),
     studyVoice: () => Promise.reject(new Error("not used here")),
     recordCorrection: () => Promise.reject(new Error("not used here")),
-    listProposals: () => Promise.reject(new Error("not used here")),
+    listProposals: () => Promise.resolve({ ok: true, value: [] }),
     proposeChange: () => Promise.reject(new Error("not used here")),
     lookBack: () => Promise.reject(new Error("not used here")),
     decideProposal: () => Promise.reject(new Error("not used here")),
@@ -826,5 +827,77 @@ describe("the AI services an office has, changing under you", () => {
     });
 
     expect(listServices).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("what the office proposes about its own people", () => {
+  const proposal: Proposal = {
+    id: "prop-1",
+    officeId,
+    employeeId: ada.id,
+    status: "waiting",
+    changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+    because: "Two pieces of work went back: no order number.",
+    evidence: [{ taskId: "task-1", what: "went back twice" }],
+    madeAt: at,
+    decidedBy: null,
+    decidedAt: null,
+  } as unknown as Proposal;
+
+  it("shows them when the office is loaded", async () => {
+    const api = fakeApi({ listProposals: () => Promise.resolve({ ok: true, value: [proposal] }) });
+
+    await follow(api).reload();
+
+    expect(store.getState().proposals).toHaveLength(1);
+  });
+
+  it("loads an office that cannot say, rather than failing to open", async () => {
+    // An office running a version that proposes nothing is an office with no
+    // proposals, on the same terms as the services and the trays.
+    const api = fakeApi({
+      listProposals: () =>
+        Promise.resolve({ ok: false, kind: "transport", message: "no proposals here" }),
+    });
+
+    await follow(api).reload();
+
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().proposals).toEqual([]);
+  });
+
+  it("asks again when one is made, which is how it appears overnight", async () => {
+    // The whole point of the nightly loop: nobody is at the canvas when it runs,
+    // and a count that only moved on a reload would never move.
+    const listProposals = vi.fn(() => Promise.resolve({ ok: true as const, value: [proposal] }));
+
+    await follow(fakeApi({ listProposals })).apply({
+      offset: 20,
+      officeId,
+      at: 0,
+      data: { kind: "proposal.made", id: "prop-1" },
+    });
+
+    expect(listProposals).toHaveBeenCalledWith(officeId);
+    expect(store.getState().proposals).toHaveLength(1);
+  });
+
+  it("asks again when somebody decides one, from wherever they decided it", async () => {
+    const listProposals = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        value: [{ ...proposal, status: "accepted" as const }],
+      }),
+    );
+
+    await follow(fakeApi({ listProposals })).apply({
+      offset: 21,
+      officeId,
+      at: 0,
+      data: { kind: "proposal.decided", id: "prop-1" },
+    });
+
+    expect(listProposals).toHaveBeenCalledTimes(1);
+    expect(store.getState().proposals[0]?.status).toBe("accepted");
   });
 });

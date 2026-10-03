@@ -29,6 +29,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     listUsage: nothing,
     listServices: nothing,
     listApprovals: () => Promise.resolve({ ok: true, value: [] }),
+    listProposals: nothing,
     officeSpend: () =>
       Promise.resolve({
         ok: true as const,

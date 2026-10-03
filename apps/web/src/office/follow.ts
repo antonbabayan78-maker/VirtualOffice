@@ -49,6 +49,19 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     store.getState().loadWaiting(answer.ok ? answer.value : []);
   };
 
+  /**
+   * What the office has proposed about its own people.
+   *
+   * Re-listed rather than fetched one at a time: a decision changes one of
+   * these and the employee with it, there are a handful of them, and the whole
+   * list is what the screen shows. An office that cannot say has proposed
+   * nothing, on the same terms as the trays and the services.
+   */
+  const askWhatIsProposed = async (): Promise<void> => {
+    const listed = await api.listProposals(officeId);
+    if (listed.ok) store.getState().loadProposals(listed.value);
+  };
+
   const replaceDepartment = (department: Department): void => {
     const departments = store.getState().departments;
     const known = departments.some((candidate) => candidate.id === department.id);
@@ -134,6 +147,11 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         // a rare event, and nothing to fetch for one that has gone.
         const listed = await api.listServices(officeId);
         if (listed.ok) store.getState().loadServices(listed.value);
+      } else if (kind === "proposal.made" || kind === "proposal.decided") {
+        // The reason this is on the stream at all: the loop runs overnight with
+        // nobody at the canvas, and a count that only moved on a reload would
+        // never move. A decision made in another browser lands the same way.
+        await askWhatIsProposed();
       } else if (kind === "document.added") {
         const fetched = await api.getDocument(id);
         if (fetched.ok) store.getState().putDocument(fetched.value);
@@ -196,6 +214,7 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     store.getState().loadSpend(spend.ok ? spend.value : null);
 
     await askWhatIsWaiting();
+    await askWhatIsProposed();
   };
 
   return { apply, reload };

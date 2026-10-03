@@ -15,6 +15,7 @@ import {
   type EmployeeId,
   type LlmService,
   type OfficeId,
+  type Proposal,
   type Task,
   type TaskId,
 } from "@vo/core";
@@ -1881,5 +1882,158 @@ describe("standing in for a real person, from the canvas", () => {
     expect(
       (await store.getState().recordCorrection("nope" as never, { before: "a", after: "b" })).ok,
     ).toBe(false);
+  });
+});
+
+describe("what the office proposes about its own people", () => {
+  const acmeOffice = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    runState: "running" as const,
+    budget: null,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  const proposal = (overrides: Record<string, unknown> = {}): Proposal =>
+    ({
+      id: "prop-1",
+      officeId,
+      employeeId: ada.id,
+      status: "waiting",
+      changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+      because: "Two pieces of work went back for want of an order number.",
+      evidence: [{ taskId: "task-1", what: "went back twice" }],
+      madeAt: new Date("2026-10-04T09:00:00Z"),
+      decidedBy: null,
+      decidedAt: null,
+      ...overrides,
+    }) as unknown as Proposal;
+
+  function spyApi(answers: Record<string, unknown> = {}) {
+    const sent: { what: string; body: unknown }[] = [];
+    return {
+      sent,
+      api: {
+        lookBack: (id: string) => {
+          sent.push({ what: "lookBack", body: id });
+          return Promise.resolve(answers["lookBack"] ?? { ok: true, value: proposal() });
+        },
+        decideProposal: (id: string, decision: string) => {
+          sent.push({ what: "decide", body: { id, decision } });
+          return Promise.resolve(
+            answers["decide"] ??
+              // The office answers with what it now holds, as it does everywhere.
+              {
+                ok: true,
+                value: proposal({ status: decision === "accept" ? "accepted" : "declined" }),
+              },
+          );
+        },
+      } as never,
+    };
+  }
+
+  const connected = (answers: Record<string, unknown> = {}) => {
+    open([eng], [ada]);
+    store.getState().loadOffice(acmeOffice);
+    const spy = spyApi(answers);
+    store.getState().connect(spy.api);
+    return spy;
+  };
+
+  it("holds the proposals the office has made, newest decision last", () => {
+    store.getState().loadProposals([proposal()]);
+
+    expect(store.getState().proposals.map((one) => one.id)).toEqual(["prop-1"]);
+  });
+
+  it("replaces one it already holds rather than showing it twice", () => {
+    store.getState().loadProposals([proposal()]);
+
+    store.getState().putProposal(proposal({ status: "accepted" }));
+
+    expect(store.getState().proposals).toHaveLength(1);
+    expect(store.getState().proposals[0]?.status).toBe("accepted");
+  });
+
+  it("asks the office to look back, and keeps what it proposed", async () => {
+    const spy = connected();
+
+    const result = await store.getState().lookBack(ada.id);
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toEqual({ what: "lookBack", body: ada.id });
+    expect(store.getState().proposals[0]?.id).toBe("prop-1");
+  });
+
+  it("says plainly when it read the record and found nothing", async () => {
+    // Nothing worth changing is a good answer, so it is not a problem, and it
+    // must not look like a proposal that failed to arrive.
+    const spy = connected({ lookBack: { ok: true, value: null } });
+
+    const result = await store.getState().lookBack(ada.id);
+
+    expect(result).toEqual({ ok: true, proposed: false });
+    expect(store.getState().proposals).toEqual([]);
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("says why it could not look back, because somebody pressed a button", async () => {
+    const spy = connected({
+      lookBack: { ok: false, kind: "transport", message: "this office has no model to think with" },
+    });
+
+    const result = await store.getState().lookBack(ada.id);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.problems[0]?.message).toMatch(/no model to think with/);
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("carries a decision to the office and keeps what it answered", async () => {
+    const spy = connected();
+    store.getState().loadProposals([proposal()]);
+
+    const result = await store.getState().decideProposal("prop-1" as never, "accept");
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toEqual({ what: "decide", body: { id: "prop-1", decision: "accept" } });
+    expect(store.getState().proposals[0]?.status).toBe("accepted");
+  });
+
+  it("leaves the proposal as it was when the office refused the decision", async () => {
+    // A row that reads "accepted" over an office that never accepted it is the
+    // one thing this screen must never show.
+    const spy = connected({
+      decide: {
+        ok: false,
+        kind: "validation",
+        errors: [{ path: "instructions", message: "has been changed since this was accepted" }],
+      },
+    });
+    store.getState().loadProposals([proposal({ status: "accepted" })]);
+
+    const result = await store.getState().decideProposal("prop-1" as never, "revert");
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.problems[0]?.message).toMatch(/changed since/);
+    expect(store.getState().proposals[0]?.status).toBe("accepted");
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("does nothing for somebody it does not have", async () => {
+    connected();
+
+    expect((await store.getState().lookBack("nope" as never)).ok).toBe(false);
+  });
+
+  it("has nothing to ask when this canvas has no office", async () => {
+    open([eng], [ada]);
+
+    expect((await store.getState().lookBack(ada.id)).ok).toBe(false);
+    expect((await store.getState().decideProposal("prop-1" as never, "accept")).ok).toBe(false);
   });
 });
