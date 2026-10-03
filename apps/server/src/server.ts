@@ -50,6 +50,7 @@ import {
   updateEmployee,
   type ConnectionId,
   type Connector,
+  type GatedAction,
   type ConnectorId,
   type NotificationChannelId,
   type Office,
@@ -71,6 +72,8 @@ import {
   BlobRunCheckpointStore,
   defaultWorkflowEngine,
   performCreateWork,
+  whatIsWaiting,
+  type HeldCall,
   type RunCheckpoint,
   type WorkflowContext,
   type WorkflowEvent,
@@ -1186,6 +1189,12 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       ...(Array.isArray(body["acceptanceCriteria"])
         ? { acceptanceCriteria: body["acceptanceCriteria"] as string[] }
         : {}),
+      // What this work will involve, which is what a department's gate holds it
+      // for. Without a way to say so over the wire, a gated department could
+      // only ever hold work the office made for itself.
+      ...(Array.isArray(body["gatedActions"])
+        ? { gatedActions: body["gatedActions"] as GatedAction[] }
+        : {}),
       // Only when a bench actually placed it: a bench that could place nothing
       // leaves ordinary unassigned work, not a record of something it handed out.
       ...(wantsBench !== null && chosen.kind !== "nobody" ? { benchId: wantsBench } : {}),
@@ -1270,6 +1279,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const task = await store.tasks.get(id);
     return task ?? missing(reply, "task");
   });
+
+  /**
+   * Who is asking.
+   *
+   * Re-read rather than stashed: the hook has already proved it. The cookie
+   * counts as well as the header — a browser that signed in is a person, and
+   * before this it filed its documents as "unknown".
+   */
+  const personOf = (request: FastifyRequest): string => {
+    const offered =
+      bearerToken(request.headers.authorization) ?? sessionCookie(request.headers.cookie);
+    return (offered === null ? null : options.verifyToken(offered))?.ownerId ?? "unknown";
+  };
 
   /**
    * What the office is holding for a run in flight: where it got to, and what
@@ -1380,7 +1402,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       },
     };
 
-    const outcome = workflow.handle(task, body as unknown as WorkflowEvent, context);
+    // A decision only a person may make records who made it. A canvas has no
+    // name to send — it was let in with a token — so the office fills in whose
+    // it was. A body that says is believed: one person may act for another.
+    const decided =
+      (type === "gate_decided" || type === "call_decided") &&
+      (typeof body["decidedBy"] !== "string" || body["decidedBy"].trim().length === 0)
+        ? { ...body, decidedBy: personOf(request) }
+        : body;
+
+    const outcome = workflow.handle(task, decided as unknown as WorkflowEvent, context);
     if (isErr(outcome)) return fail(reply, outcome.error);
 
     // Written down before the work starts again, so an approved call cannot be
@@ -1390,7 +1421,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     if (runState !== null && type === "call_decided") {
       const key = typeof body["key"] === "string" ? body["key"] : "";
       const decision = body["decision"] === "declined" ? "declined" : "approved";
-      const decidedBy = typeof body["decidedBy"] === "string" ? body["decidedBy"] : "";
+      const decidedBy = typeof decided["decidedBy"] === "string" ? decided["decidedBy"] : "";
       const reason = typeof body["reason"] === "string" ? body["reason"] : undefined;
       await runState.decisions.record(id, {
         key,
@@ -1477,6 +1508,41 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   // -- connections -----------------------------------------------------------
+
+  /**
+   * What this office is waiting on a person for.
+   *
+   * One question with one answer, rather than a canvas deriving half of it and
+   * asking after the run checkpoint of every blocked task: the held calls are
+   * kept where the office keeps them, and what counts as waiting is one rule
+   * (`whatIsWaiting`) rather than one per screen.
+   *
+   * Ids, not names. The canvas already holds the people and the rooms, and a
+   * route that renders is a route that changes whenever the screen does.
+   */
+  app.get("/offices/:officeId/approvals", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+
+    const tasks = (await store.tasks.list({ where: { officeId: officeId as OfficeId } })).items;
+    const departments = (
+      await store.departments.list({ where: { officeId: officeId as OfficeId } })
+    ).items;
+
+    // Only for work that stopped: every other task has no checkpoint to read,
+    // and asking after one per task would be a request per piece of work.
+    const held = new Map<string, readonly HeldCall[]>();
+    if (runState !== null) {
+      for (const task of tasks) {
+        if (task.status !== "blocked") continue;
+        const checkpoint = await runState.checkpoints.load(task.id);
+        const items = checkpoint?.pendingApproval?.items ?? [];
+        if (items.length > 0) held.set(task.id, items);
+      }
+    }
+
+    return { items: whatIsWaiting(tasks, departments, held) };
+  });
 
   app.get("/offices/:officeId/connections", async (request) => {
     const { officeId } = request.params as { officeId: string };
@@ -1711,12 +1777,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const blobs = options.blobs;
   if (blobs !== undefined) {
     const trays = { documents: store.documents, blobs };
-
-    /** Who is asking. Re-read rather than stashed: the hook has already proved it. */
-    const personOf = (request: FastifyRequest): string => {
-      const token = bearerToken(request.headers.authorization);
-      return (token === null ? null : options.verifyToken(token))?.ownerId ?? "unknown";
-    };
 
     /** A tray belongs to something this office actually has. */
     const ownerIsHere = async (

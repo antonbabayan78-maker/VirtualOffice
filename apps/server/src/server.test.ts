@@ -3664,3 +3664,355 @@ describe("a run the office is holding for a worker", () => {
     expect(answer.statusCode).toBe(401);
   });
 });
+
+describe("what this office is waiting on a person for", () => {
+  let app: FastifyInstance;
+  let blobs: InMemoryBlobStore;
+  let officeId: string;
+  let employeeId: string;
+  let postRoom: string;
+  let shipping: string;
+
+  const send = (
+    method: "POST" | "GET" | "PUT" | "PATCH",
+    url: string,
+    payload?: Body,
+    headers: Record<string, string> = auth,
+  ): Promise<LightMyRequestResponse> =>
+    app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload }) });
+
+  const items = (response: LightMyRequestResponse) =>
+    response.json<{ items: Record<string, unknown>[] }>().items;
+
+  /** A piece of work in a room, started so it can then stop. */
+  const working = async (title: string, departmentId: string, body: Body = {}) => {
+    const made = await send("POST", `/offices/${officeId}/tasks`, {
+      departmentId,
+      title,
+      assigneeId: employeeId,
+      ...(body as Record<string, unknown>),
+    });
+    const id = made.json<{ id: string }>().id;
+    await send("POST", `/tasks/${id}/events`, { type: "start", actorId: employeeId });
+    return id;
+  };
+
+  /** A run that stopped before a call, exactly as a worker leaves one. */
+  const parked = async (taskId: string, key = "toolu_1") => {
+    await send("PUT", `/tasks/${taskId}/run-checkpoint`, {
+      runId: taskId,
+      step: 1,
+      messages: [{ role: "user", content: [{ type: "text", text: "do it" }] }],
+      budget: { spend: { inputTokens: 1, outputTokens: 1, cachedTokens: 0, usd: 0 } },
+      spendApproved: false,
+      droppedMessages: 0,
+      updatedAt: 1_700_000_000_000,
+      pendingApproval: {
+        items: [
+          {
+            key,
+            name: "post__send_email",
+            gates: ["external_send"],
+            detail: 'tool "post__send_email" (external_send)',
+            input: { to: "customer@acme.test" },
+          },
+        ],
+        gates: ["external_send"],
+        summary: 'tool "post__send_email" (external_send)',
+      },
+    });
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "await_decision",
+      actorId: employeeId,
+      summary: 'tool "post__send_email" (external_send)',
+      items: [
+        {
+          key,
+          name: "post__send_email",
+          gates: ["external_send"],
+          detail: 'tool "post__send_email" (external_send)',
+          input: { to: "customer@acme.test" },
+        },
+      ],
+    });
+  };
+
+  beforeEach(async () => {
+    let n = 0;
+    blobs = new InMemoryBlobStore();
+    app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs,
+      events: new OfficeEventLog({ now: () => 1_700_000_000_000 }),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++n)}`,
+      now: () => new Date("2026-10-03T09:00:00.000Z"),
+    });
+    await app.ready();
+
+    officeId = (await send("POST", "/offices", { name: "Acme" })).json<{ id: string }>().id;
+    postRoom = (
+      await send("POST", `/offices/${officeId}/departments`, {
+        name: "Post room",
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "direct" },
+      })
+    ).json<{ id: string }>().id;
+    shipping = (
+      await send("POST", `/offices/${officeId}/departments`, {
+        name: "Shipping",
+        color: "#7c5cff",
+        position: { x: 400, y: 0 },
+        reviewPolicy: { kind: "gate", gatedActions: ["deploy"] },
+      })
+    ).json<{ id: string }>().id;
+    employeeId = (
+      await send("POST", `/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Clerk",
+        color: "#00aa66",
+        department: postRoom,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+  });
+
+  it("says nothing is waiting in an office where nothing is", async () => {
+    await working("Write the note", postRoom);
+
+    const answer = await send("GET", `/offices/${officeId}/approvals`);
+
+    expect(answer.statusCode).toBe(200);
+    expect(items(answer)).toEqual([]);
+  });
+
+  it("lists a held call with the arguments, which is what is being decided", async () => {
+    const taskId = await working("Tell the customer", postRoom);
+    await parked(taskId);
+
+    const waiting = items(await send("GET", `/offices/${officeId}/approvals`));
+
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({
+      kind: "call",
+      taskId,
+      title: "Tell the customer",
+      departmentId: postRoom,
+      assigneeId: employeeId,
+      key: "toolu_1",
+      name: "post__send_email",
+      input: { to: "customer@acme.test" },
+      gates: ["external_send"],
+    });
+  });
+
+  it("lists finished work a department holds for a person", async () => {
+    // The work has to be able to say what it will involve, or a gated room
+    // could only ever hold work the office made for itself.
+    const taskId = await working("Ship 4.2", shipping, { gatedActions: ["deploy"] });
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "submit",
+      actorId: employeeId,
+      artifacts: ["shipped"],
+    });
+
+    const waiting = items(await send("GET", `/offices/${officeId}/approvals`));
+
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ kind: "review", taskId, gates: ["deploy"] });
+  });
+
+  it("lists work that stopped for another reason, which nobody can approve away", async () => {
+    const taskId = await working("Write the note", postRoom);
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "block",
+      actorId: employeeId,
+      reason: "waiting on the customer's address",
+    });
+
+    const waiting = items(await send("GET", `/offices/${officeId}/approvals`));
+
+    expect(waiting[0]).toMatchObject({
+      kind: "stopped",
+      status: "blocked",
+      reason: "waiting on the customer's address",
+    });
+  });
+
+  it("knows nothing about another office's work", async () => {
+    const other = (await send("POST", "/offices", { name: "Elsewhere" })).json<{ id: string }>().id;
+    const taskId = await working("Tell the customer", postRoom);
+    await parked(taskId);
+
+    expect(items(await send("GET", `/offices/${other}/approvals`))).toEqual([]);
+  });
+
+  it("has never heard of an office that is not there", async () => {
+    expect((await send("GET", "/offices/nope/approvals")).statusCode).toBe(404);
+  });
+
+  it("is not something a stranger may read", async () => {
+    const answer = await app.inject({ method: "GET", url: `/offices/${officeId}/approvals` });
+    expect(answer.statusCode).toBe(401);
+  });
+
+  it("stops listing a call once it has been decided", async () => {
+    const taskId = await working("Tell the customer", postRoom);
+    await parked(taskId);
+
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "call_decided",
+      key: "toolu_1",
+      decision: "approved",
+      decidedBy: "owner-1",
+    });
+
+    expect(items(await send("GET", `/offices/${officeId}/approvals`))).toEqual([]);
+  });
+});
+
+describe("who decided", () => {
+  let app: FastifyInstance;
+  let taskId: string;
+  let employeeId: string;
+
+  const send = (
+    method: "POST" | "GET" | "PUT",
+    url: string,
+    payload?: Body,
+    headers: Record<string, string> = auth,
+  ): Promise<LightMyRequestResponse> =>
+    app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload }) });
+
+  const reasons = async (): Promise<string[]> => {
+    const task = await send("GET", `/tasks/${taskId}`);
+    return task
+      .json<{ history: { reason: string | null }[] }>()
+      .history.map((event) => event.reason ?? "");
+  };
+
+  beforeEach(async () => {
+    let n = 0;
+    app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs: new InMemoryBlobStore(),
+      events: new OfficeEventLog({ now: () => 1_700_000_000_000 }),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "the owner" } }),
+      id: () => `id-${String(++n)}`,
+      now: () => new Date("2026-10-03T09:00:00.000Z"),
+    });
+    await app.ready();
+
+    const officeId = (await send("POST", "/offices", { name: "Acme" })).json<{ id: string }>().id;
+    const departmentId = (
+      await send("POST", `/offices/${officeId}/departments`, {
+        name: "Shipping",
+        color: "#7c5cff",
+        position: { x: 0, y: 0 },
+        reviewPolicy: { kind: "gate", gatedActions: ["deploy"] },
+      })
+    ).json<{ id: string }>().id;
+    employeeId = (
+      await send("POST", `/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    taskId = (
+      await send("POST", `/offices/${officeId}/tasks`, {
+        departmentId,
+        title: "Ship 4.2",
+        assigneeId: employeeId,
+        gatedActions: ["deploy"],
+      })
+    ).json<{ id: string }>().id;
+    await send("POST", `/tasks/${taskId}/events`, { type: "start", actorId: employeeId });
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "submit",
+      actorId: employeeId,
+      artifacts: ["shipped"],
+    });
+  });
+
+  it("is whoever the office let in, when the decision does not say", async () => {
+    // A canvas has no name to send: it was let in with a token, and the office
+    // is the thing that knows whose it is.
+    const answer = await send("POST", `/tasks/${taskId}/events`, {
+      type: "gate_decided",
+      decision: "approved",
+    });
+
+    expect(answer.statusCode).toBe(200);
+    expect((await reasons()).join(" ")).toContain("the owner");
+  });
+
+  it("is what the decision says when it says, since a person may act for another", async () => {
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "gate_decided",
+      decision: "approved",
+      decidedBy: "anton, by phone",
+    });
+
+    expect((await reasons()).join(" ")).toContain("anton, by phone");
+  });
+
+  it("is the browser that signed in, not an unknown", async () => {
+    const signedIn = await app.inject({
+      method: "POST",
+      url: "/session",
+      payload: { token: TOKEN },
+    });
+    const cookie = (signedIn.headers["set-cookie"] as string).split(";")[0] ?? "";
+
+    const answer = await app.inject({
+      method: "POST",
+      url: `/tasks/${taskId}/events`,
+      headers: { cookie },
+      payload: { type: "gate_decided", decision: "approved" },
+    });
+
+    expect(answer.statusCode).toBe(200);
+    expect((await reasons()).join(" ")).toContain("the owner");
+  });
+});
+
+describe("what a piece of work will involve", () => {
+  it("is taken when the work is made, since that is what a gate holds it for", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+
+    const made = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Ship 4.2",
+      gatedActions: ["deploy", "delete"],
+    });
+
+    expect(made.json()).toMatchObject({ gatedActions: ["deploy", "delete"] });
+  });
+
+  it("is nothing when the work does not say, which is most work", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+
+    const made = await post(`/offices/${officeId}/tasks`, { departmentId, title: "Write it up" });
+
+    expect(made.json()).toMatchObject({ gatedActions: [] });
+  });
+
+  it("refuses a category the office does not have", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+
+    const made = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Do something odd",
+      gatedActions: ["sideways"],
+    });
+
+    expect(made.statusCode).toBe(400);
+  });
+});
