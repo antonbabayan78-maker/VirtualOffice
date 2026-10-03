@@ -13,6 +13,7 @@ import type {
   Department,
   Document,
   Employee,
+  LlmService,
   MemoryItem,
   Office,
   OfficeSnapshot,
@@ -374,6 +375,7 @@ function collections(
     channels: repo<NotificationChannelRecord>("channels"),
     connections: repo<Connection>("connections"),
     connectors: repo<Connector>("connectors"),
+    services: repo<LlmService>("services"),
     skills: repo<Skill>("skills"),
     memories: repo<MemoryItem>("memories"),
     snapshots: repo<OfficeSnapshot>("snapshots"),
@@ -394,6 +396,7 @@ export class SqliteRelationalStore implements RelationalStore {
   readonly channels: EntityRepository<NotificationChannelRecord>;
   readonly connections: EntityRepository<Connection>;
   readonly connectors: EntityRepository<Connector>;
+  readonly services: EntityRepository<LlmService>;
   readonly skills: EntityRepository<Skill>;
   readonly memories: EntityRepository<MemoryItem>;
   readonly snapshots: EntityRepository<OfficeSnapshot>;
@@ -436,6 +439,7 @@ export class SqliteRelationalStore implements RelationalStore {
     this.channels = this.all.channels;
     this.connections = this.all.connections;
     this.connectors = this.all.connectors;
+    this.services = this.all.services;
     this.skills = this.all.skills;
     this.memories = this.all.memories;
     this.snapshots = this.all.snapshots;

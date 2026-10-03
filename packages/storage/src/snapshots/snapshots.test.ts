@@ -28,6 +28,7 @@ async function seed(store: RelationalStore): Promise<void> {
   await store.employees.put(fx.employee("e1", "o1", "d1"));
   await store.connections.put(fx.connection("c1", "o1", "d1", "d2"));
   await store.connectors.put(fx.connector("k1", "o1"));
+  await store.services.put(fx.llmService("s1", "o1"));
   // Another office and runtime data must never leak into a snapshot.
   await store.offices.put(fx.office("o2"));
   await store.departments.put(fx.department("d9", "o2"));
@@ -51,6 +52,9 @@ for (const [name, open] of backends) {
       expect(config.employees.map((e) => e.id)).toEqual(["e1"]);
       expect(config.connections.map((c) => c.id)).toEqual(["c1"]);
       expect(config.connectors.map((c) => c.id)).toEqual(["k1"]);
+      // A service is configuration: an office restored without the services its
+      // employees name is an office that cannot do any work.
+      expect(config.services.map((s) => s.id)).toEqual(["s1"]);
       await expect(readOfficeConfig(store, "nope" as OfficeId)).rejects.toThrow(/office "nope"/);
       await store.close();
     });
@@ -108,6 +112,7 @@ for (const [name, open] of backends) {
         await tx.departments.put(fx.department("d3", "o1", "Marketing"));
         await tx.employees.put(fx.employee("e2", "o1", "d3"));
         await tx.connectors.delete("k1");
+        await tx.services.delete("s1");
       });
       expect(isEmptyDiff(await service.diffAgainstCurrent(original))).toBe(false);
 
@@ -123,6 +128,7 @@ for (const [name, open] of backends) {
       expect(await store.departments.get("d3")).toBeNull();
       expect(await store.employees.get("e2")).toBeNull();
       expect(await store.connectors.get("k1")).not.toBeNull();
+      expect(await store.services.get("s1")).not.toBeNull();
       // Runtime data and other offices are untouched.
       expect(await store.tasks.get("t1")).not.toBeNull();
       expect(await store.departments.get("d9")).not.toBeNull();

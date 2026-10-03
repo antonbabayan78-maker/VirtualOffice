@@ -52,13 +52,14 @@ export async function readOfficeConfig(
 ): Promise<OfficeConfig> {
   const office = await store.offices.get(officeId);
   if (!office) throw new Error(`office "${officeId}" not found`);
-  const [departments, employees, connections, connectors] = await Promise.all([
+  const [departments, employees, connections, connectors, services] = await Promise.all([
     allWhere(store.departments, { officeId }),
     allWhere(store.employees, { officeId }),
     allWhere(store.connections, { officeId }),
     allWhere(store.connectors, { officeId }),
+    allWhere(store.services, { officeId }),
   ]);
-  return { office, departments, employees, connections, connectors };
+  return { office, departments, employees, connections, connectors, services };
 }
 
 export async function takeSnapshot(
@@ -123,6 +124,7 @@ export function restoreSnapshot(
     await replaceCollection(tx.employees, current.employees, snapshot.config.employees);
     await replaceCollection(tx.connections, current.connections, snapshot.config.connections);
     await replaceCollection(tx.connectors, current.connectors, snapshot.config.connectors);
+    await replaceCollection(tx.services, current.services, snapshot.config.services);
     return takeSnapshot(
       tx,
       snapshot.officeId,
