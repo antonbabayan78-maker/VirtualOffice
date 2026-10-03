@@ -250,6 +250,9 @@ importers:
       '@vo/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vo/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@vo/notifications':
         specifier: workspace:*
         version: link:../../packages/notifications

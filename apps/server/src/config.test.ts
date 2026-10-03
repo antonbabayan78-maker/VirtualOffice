@@ -154,3 +154,15 @@ describe("saying everything that is wrong at once", () => {
     expect(isErr(result) && result.error.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe("the key that opens this office's vault", () => {
+  it("is taken from the environment, which is the only place it may live", () => {
+    expect(unwrap(read({ VO_VAULT_KEY: "a".repeat(44) })).vaultKey).toBe("a".repeat(44));
+  });
+
+  it("is null when nobody set one, so the office refuses to keep a pasted key", () => {
+    // Said rather than guessed: an office that invented a key would encrypt
+    // every secret under something nobody could reproduce after a restart.
+    expect(unwrap(read({})).vaultKey).toBeNull();
+  });
+});

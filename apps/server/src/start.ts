@@ -15,7 +15,8 @@
  * to a url is handed in here rather than imported by the routes — so no test
  * of the routes can reach outside the machine it runs on.
  */
-import { officeBroker } from "@vo/connectors";
+import { BlobSecretRecordStore, envKeySource, officeBroker, Vault } from "@vo/connectors";
+import { openAiCompatibleProvider } from "@vo/llm";
 import { openStorage, type Storage } from "@vo/storage";
 import type { ServerConfig } from "./config.js";
 import { buildServer } from "./server.js";
@@ -51,6 +52,46 @@ export async function startServer(
 
   let storageClosed = false;
 
+  /**
+   * The office's vault, where a pasted key is kept.
+   *
+   * Opened lazily and once: a deployment that never pastes a key never writes
+   * a vault file, and one that does pays for opening it on the first key
+   * rather than on every start. The key itself comes from the environment —
+   * `envKeySource` reads it — and the encrypted records live beside the blobs,
+   * never in the records database.
+   *
+   * Without `VO_VAULT_KEY` there is no keeper at all, and the office refuses to
+   * keep a pasted key instead of storing one it cannot protect.
+   */
+  const keeper = (() => {
+    if (config.vaultKey === null) return undefined;
+    let opening: Promise<Vault> | null = null;
+    const vault = (): Promise<Vault> => {
+      opening ??= Vault.open(
+        new BlobSecretRecordStore(storage.blobs),
+        // From the configuration rather than straight out of the process, so
+        // the key travels the same path as everything else this is told.
+        envKeySource("VO_VAULT_KEY", { VO_VAULT_KEY: config.vaultKey ?? undefined }),
+      );
+      return opening;
+    };
+    return {
+      put: async (name: string, value: string) => (await vault()).put(name, value),
+      update: async (ref: string, value: string) => (await vault()).update(ref, value),
+      get: async (ref: string) => {
+        try {
+          return await (await vault()).get(ref);
+        } catch {
+          // A reference the office no longer holds is an answer, not a crash:
+          // somebody may have rotated the vault or removed the secret by hand.
+          return null;
+        }
+      },
+      delete: async (ref: string) => (await vault()).delete(ref),
+    };
+  })();
+
   const app = buildServer({
     store: storage.relational,
     blobs: storage.blobs,
@@ -73,6 +114,26 @@ export async function startServer(
       const first = problems[0];
       if (described.length === 0 && first !== undefined) throw new Error(first);
       return described.map((tool) => tool.name);
+    },
+    ...(keeper === undefined ? {} : { secrets: keeper }),
+    /**
+     * Asked of the service itself, with the same adapter a turn calls it
+     * through — so what the office writes down is what a run can use.
+     *
+     * The key is resolved by the route and handed over here: a service will not
+     * list its models without one, and a local server will not want one at all.
+     */
+    discoverModels: async (service, apiKey) => {
+      if (service.baseUrl === null) {
+        throw new Error(`${service.name} has no address to ask`);
+      }
+      return openAiCompatibleProvider({
+        id: service.name,
+        baseUrl: service.baseUrl,
+        ...(apiKey === null ? {} : { apiKey }),
+        // Somebody is holding a button down, not a run waiting on a model.
+        timeoutMs: 15_000,
+      }).models();
     },
     allowedOrigins: config.allowedOrigins,
     // Served from the office's own origin when a deployment has one, which is

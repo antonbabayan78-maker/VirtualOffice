@@ -40,8 +40,10 @@ import {
   redactChannel,
   updateNotificationChannel,
   usageRecordOf,
+  createLlmService,
   updateConnection,
   updateConnector,
+  updateLlmService,
   updateOffice,
   validateToolGrants,
   createTask,
@@ -53,6 +55,9 @@ import {
   type Connector,
   type GatedAction,
   type ConnectorId,
+  type LlmService,
+  type LlmServiceId,
+  type UpdateLlmServiceInput,
   type NotificationChannelId,
   type Office,
   type BenchChoice,
@@ -156,6 +161,47 @@ export interface ServerOptions {
    * 501 rather than pretending a connector offers nothing.
    */
   readonly discoverTools?: (connector: Connector) => Promise<readonly string[]>;
+  /**
+   * Where a pasted key is kept. The office's own vault, injected so this
+   * process holds no key material of its own and no test writes one to disk.
+   *
+   * Without it a key cannot be pasted at all: the office says so and names the
+   * other way in, which is a variable the deployment sets. A service pointed at
+   * a model on this machine needs neither.
+   */
+  readonly secrets?: SecretKeeper;
+  /**
+   * Where a service's `tokenEnv` is looked up — this process's environment, in
+   * a deployment. Only ever read to hand a key to something that is about to
+   * make a call with it; never answered to a browser.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Asks one service which models it has, so a local server's list can be
+   * written down — nobody publishes the models on somebody's own machine.
+   *
+   * Injected for the reason `discoverTools` is: this process should open no
+   * socket a test did not ask for. An office without it answers 501.
+   */
+  readonly discoverModels?: (
+    service: LlmService,
+    apiKey: string | null,
+  ) => Promise<readonly string[]>;
+}
+
+/**
+ * The slice of a vault the office uses: keep a key, replace it, read it back
+ * for something that is about to make a call, let it go.
+ *
+ * `@vo/connectors`' `Vault` satisfies this. Named here so the office depends on
+ * the four things it does rather than on the vault's whole surface.
+ */
+export interface SecretKeeper {
+  put(name: string, value: string): Promise<string>;
+  update(ref: string, value: string): Promise<string>;
+  /** Null when the office no longer holds it, rather than a throw. */
+  get(ref: string): Promise<string | null>;
+  delete(ref: string): Promise<boolean>;
 }
 
 /** The events a task may be given; anything else is a client mistake, not a 500. */
@@ -211,6 +257,7 @@ export const OFFICE_PATHS: readonly string[] = [
   "/tasks",
   "/connections",
   "/connectors",
+  "/services",
   "/channels",
   "/documents",
 ];
@@ -1843,6 +1890,278 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.connectors.delete(id);
     events.publish(connector.officeId, { kind: "connector.deleted", id });
     return reply.code(204).send();
+  });
+
+  // -- services --------------------------------------------------------------
+
+  /**
+   * The AI services this office can reach.
+   *
+   * A service holds no key. It names the variable that holds one, or refers to
+   * one this office is keeping in its vault, and the two routes below are the
+   * only way either is set. A record that held a key would be a key in every
+   * backup of this database, in every snapshot, and in every office file
+   * somebody pasted into a message.
+   */
+  /** What a variable holds here: this deployment's environment, or a test's. */
+  const fromEnv = (name: string): string | null => {
+    const value = (options.env ?? process.env)[name];
+    return value === undefined || value.length === 0 ? null : value;
+  };
+
+  const servicesIn = async (officeId: string) =>
+    (await store.services.list({ where: { officeId: officeId as OfficeId } })).items;
+
+  app.get("/offices/:officeId/services", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    return { items: await servicesIn(officeId) };
+  });
+
+  app.post("/offices/:officeId/services", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const body = request.body as Record<string, unknown>;
+
+    // Read before handing over, as a connector's is: core trims and walks what
+    // it is given, so an untyped body would arrive as a thrown TypeError
+    // rather than as a refusal.
+    const problems: ValidationError[] = [];
+    const name = text(body, "name", problems);
+    const kind = text(body, "kind", problems);
+    const baseUrl = text(body, "baseUrl", problems);
+    const tokenEnv = text(body, "tokenEnv", problems);
+    if (body["models"] !== undefined && !Array.isArray(body["models"])) {
+      problems.push({ path: "models", message: "must be a list of models" });
+    }
+    if (problems.length > 0) return fail(reply, problems);
+
+    return created(
+      reply,
+      createLlmService(
+        {
+          officeId: officeId as OfficeId,
+          kind: kind as never,
+          name,
+          ...(baseUrl.length === 0 ? {} : { baseUrl }),
+          // A key is never taken here, whatever the body offers: there is one
+          // way in for one, and it is the credential route.
+          ...(tokenEnv.length === 0 ? {} : { tokenEnv }),
+          ...(Array.isArray(body["models"]) ? { models: body["models"] as never } : {}),
+          ...(typeof body["enabled"] === "boolean" ? { enabled: body["enabled"] } : {}),
+        },
+        await servicesIn(officeId),
+        { id: () => newId() as LlmServiceId, now },
+      ),
+      officeId,
+      "service.created",
+      (service) => store.services.put(service),
+    );
+  });
+
+  /** The one this id names, or null with a 404 already sent. */
+  const serviceOr404 = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<LlmService | null> => {
+    const { id } = request.params as { id: string };
+    const service = await store.services.get(id);
+    if (service === null) {
+      await missing(reply, "service");
+      return null;
+    }
+    return service;
+  };
+
+  /** Stores a changed service and tells the canvas, or answers with why not. */
+  const saveService = async (
+    reply: FastifyReply,
+    service: LlmService,
+    changes: UpdateLlmServiceInput,
+  ): Promise<FastifyReply | LlmService> => {
+    const siblings = (await servicesIn(service.officeId)).filter(
+      (other) => other.id !== service.id,
+    );
+    const updated = updateLlmService(service, changes, siblings);
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.services.put(updated.value);
+    events.publish(service.officeId, { kind: "service.updated", id: service.id });
+    return updated.value;
+  };
+
+  app.patch("/services/:id", async (request, reply) => {
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(service.officeId, service.id, since)) {
+      return reply
+        .code(409)
+        .send({ error: "this service changed since you loaded it", current: service });
+    }
+    // A credential is not a field of the record; `secretRef` and `tokenEnv`
+    // belong to the credential route, which is what keeps the key out of here.
+    const { secretRef: _ref, tokenEnv: _env, ...changes } = request.body as Record<string, never>;
+    return saveService(reply, service, changes);
+  });
+
+  app.delete("/services/:id", async (request, reply) => {
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+    // The key goes with it: nothing would ever ask for it again, and a vault
+    // full of keys for services nobody has is a vault nobody can audit.
+    if (service.secretRef !== null && options.secrets !== undefined) {
+      await options.secrets.delete(service.secretRef);
+    }
+    await store.services.delete(service.id);
+    events.publish(service.officeId, { kind: "service.deleted", id: service.id });
+    return reply.code(204).send();
+  });
+
+  /**
+   * The key for one service.
+   *
+   * **A key may be written here and never read back.** Anybody the office let
+   * in may set one — the canvas is how somebody adds a service in the first
+   * place — and `GET` answers a bearer token only, never the session cookie a
+   * browser holds. Otherwise anybody who could open the canvas could walk off
+   * with every key in the office, which is exactly what a browser must not be
+   * able to do with a credential it was given for a different purpose.
+   *
+   * A pasted key is handed to the vault and the service keeps the reference.
+   * Without a vault the office refuses to keep one and says so, naming the
+   * other way in: a variable this deployment sets. A service pointed at a model
+   * on this machine needs neither.
+   */
+  app.put("/services/:id/credential", async (request, reply) => {
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+    const body = request.body as Record<string, unknown>;
+
+    const problems: ValidationError[] = [];
+    const apiKey = text(body, "apiKey", problems).trim();
+    const tokenEnv = text(body, "tokenEnv", problems).trim();
+    if (problems.length > 0) return fail(reply, problems);
+    if (apiKey.length === 0 && tokenEnv.length === 0) {
+      return fail(reply, [
+        {
+          path: "apiKey",
+          message: "paste a key, or name the variable that holds one",
+        },
+      ]);
+    }
+    if (apiKey.length > 0 && tokenEnv.length > 0) {
+      return fail(reply, [{ path: "apiKey", message: "paste a key or name a variable, not both" }]);
+    }
+
+    // Naming a variable: the office lets go of any key it was keeping for this
+    // service, because nothing would read it and nothing says which would win.
+    if (tokenEnv.length > 0) {
+      const kept = service.secretRef;
+      const saved = await saveService(reply, service, { tokenEnv, secretRef: null });
+      if (!("id" in saved)) return saved;
+      if (kept !== null) await options.secrets?.delete(kept);
+      return saved;
+    }
+
+    const secrets = options.secrets;
+    if (secrets === undefined) {
+      return reply.code(501).send({
+        error:
+          "this office cannot keep a key; name the variable that holds one instead," +
+          " or point the service at a model on this machine",
+      });
+    }
+    // Replaced in place where there is one already, so a service does not
+    // accumulate keys nobody can tell apart.
+    const ref =
+      service.secretRef === null
+        ? await secrets.put(`service:${service.name}`, apiKey)
+        : await secrets.update(service.secretRef, apiKey);
+    return saveService(reply, service, { secretRef: ref, tokenEnv: null });
+  });
+
+  app.delete("/services/:id/credential", async (request, reply) => {
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+    if (service.secretRef !== null) await options.secrets?.delete(service.secretRef);
+    return saveService(reply, service, { secretRef: null, tokenEnv: null });
+  });
+
+  app.get("/services/:id/credential", async (request, reply) => {
+    // A bearer token, never the cookie: see the note on the route above.
+    if (bearerToken(request.headers.authorization) === null) {
+      return reply
+        .code(403)
+        .send({ error: "a key is handed to a worker's own token, never to a browser" });
+    }
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+
+    if (service.tokenEnv !== null) {
+      const value = fromEnv(service.tokenEnv);
+      if (value === null) {
+        return reply
+          .code(404)
+          .send({ error: `the variable ${service.tokenEnv} holds nothing here` });
+      }
+      return { apiKey: value };
+    }
+    if (service.secretRef === null || options.secrets === undefined) {
+      return missing(reply, "key");
+    }
+    const kept = await options.secrets.get(service.secretRef);
+    if (kept === null) return missing(reply, "key");
+    return { apiKey: kept };
+  });
+
+  /**
+   * What this service actually offers, asked of the service itself.
+   *
+   * The same move as a connector's **Find its tools**, and the only way a local
+   * server's list is ever known: nobody publishes the models on somebody's own
+   * machine. An empty answer changes nothing — a server that is up but confused
+   * would otherwise empty the list and with it every price somebody typed.
+   *
+   * Prices and limits already written down are kept for a model that is still
+   * offered. Discovering again must not quietly make everything unpriced.
+   */
+  app.post("/services/:id/discover", async (request, reply) => {
+    const service = await serviceOr404(request, reply);
+    if (service === null) return reply;
+
+    const discover = options.discoverModels;
+    if (discover === undefined) {
+      return reply
+        .code(501)
+        .send({ error: "this office has no way to ask a service what it offers" });
+    }
+
+    let apiKey: string | null = null;
+    if (service.tokenEnv !== null) {
+      apiKey = fromEnv(service.tokenEnv);
+    } else if (service.secretRef !== null && options.secrets !== undefined) {
+      apiKey = await options.secrets.get(service.secretRef);
+    }
+
+    let offered: readonly string[];
+    try {
+      offered = await discover(service, apiKey);
+    } catch (error) {
+      return reply
+        .code(502)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (offered.length === 0) {
+      return reply.code(502).send({
+        error: `${service.name} offered no models, so nothing was changed`,
+        current: service,
+      });
+    }
+
+    const known = new Map(service.models.map((model) => [model.id, model]));
+    const models = offered.map((id) => known.get(id) ?? { id });
+    return saveService(reply, service, { models });
   });
 
   // -- documents -------------------------------------------------------------

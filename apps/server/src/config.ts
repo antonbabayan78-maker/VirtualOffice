@@ -33,6 +33,15 @@ export interface ServerConfig {
    * hold no credential: same origin, so the sign-in cookie is simply sent.
    */
   readonly webRoot: string | null;
+  /**
+   * The key that opens this office's secrets vault, or null when nobody set
+   * one. Null means a pasted key is refused and the office says so: naming a
+   * variable still works, and a model on this machine needs neither.
+   *
+   * It is read from the environment and nowhere else. A key in the records
+   * would be a key in every backup of the thing it protects.
+   */
+  readonly vaultKey: string | null;
 }
 
 export const DEFAULT_PORT = 3100;
@@ -85,6 +94,7 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
   const coordination = url("VO_COORDINATION", "memory:");
 
   const webRoot = (env["VO_WEB_ROOT"] ?? "").trim();
+  const vaultKey = (env["VO_VAULT_KEY"] ?? "").trim();
 
   const allowedOrigins = (env["VO_ALLOWED_ORIGINS"] ?? "")
     .split(",")
@@ -109,5 +119,6 @@ export function readServerConfig(env: Env): Result<ServerConfig> {
     },
     allowedOrigins,
     webRoot: webRoot.length === 0 ? null : webRoot,
+    vaultKey: vaultKey.length === 0 ? null : vaultKey,
   });
 }

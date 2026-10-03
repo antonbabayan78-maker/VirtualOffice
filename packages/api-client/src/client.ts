@@ -20,6 +20,7 @@ import type {
   Document,
   Employee,
   EmployeeStatus,
+  LlmService,
   Office,
   RunState,
   Task,
@@ -158,6 +159,38 @@ export interface ApiClient {
    * they become grantable without anybody typing them.
    */
   discoverConnectorTools(id: string): Promise<ApiResult<Connector>>;
+  /** The AI services this office can reach, switched on or not. */
+  listServices(officeId: string): Promise<ApiResult<readonly LlmService[]>>;
+  createService(
+    officeId: string,
+    input: Readonly<Record<string, unknown>>,
+  ): Promise<ApiResult<LlmService>>;
+  patchService(
+    id: string,
+    changes: Readonly<Record<string, unknown>>,
+    sinceOffset: number,
+  ): Promise<ApiResult<LlmService>>;
+  deleteService(id: string): Promise<ApiResult<true>>;
+  /**
+   * Sets the key for a service: pasted, which the office keeps in its vault, or
+   * named as a variable the deployment sets. Answers with the service, which
+   * never contains the key.
+   */
+  setServiceCredential(
+    id: string,
+    credential: { readonly apiKey: string } | { readonly tokenEnv: string },
+  ): Promise<ApiResult<LlmService>>;
+  clearServiceCredential(id: string): Promise<ApiResult<LlmService>>;
+  /**
+   * The key itself, for something that is about to make a call with it.
+   *
+   * Answered to a bearer token only, so a canvas asking gets nothing. Null
+   * means the service keeps none, which is not a failure: a model on this
+   * machine needs no key.
+   */
+  serviceCredential(id: string): Promise<ApiResult<string | null>>;
+  /** Asks a service which models it has and gets back the service with them written down. */
+  discoverServiceModels(id: string): Promise<ApiResult<LlmService>>;
   /**
    * What the office is holding for a run in flight: where it got to, and what a
    * person has decided about the calls it is waiting on.
@@ -294,6 +327,18 @@ function reviveConnector(raw: Record<string, unknown>): Connector {
     enabled: raw["enabled"] !== false,
     createdAt: asDate(raw["createdAt"]),
   } as unknown as Connector;
+}
+
+function reviveService(raw: Record<string, unknown>): LlmService {
+  return {
+    ...raw,
+    // An office that predates a field says nothing about it: a service with no
+    // models is one nobody has asked yet, and one that says nothing about being
+    // off is on.
+    models: Array.isArray(raw["models"]) ? raw["models"] : [],
+    enabled: raw["enabled"] !== false,
+    createdAt: asDate(raw["createdAt"]),
+  } as unknown as LlmService;
 }
 
 function reviveOffice(raw: Record<string, unknown>): Office {
@@ -652,6 +697,45 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     discoverConnectorTools: async (id) =>
       interpret(await call(`/connectors/${id}/discover`, { method: "POST" }), reviveConnector),
+
+    listServices: async (officeId) =>
+      interpret(await call(`/offices/${officeId}/services`), (raw) =>
+        ((raw["items"] ?? []) as Record<string, unknown>[]).map(reviveService),
+      ),
+
+    createService: async (officeId, input) =>
+      interpret(
+        await call(`/offices/${officeId}/services`, {
+          method: "POST",
+          body: JSON.stringify(input),
+        }),
+        reviveService,
+      ),
+
+    patchService: (id, changes, sinceOffset) =>
+      patch(`/services/${id}`, changes, sinceOffset, reviveService),
+
+    deleteService: async (id) => nothing(await call(`/services/${id}`, { method: "DELETE" })),
+
+    setServiceCredential: async (id, credential) =>
+      interpret(await put(`/services/${id}/credential`, credential), reviveService),
+
+    clearServiceCredential: async (id) =>
+      interpret(await call(`/services/${id}/credential`, { method: "DELETE" }), reviveService),
+
+    serviceCredential: async (id) => {
+      const response = await call(`/services/${id}/credential`);
+      // Nothing kept is an answer, not a failure: a service pointed at a model
+      // on this machine has no key, and a worker asking is not doing anything
+      // wrong.
+      if (response.ok && response.status === 404) return { ok: true, value: null };
+      return interpret(response, (raw) =>
+        typeof raw["apiKey"] === "string" ? raw["apiKey"] : null,
+      );
+    },
+
+    discoverServiceModels: async (id) =>
+      interpret(await call(`/services/${id}/discover`, { method: "POST" }), reviveService),
 
     listApprovals: async (officeId) =>
       interpret(await call(`/offices/${officeId}/approvals`), (raw) =>
