@@ -1783,7 +1783,19 @@ describe("standing in for a real person, from the canvas", () => {
         },
         patchEmployee: (id: string, changes: Record<string, unknown>) => {
           sent.push({ what: "patch", body: { id, changes } });
-          return Promise.resolve(answers["patch"] ?? { ok: true, value: { ...ada, ...changes } });
+          // The office stamps who recorded a voice, as the real one does.
+          const understudy =
+            changes["understudy"] === undefined || changes["understudy"] === null
+              ? changes["understudy"]
+              : {
+                  ...(changes["understudy"] as Record<string, unknown>),
+                  recordedBy: "owner-1",
+                  recordedAt: new Date("2026-09-28T09:00:00Z"),
+                  corrections: [],
+                };
+          return Promise.resolve(
+            answers["patch"] ?? { ok: true, value: { ...ada, ...changes, understudy } },
+          );
         },
       } as never,
     };
@@ -1819,6 +1831,32 @@ describe("standing in for a real person, from the canvas", () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.problems[0]?.message).toMatch(/no model to study with/);
     expect(spy.sent).toHaveLength(1);
+  });
+
+  it("records a voice the canvas cannot know the recorder of", async () => {
+    // Found by using it: the office stamps who said so from whoever is calling,
+    // and a canvas has no way to know that name. Previewing the change locally
+    // would mean refusing it for a field the canvas was never going to fill.
+    const spy = connected();
+
+    const result = await store.getState().saveEmployee(ada.id, {
+      understudy: { person: "Anna Petrova", recordedBy: "", enabled: true, card: null },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toMatchObject({ what: "patch" });
+    expect(store.getState().employees.find((one) => one.id === ada.id)?.understudy?.person).toBe(
+      "Anna Petrova",
+    );
+  });
+
+  it("still refuses what it can judge for itself", async () => {
+    const spy = connected();
+
+    const result = await store.getState().saveEmployee(ada.id, { name: "" });
+
+    expect(result.ok).toBe(false);
+    expect(spy.sent).toHaveLength(0);
   });
 
   it("records what the real person changed", async () => {

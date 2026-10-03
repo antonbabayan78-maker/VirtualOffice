@@ -450,6 +450,25 @@ function drawable(
  * answer with, and a settings panel that rearranges itself while somebody is
  * using it is worse than one that loads slowly.
  */
+/**
+ * A change as this canvas may show it before the office has answered.
+ *
+ * Only the voice differs from what was asked: `recordedBy` is the office's to
+ * stamp, so the preview carries what it already holds rather than the empty
+ * value a drawer has no way to fill.
+ */
+function previewed(changes: UpdateEmployeeInput, before: Employee): UpdateEmployeeInput {
+  const asked = changes.understudy;
+  if (asked === undefined || asked === null || typeof asked !== "object") return changes;
+  return {
+    ...changes,
+    understudy: {
+      ...(asked as Record<string, unknown>),
+      recordedBy: before.understudy?.recordedBy ?? "this canvas",
+    },
+  };
+}
+
 /** One person, as the office last answered with them. */
 function replaceEmployee(
   set: (partial: { employees: readonly Employee[] }) => void,
@@ -1405,7 +1424,12 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
           return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
         }
 
-        const applied = get().updateEmployee(id, changes);
+        // Who recorded a voice is stamped by the office from whoever is
+        // calling, and this canvas cannot know that name. It previews the
+        // change with what the office already holds — or, on a canvas with no
+        // office at all, with itself, which is then the truth — and the office's
+        // answer replaces it a moment later.
+        const applied = get().updateEmployee(id, previewed(changes, before));
         if (isErr(applied)) return { ok: false, problems: applied.error };
         if (connected === undefined) return { ok: true };
 
