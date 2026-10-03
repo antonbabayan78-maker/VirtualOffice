@@ -450,3 +450,176 @@ describe("a worker that can decide a shootout", () => {
     expect((event["attribution"] as Record<string, unknown>)["taskId"]).toBeUndefined();
   });
 });
+
+describe("a worker calling one of its office's own services", () => {
+  /**
+   * An office with one local service, one person who names it, and one piece
+   * of work assigned to them. The same fake fetch answers both the office and
+   * the service, so a whole tick runs without a socket.
+   */
+  function anOfficeWithAService() {
+    const posted: Record<string, unknown>[] = [];
+    const called: { url: string; body: Record<string, unknown> }[] = [];
+    const at = "2026-10-01T09:00:00.000Z";
+    const base = {
+      officeId: "office-1",
+      departmentId: "dept-design",
+      createdAt: at,
+      priority: "normal",
+    };
+    const department = {
+      ...base,
+      id: "dept-design",
+      name: "Design",
+      schedule: { kind: "always" },
+      runState: "running",
+      reviewPolicy: { kind: "direct" },
+      benches: [],
+      toolGrants: [],
+      definitionOfDone: [],
+    };
+    const employee = {
+      ...base,
+      id: "emp-iris",
+      name: "Iris",
+      role: "Designer",
+      status: "active",
+      // The whole point: this person is on the office's own local service.
+      llm: { provider: "workshop", model: "qwen3-coder", fallbacks: [] },
+      skillIds: [],
+      toolGrants: [],
+      schedule: null,
+      statusChangedAt: at,
+    };
+    const task = {
+      ...base,
+      id: "task-1",
+      assigneeId: "emp-iris",
+      title: "Draw the export screen",
+      brief: "",
+      status: "assigned",
+      reviewerIds: [],
+      approvals: [],
+      benchId: null,
+      history: [{ at, to: "assigned" }],
+      acceptanceCriteria: [],
+      route: [],
+      artifacts: [],
+      dependsOn: [],
+      gatedActions: [],
+      stage: null,
+    };
+    const service = {
+      id: "svc-1",
+      officeId: "office-1",
+      kind: "openai-compatible",
+      name: "workshop",
+      baseUrl: "http://10.0.0.12:11434/v1",
+      tokenEnv: null,
+      secretRef: null,
+      models: [{ id: "qwen3-coder", pricing: { inputPerMTok: 1, outputPerMTok: 2 } }],
+      enabled: true,
+      createdAt: at,
+    };
+
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+
+    const fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? init.body : "{}";
+
+      if (url.startsWith("http://10.0.0.12:11434/v1")) {
+        called.push({ url, body: JSON.parse(body) as Record<string, unknown> });
+        return json({
+          id: "chatcmpl-1",
+          model: "qwen3-coder",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "tool_calls",
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    type: "function",
+                    function: {
+                      name: "submit_work",
+                      arguments: JSON.stringify({ summary: "screen drawn" }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 1_000_000, completion_tokens: 0 },
+        });
+      }
+      if (method === "POST" && url.includes("/usage")) {
+        posted.push(JSON.parse(body) as Record<string, unknown>);
+        return json({ id: "usage-1" }, 201);
+      }
+      if (url.includes("/services")) return json({ items: [service] });
+      if (url.endsWith("/employees/emp-iris")) return json(employee);
+      if (url.endsWith("/departments/dept-design")) return json(department);
+      if (url.endsWith("/tasks/task-1")) return json(task);
+      if (url.includes("/departments")) return json({ items: [department] });
+      if (url.includes("/employees")) return json({ items: [employee] });
+      if (url.includes("/tasks") && method === "GET") return json({ items: [task] });
+      if (url.includes("/events")) return json(task);
+      if (url.endsWith("/offices/office-1")) {
+        return json({
+          id: "office-1",
+          name: "Acme",
+          schedule: { kind: "always" },
+          priority: "normal",
+          runState: "running",
+          configVersion: 1,
+          createdAt: at,
+        });
+      }
+      return json({ items: [] });
+    }) as unknown as typeof globalThis.fetch;
+
+    return { fetch, posted, called };
+  }
+
+  it("calls the service the employee names rather than the one it was built with", async () => {
+    const office = anOfficeWithAService();
+    const worker = createOfficeWorker({
+      config,
+      // What a deployment with no Anthropic key has: it must not be what runs.
+      provider: rehearsalProvider(),
+      fetch: office.fetch,
+    });
+
+    await worker.tick();
+
+    expect(office.called).toHaveLength(1);
+    expect(office.called[0]?.url).toBe("http://10.0.0.12:11434/v1/chat/completions");
+    expect(office.called[0]?.body["model"]).toBe("qwen3-coder");
+  });
+
+  it("prices the call with what the owner said that service costs", async () => {
+    // A local model priced at nothing and a hosted one priced by hand are the
+    // two things the built-in table cannot know.
+    const office = anOfficeWithAService();
+    const worker = createOfficeWorker({
+      config,
+      provider: rehearsalProvider(),
+      fetch: office.fetch,
+    });
+
+    await worker.tick();
+
+    const event = office.posted.find((one) => one["kind"] === "llm_call");
+    expect(event?.["provider"]).toBe("workshop");
+    expect((event?.["cost"] as { totalUsd: number } | null)?.totalUsd).toBeCloseTo(1, 6);
+    expect(event?.["pricingError"]).toBeUndefined();
+  });
+});

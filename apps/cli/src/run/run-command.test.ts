@@ -115,3 +115,26 @@ employees:`,
     expect(h.output()).toMatch(/Engineering/);
   });
 });
+
+describe("a service the run could not build", () => {
+  const WITH_A_KEPT_KEY = `${YAML}
+services:
+  - id: svc-openai
+    kind: openai-compatible
+    name: openai
+    baseUrl: https://api.openai.com/v1
+    secretRef: vault://abc
+`;
+
+  it("is said out loud, because the run quietly uses another model instead", async () => {
+    // `vo run` has no office to ask for a kept key, so this service is left
+    // out and every employee who names it falls back. Silence here is how
+    // somebody discovers it from the bill.
+    const h = harness(WITH_A_KEPT_KEY);
+
+    await runCommand(["office.yaml", "--task", "Write the parser"], h.deps);
+
+    expect(h.output()).toContain("openai");
+    expect(h.output()).toContain("vault://abc");
+  });
+});

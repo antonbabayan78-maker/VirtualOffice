@@ -303,3 +303,65 @@ describe("InMemoryUsageSink", () => {
     ]);
   });
 });
+
+describe("a price list that changes while the process runs", () => {
+  it("is asked each time, so a service added today prices a call made today", async () => {
+    // An office's own services are added, repriced and switched off on the
+    // canvas. A recorder built once with the prices as they were would report
+    // every call on a new service as unpriced for the life of the process.
+    const sink = new InMemoryUsageSink();
+    let prices = defaultModelRegistry();
+    const recorder = new UsageRecorder({ sink, registry: () => prices });
+    const workshop = { provider: "workshop", model: "qwen3-coder" };
+
+    const before = await recorder.recordLlmCall({
+      ...workshop,
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+      attribution,
+      durationMs: 10,
+    });
+    expect(before.cost).toBeNull();
+
+    prices = defaultModelRegistry().register({
+      provider: "workshop",
+      id: "qwen3-coder",
+      displayName: "Qwen3 Coder",
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+      tier: "local",
+      capabilities: {
+        tools: true,
+        streaming: true,
+        promptCaching: false,
+        vision: false,
+        thinking: false,
+        batch: false,
+      },
+      pricing: {
+        inputPerMTok: 0.1,
+        outputPerMTok: 0.2,
+        cacheReadPerMTok: 0.1,
+        cacheWritePerMTok: 0,
+      },
+    });
+
+    const after = await recorder.recordLlmCall({
+      ...workshop,
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+      attribution,
+      durationMs: 10,
+    });
+
+    expect(after.cost?.totalUsd).toBeCloseTo(0.1, 6);
+  });
+});
