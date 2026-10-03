@@ -4622,3 +4622,62 @@ describe("asking a service what models it has", () => {
     expect((await post(`/services/${id}/discover`, {})).statusCode).toBe(501);
   });
 });
+
+describe("teaching somebody over the wire", () => {
+  const hire = async (body: Record<string, unknown> = {}) => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const hired = await post(`/offices/${officeId}/employees`, {
+      name: "Sam",
+      role: "Clerk",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      ...body,
+    });
+    return { officeId, hired };
+  };
+
+  it("hires somebody already told how to work", async () => {
+    const { hired } = await hire({
+      instructions: "Always check the order number before replying.",
+      examples: [{ when: "an angry customer", good: "Thank you for flagging this." }],
+    });
+
+    expect(hired.statusCode).toBe(201);
+    expect(hired.json()).toMatchObject({
+      instructions: "Always check the order number before replying.",
+      examples: [{ when: "an angry customer", good: "Thank you for flagging this." }],
+    });
+  });
+
+  it("hires somebody told nothing, as every office did before this", async () => {
+    const { hired } = await hire();
+
+    expect(hired.json()).toMatchObject({ instructions: null, examples: [] });
+  });
+
+  it("teaches somebody already hired, and unteaches them again", async () => {
+    const { hired } = await hire();
+    const id = hired.json<{ id: string }>().id;
+
+    const taught = await patch(`/employees/${id}`, { instructions: "Write in short paragraphs." });
+    expect(taught.json<{ instructions: string }>().instructions).toBe("Write in short paragraphs.");
+
+    const untaught = await patch(`/employees/${id}`, { instructions: null });
+    expect(untaught.json<{ instructions: string | null }>().instructions).toBeNull();
+  });
+
+  it("refuses what core refuses, in core's words", async () => {
+    const { hired } = await hire({ examples: [{ when: "no work attached" }] });
+
+    expect(hired.statusCode).toBe(400);
+    expect(hired.json<{ errors: { path: string }[] }>().errors[0]?.path).toBe("examples[0].good");
+  });
+
+  it("refuses a paragraph nobody could have meant", async () => {
+    const { hired } = await hire({ instructions: "x".repeat(20_001) });
+
+    expect(hired.statusCode).toBe(400);
+  });
+});

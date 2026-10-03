@@ -5,6 +5,7 @@ import {
   createDepartment,
   createEmployee,
   unwrap,
+  updateEmployee,
   type Connector,
   type ConnectorId,
   type Department,
@@ -435,5 +436,124 @@ describe("pausing one person", () => {
 
     expect(screen.queryByRole("group", { name: /picks up work/i })).toBeNull();
     expect(screen.getByRole("dialog")).toHaveTextContent(/no longer works here|terminated/i);
+  });
+});
+
+describe("teaching somebody on their own panel", () => {
+  const saved = () => store.getState().employees.find((one) => one.id === ada.id);
+
+  it("writes a paragraph of standing instructions", async () => {
+    const user = userEvent.setup();
+
+    await user.type(
+      screen.getByLabelText("How they work"),
+      "Always check the order number before replying.",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(saved()?.instructions).toBe("Always check the order number before replying.");
+  });
+
+  it("shows what somebody was already told", () => {
+    view.unmount();
+    const taught = unwrap(
+      updateEmployee(ada, { instructions: "Write in short paragraphs." }, { supervisor: null }),
+    );
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([eng], [taught, grace]);
+    store.getState().selectEmployee(ada.id);
+    render(<EmployeeDrawer store={store} />);
+
+    expect(screen.getByLabelText("How they work")).toHaveValue("Write in short paragraphs.");
+  });
+
+  it("unteaches somebody when the paragraph is cleared", async () => {
+    view.unmount();
+    const taught = unwrap(
+      updateEmployee(ada, { instructions: "Forget this." }, { supervisor: null }),
+    );
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([eng], [taught, grace]);
+    store.getState().selectEmployee(ada.id);
+    render(<EmployeeDrawer store={store} />);
+    const user = userEvent.setup();
+
+    await user.clear(screen.getByLabelText("How they work"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(store.getState().employees.find((one) => one.id === ada.id)?.instructions).toBeNull();
+  });
+
+  it("says where instructions stop and a skill begins", () => {
+    // Without this, every skill in the office ends up pasted into somebody's
+    // instructions — and so does everything they were ever told once.
+    const drawer = screen.getByRole("dialog");
+
+    expect(drawer).toHaveTextContent(/skill/i);
+    expect(drawer).toHaveTextContent(/learn/i);
+  });
+
+  it("adds an example of what good looks like", async () => {
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("When"), "an angry customer");
+    await user.type(screen.getByLabelText("What good looks like"), "Thank you for flagging this.");
+    await user.click(screen.getByRole("button", { name: "Add example" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(saved()?.examples).toEqual([
+      { when: "an angry customer", good: "Thank you for flagging this." },
+    ]);
+  });
+
+  it("will not add an example with no work in it", async () => {
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("When"), "a situation and nothing else");
+
+    expect(screen.getByRole("button", { name: "Add example" })).toBeDisabled();
+  });
+
+  it("takes an example away again", async () => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("What good looks like"), "Short. Specific.");
+    await user.click(screen.getByRole("button", { name: "Add example" }));
+
+    await user.click(screen.getByRole("button", { name: /remove example/i }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(saved()?.examples).toEqual([]);
+  });
+
+  it("keeps an example out of the office until the panel is saved", async () => {
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText("What good looks like"), "Not saved yet.");
+    await user.click(screen.getByRole("button", { name: "Add example" }));
+
+    expect(saved()?.examples).toEqual([]);
+  });
+
+  it("says what was wrong rather than saving a paragraph nobody could have meant", async () => {
+    const user = userEvent.setup();
+    const field = screen.getByLabelText("How they work");
+
+    // Typed rather than pasted would take a minute; this is the same thing.
+    await act(async () => {
+      await user.click(field);
+    });
+    await user.paste("x".repeat(20_001));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/instructions/i);
+    expect(saved()?.instructions).toBeNull();
   });
 });
