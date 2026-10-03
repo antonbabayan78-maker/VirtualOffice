@@ -1324,3 +1324,139 @@ describe("answering what the office is waiting for", () => {
     expect(store.getState().waiting).toHaveLength(1);
   });
 });
+
+describe("changing a piece of work from the board", () => {
+  const at = new Date("2026-09-28T09:00:00Z");
+  const work = (overrides: Record<string, unknown> = {}): Task =>
+    ({
+      id: "task-1",
+      officeId,
+      departmentId: eng.id,
+      title: "Write the parser",
+      brief: "",
+      priority: "normal",
+      status: "assigned",
+      assigneeId: ada.id,
+      contestId: null,
+      won: null,
+      reviewerIds: [],
+      approvals: [],
+      stage: null,
+      gatedActions: [],
+      dependsOn: [],
+      artifacts: [],
+      route: [],
+      acceptanceCriteria: [],
+      checkedBy: [],
+      tokenBudget: null,
+      deadline: null,
+      history: [],
+      createdAt: at,
+      updatedAt: at,
+      ...overrides,
+    }) as unknown as Task;
+
+  const board = (answers: Record<string, unknown> = {}) => {
+    const asked: { what: string; body: unknown }[] = [];
+    open([eng], [ada, grace]);
+    store.getState().putTask(work());
+    store.getState().connect({
+      patchTask: (id: string, changes: Record<string, unknown>) => {
+        asked.push({ what: "patch", body: { id, changes } });
+        return Promise.resolve(
+          answers["patch"] ?? { ok: true, value: work({ ...changes, updatedAt: at }) },
+        );
+      },
+      postTaskEvent: (id: string, event: Record<string, unknown>) => {
+        asked.push({ what: "event", body: { id, event } });
+        return Promise.resolve(
+          answers["event"] ?? { ok: true, value: work({ assigneeId: grace.id }) },
+        );
+      },
+    } as never);
+    return asked;
+  };
+
+  const taskNow = () => store.getState().tasks[0];
+
+  it("changes what the work is for, and keeps what the office answered", async () => {
+    const asked = board();
+
+    const outcome = await store.getState().saveTask("task-1" as TaskId, { title: "Write it well" });
+
+    expect(outcome.ok).toBe(true);
+    expect(asked[0]).toEqual({
+      what: "patch",
+      body: { id: "task-1", changes: { title: "Write it well" } },
+    });
+    expect(taskNow()?.title).toBe("Write it well");
+  });
+
+  it("shows the change at once, because a card that waits looks broken", () => {
+    board({ patch: new Promise(() => undefined) });
+
+    void store.getState().saveTask("task-1" as TaskId, { title: "Write it well" });
+
+    expect(taskNow()?.title).toBe("Write it well");
+  });
+
+  it("puts it back when the office refuses the change", async () => {
+    const asked = board({
+      patch: {
+        ok: false,
+        kind: "validation",
+        errors: [{ path: "title", message: "must not be empty" }],
+      },
+    });
+
+    // A change this canvas is happy with and the office is not: the office is
+    // asked, says no, and the card goes back to what it was.
+    const outcome = await store.getState().saveTask("task-1" as TaskId, { title: "Write it well" });
+
+    expect(outcome.ok).toBe(false);
+    expect(asked).toHaveLength(1);
+    expect(taskNow()?.title).toBe("Write the parser");
+  });
+
+  it("refuses a change core would refuse, without asking the office", async () => {
+    const asked = board();
+
+    const outcome = await store.getState().saveTask("task-1" as TaskId, { title: "   " });
+
+    expect(outcome.ok).toBe(false);
+    expect(asked).toEqual([]);
+  });
+
+  it("hands work to somebody else, which is a transition rather than an edit", async () => {
+    const asked = board();
+
+    const outcome = await store
+      .getState()
+      .reassignTask("task-1" as TaskId, grace.id, "Ada is away");
+
+    expect(outcome.ok).toBe(true);
+    expect(asked[0]).toEqual({
+      what: "event",
+      body: {
+        id: "task-1",
+        event: { type: "reassign", toEmployeeId: grace.id, reason: "Ada is away" },
+      },
+    });
+    expect(taskNow()?.assigneeId).toBe(grace.id);
+  });
+
+  it("does not move the work itself, since the office decides whether it may", async () => {
+    board({ event: { ok: false, kind: "validation", errors: [] } });
+
+    await store.getState().reassignTask("task-1" as TaskId, grace.id);
+
+    expect(taskNow()?.assigneeId).toBe(ada.id);
+  });
+
+  it("says so when there is no office to tell", async () => {
+    open([eng], [ada, grace]);
+    store.getState().putTask(work());
+
+    expect((await store.getState().reassignTask("task-1" as TaskId, grace.id)).ok).toBe(false);
+  });
+});

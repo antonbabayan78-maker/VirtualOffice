@@ -18,6 +18,7 @@ import {
   createEmployee,
   err,
   recordContestWin,
+  updateTask,
   setRunState,
   TOOLS_BY_KIND,
   isErr,
@@ -50,6 +51,7 @@ import {
   type Task,
   type TaskId,
   type UpdateDepartmentInput,
+  type UpdateTaskInput,
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
@@ -169,6 +171,17 @@ export interface OfficeStoreState {
   activityOf(id: EmployeeId): ActivityState;
   /** Replaces one task and works out what that means for everyone's colour. */
   putTask(task: Task): void;
+  /**
+   * Changes what a piece of work is for. Optimistic like the drawers: a card
+   * that waits for a round trip before it reads differently looks broken.
+   */
+  saveTask(id: TaskId, changes: UpdateTaskInput): Promise<SaveOutcome>;
+  /**
+   * Hands work to somebody else. Not optimistic: this is a transition, and
+   * whether the office allows it is the office's to say — a board that moved it
+   * on its own would be a second opinion about the state machine.
+   */
+  reassignTask(id: TaskId, toEmployeeId: EmployeeId, reason?: string): Promise<SaveOutcome>;
   /**
    * Says which entry in a shootout won, and why.
    *
@@ -753,6 +766,54 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         }),
 
       putBackToWork: async (taskId) => tellTheOffice(taskId, { type: "unblock" }),
+
+      saveTask: async (id, changes) => {
+        const before = get().tasks.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such piece of work" }] };
+        }
+
+        // Refused here means never sent: the office would only say the same.
+        const applied = updateTask(before, changes, deps.now());
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        get().putTask(applied.value);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.patchTask(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        if (answer.ok) {
+          // What the office holds, not what was sent: it may have tidied it.
+          get().putTask(answer.value);
+          return { ok: true };
+        }
+        get().putTask(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      reassignTask: async (id, toEmployeeId, reason) => {
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to tell" }],
+          };
+        }
+
+        const answer = await connected.postTaskEvent(id, {
+          type: "reassign",
+          toEmployeeId,
+          ...(reason === undefined || reason.trim().length === 0 ? {} : { reason: reason.trim() }),
+        });
+        if (answer.ok) {
+          get().putTask(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
 
       removeTask: (id) => {
         const tasks = get().tasks.filter((candidate) => candidate.id !== id);

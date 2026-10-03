@@ -1463,3 +1463,61 @@ describe("what the office is waiting on a person for", () => {
     expect(result.ok && result.value).toEqual([]);
   });
 });
+
+describe("changing a piece of work", () => {
+  const taskRow = {
+    id: "task-1",
+    officeId: "office-1",
+    departmentId: "dept-eng",
+    title: "Write the YAML parser",
+    status: "assigned",
+    acceptanceCriteria: ["handles malformed input"],
+    history: [],
+    createdAt: "2026-10-03T09:00:00.000Z",
+    updatedAt: "2026-10-03T10:00:00.000Z",
+  };
+
+  it("sends what changed, and says what it was working from", async () => {
+    let offset: string | null = null;
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.patch(`${BASE}/tasks/task-1`, async ({ request }) => {
+        offset = request.headers.get("x-vo-since-offset");
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(taskRow);
+      }),
+    );
+
+    const result = await client().patchTask("task-1", { title: "Write the YAML parser" }, 7);
+
+    expect(offset).toBe("7");
+    expect(sent).toEqual({ title: "Write the YAML parser" });
+    if (!result.ok) throw new Error("expected the change to be kept");
+    expect(result.value.title).toBe("Write the YAML parser");
+    // The date trap again: a task whose updatedAt stayed a string is a board
+    // that throws the moment it sorts by it.
+    expect(result.value.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it("carries back what the office refused", async () => {
+    server.use(
+      http.patch(`${BASE}/tasks/task-1`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "title", message: "must not be empty" }] },
+          {
+            status: 400,
+          },
+        ),
+      ),
+    );
+
+    const result = await client().patchTask("task-1", { title: "" }, 0);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.path).toBe("title");
+    } else {
+      throw new Error("expected a refusal naming the field");
+    }
+  });
+});

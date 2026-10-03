@@ -224,6 +224,16 @@ export interface ApiClient {
     changes: Readonly<Record<string, unknown>>,
     sinceOffset: number,
   ): Promise<ApiResult<Connection>>;
+  /**
+   * What a piece of work is for — its title, its brief, what would make it
+   * acceptable, how urgent it is. Not who is holding it and not how far along
+   * it is: those are transitions, and `postTaskEvent` is how they happen.
+   */
+  patchTask(
+    id: string,
+    changes: Readonly<Record<string, unknown>>,
+    sinceOffset: number,
+  ): Promise<ApiResult<Task>>;
   patchDepartment(
     id: string,
     changes: Readonly<Record<string, unknown>>,
@@ -764,6 +774,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     patchConnection: (id, changes, sinceOffset) =>
       patch(`/connections/${id}`, changes, sinceOffset, reviveConnection),
+
+    patchTask: (id, changes, sinceOffset) =>
+      patch(`/tasks/${id}`, changes, sinceOffset, reviveTask),
 
     patchDepartment: (id, changes, sinceOffset) =>
       patch(`/departments/${id}`, changes, sinceOffset, reviveDepartment),

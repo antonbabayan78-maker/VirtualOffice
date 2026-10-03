@@ -53,6 +53,7 @@ function scriptedApi(): {
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
     discoverConnectorTools: () => Promise.reject(new Error("not used here")),
+    patchTask: () => Promise.reject(new Error("not used here")),
     loadRunState: () => Promise.reject(new Error("not used here")),
     saveRunCheckpoint: () => Promise.reject(new Error("not used here")),
     setOfficeRunState: () => Promise.reject(new Error("not used here")),
