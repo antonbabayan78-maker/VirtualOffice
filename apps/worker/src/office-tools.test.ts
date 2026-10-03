@@ -38,6 +38,8 @@ const api = (overrides: Partial<ApiClient> = {}): ApiClient => {
     patchConnector: unused,
     deleteConnector: unused,
     discoverConnectorTools: unused,
+    loadRunState: unused,
+    saveRunCheckpoint: unused,
     ...overrides,
   } as ApiClient;
 };

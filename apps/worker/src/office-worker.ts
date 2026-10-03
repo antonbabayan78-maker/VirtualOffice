@@ -19,6 +19,7 @@ import { officeSource } from "./office-source.js";
 import { officeJobHandler } from "./job-handler.js";
 import { apiDocumentSink } from "./document-sink.js";
 import { officeTools } from "./office-tools.js";
+import { apiRunCheckpoints } from "./run-state.js";
 import { apiUsageSink } from "./usage-sink.js";
 
 export interface OfficeWorkerOptions {
@@ -75,6 +76,10 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
         // office has been read, and a connector switched off on the canvas
         // should stop working without restarting the worker.
         tools: officeTools(api, options.config.officeId, { onProblem: problem }),
+        // Where a run that stopped for a person is kept. At the office rather
+        // than in this process, because the person may answer after this
+        // worker has been restarted or replaced.
+        checkpoints: apiRunCheckpoints(api, problem),
       }),
       // The third kind of turn. Metered the same way, and with no document sink
       // or tools at all: a judge reads the answers and says which won.

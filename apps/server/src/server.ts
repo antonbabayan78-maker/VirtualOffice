@@ -68,8 +68,10 @@ import {
 } from "@vo/core";
 import {
   acceptanceCriteriaFor,
+  BlobRunCheckpointStore,
   defaultWorkflowEngine,
   performCreateWork,
+  type RunCheckpoint,
   type WorkflowContext,
   type WorkflowEvent,
 } from "@vo/orchestrator";
@@ -90,6 +92,7 @@ import {
   type TokenVerifier,
 } from "./auth.js";
 import { OfficeEventLog } from "./events.js";
+import { blobRunDecisions } from "./run-state.js";
 
 export interface ServerOptions {
   readonly store: RelationalStore;
@@ -162,7 +165,15 @@ const KNOWN_EVENTS: readonly string[] = [
   "cancel",
   "check_reported",
   "gate_decided",
+  "await_decision",
+  "call_decided",
 ];
+
+/**
+ * The statuses a run in flight can be in: being done, or waiting for a person.
+ * Anything else means the attempt is over and what it wrote down is spent.
+ */
+const ATTEMPT_STATUSES: readonly string[] = ["in_progress", "blocked"];
 
 /** Where a browser goes to turn a token into a cookie, and back again. */
 const SESSION_PATH = "/session";
@@ -1261,6 +1272,54 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   /**
+   * What the office is holding for a run in flight: where it got to, and what
+   * a person has decided about the calls it is waiting on.
+   *
+   * Two records with one writer each. The worker writes the checkpoint, because
+   * it is running the loop; the office writes the decisions, because they come
+   * from a person. Neither writes the other's, so a step being saved and a
+   * decision arriving cannot lose each other.
+   *
+   * Only with somewhere to keep them. An office with no blob store has no trays
+   * either; a parked run in such an office is resumed by the process that
+   * parked it or not at all, which is what it was before this existed.
+   */
+  const runState =
+    options.blobs === undefined
+      ? null
+      : {
+          checkpoints: new BlobRunCheckpointStore(options.blobs),
+          decisions: blobRunDecisions(options.blobs),
+        };
+
+  if (runState !== null) {
+    app.get("/tasks/:id/run-checkpoint", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if ((await store.tasks.get(id)) === null) return missing(reply, "task");
+      return {
+        checkpoint: await runState.checkpoints.load(id),
+        decisions: await runState.decisions.list(id),
+      };
+    });
+
+    app.put("/tasks/:id/run-checkpoint", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if ((await store.tasks.get(id)) === null) return missing(reply, "task");
+      const body = request.body as Record<string, unknown>;
+      // Keyed by the task, so a checkpoint for another run cannot be filed here
+      // and answered to this one.
+      if (body["runId"] !== id) {
+        return fail(reply, [{ path: "runId", message: `must be "${id}"` }]);
+      }
+      if (!Array.isArray(body["messages"])) {
+        return fail(reply, [{ path: "messages", message: "must be the conversation so far" }]);
+      }
+      await runState.checkpoints.save(body as unknown as RunCheckpoint);
+      return reply.code(204).send();
+    });
+  }
+
+  /**
    * Moving a task is not a field change, so it is not a PATCH. The office
    * decides what a move means — who reviews, when it escalates — and this hands
    * the event to the same workflow engine the worker uses. One set of rules.
@@ -1324,7 +1383,32 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const outcome = workflow.handle(task, body as unknown as WorkflowEvent, context);
     if (isErr(outcome)) return fail(reply, outcome.error);
 
+    // Written down before the work starts again, so an approved call cannot be
+    // approved and then forgotten: the run would park on the same call. The
+    // other order fails safely too, but this way a retry of the same event is
+    // the same decision rather than a second one.
+    if (runState !== null && type === "call_decided") {
+      const key = typeof body["key"] === "string" ? body["key"] : "";
+      const decision = body["decision"] === "declined" ? "declined" : "approved";
+      const decidedBy = typeof body["decidedBy"] === "string" ? body["decidedBy"] : "";
+      const reason = typeof body["reason"] === "string" ? body["reason"] : undefined;
+      await runState.decisions.record(id, {
+        key,
+        decision,
+        decidedBy,
+        ...(reason === undefined ? {} : { reason }),
+      });
+    }
+
     await store.tasks.put(outcome.value.task);
+
+    // A checkpoint belongs to the attempt that is running. Once the work has
+    // moved on — into review, done, cancelled, handed over — the next attempt
+    // must not find the last one's finished run and hand back its answer.
+    if (runState !== null && !ATTEMPT_STATUSES.includes(outcome.value.task.status)) {
+      await runState.checkpoints.delete(id);
+      await runState.decisions.clear(id);
+    }
     events.publish(task.officeId, {
       kind: "task.updated",
       id,
