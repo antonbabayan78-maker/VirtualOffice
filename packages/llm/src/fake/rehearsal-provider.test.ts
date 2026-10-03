@@ -112,7 +112,33 @@ describe("rehearsing an office that was granted tools", () => {
     expect(response.content[0]).toMatchObject({ type: "tool_use", name: "post__send_email" });
   });
 
-  it("calls it once and then submits, so a rehearsal ends", async () => {
+  it("submits once this run has called it, read from the conversation", async () => {
+    const request = withCatalogue(
+      ["post__send_email (conn-post): Send an email."],
+      ["find_tool", "post__send_email", "submit_work"],
+    );
+    const answered: CompletionRequest = {
+      ...request,
+      messages: [
+        ...request.messages,
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-1", name: "post__send_email", input: {} }],
+        },
+        { role: "user", content: [{ type: "tool_result", toolUseId: "call-1", content: "sent" }] },
+      ],
+    };
+
+    const response = await rehearsalProvider().complete(answered);
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+  });
+
+  it("tries again for the next piece of work, not once per process", async () => {
+    // A worker builds one provider and uses it for every job it ever does. A
+    // flag kept in the provider would mean the first task of the day tried a
+    // tool and none of the others did — which is what happened the first time
+    // this ran against a real office.
     const provider = rehearsalProvider();
     const request = withCatalogue(
       ["post__send_email (conn-post): Send an email."],
@@ -120,9 +146,9 @@ describe("rehearsing an office that was granted tools", () => {
     );
 
     await provider.complete(request);
-    const second = await provider.complete(request);
+    const nextJob = await provider.complete(request);
 
-    expect(second.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+    expect(nextJob.content[0]).toMatchObject({ type: "tool_use", name: "post__send_email" });
   });
 
   it("leaves the office's own filing tool alone, which is not what it is proving", async () => {
