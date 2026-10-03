@@ -224,3 +224,22 @@ describe("how much is waiting on a person", () => {
     view.unmount();
   });
 });
+
+describe("the board, at its own address", () => {
+  beforeEach(() => {
+    for (const name of ["VITE_VO_API_URL", "VITE_VO_API_TOKEN", "VITE_VO_OFFICE_ID"]) {
+      vi.stubEnv(name, "");
+    }
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("shows the lanes rather than a page about them", async () => {
+    const view = await mount("/tasks");
+
+    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    view.unmount();
+  });
+});

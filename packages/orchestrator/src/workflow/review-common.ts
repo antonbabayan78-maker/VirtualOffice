@@ -4,7 +4,8 @@
  * path and escalation cap are the same, so they live here once.
  */
 import type { EmployeeId, Result, Task } from "@vo/core";
-import { acceptanceCriteriaFor, unmetCriteria } from "./acceptance.js";
+import { acceptanceCriteriaFor } from "@vo/core";
+import { unmetCriteria } from "./acceptance.js";
 import { checkerFor, signedOffBy } from "./checker.js";
 import { escalateTask } from "../escalation/escalation.js";
 import {

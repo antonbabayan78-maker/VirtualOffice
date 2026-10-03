@@ -2,20 +2,17 @@ import { describe, expect, it } from "vitest";
 import { acceptanceCriteriaFor, unmetCriteria } from "./acceptance.js";
 
 describe("what this work has to achieve", () => {
-  const standing = ["reviewed by somebody else", "has tests"];
+  // The rule itself lives in core now, with its own tests beside it: a board in
+  // a browser has to apply the same one, and a browser cannot import this
+  // package. What is checked here is that the name still answers through this
+  // module, because every caller in the office imports it from here.
+  it("is still answered through the module that reasons about acceptance", () => {
+    const standing = ["reviewed by somebody else", "has tests"];
 
-  it("is the department's standing list when the task asks for nothing more", () => {
     expect(acceptanceCriteriaFor([], standing)).toEqual(standing);
-  });
-
-  it("is the task's own when it has one, since the work needed something particular", () => {
     expect(acceptanceCriteriaFor(["migrates the old rows"], standing)).toEqual([
       "migrates the old rows",
     ]);
-  });
-
-  it("is nothing at all when neither says anything, which is most offices", () => {
-    expect(acceptanceCriteriaFor([], [])).toEqual([]);
   });
 });
 

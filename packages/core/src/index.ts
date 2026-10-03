@@ -19,6 +19,7 @@ export * from "./employee/llm-config.js";
 export * from "./employee/employee.js";
 export * from "./connection/connection.js";
 export * from "./task/task.js";
+export * from "./task/acceptance.js";
 export * from "./task/contest.js";
 export * from "./document/document.js";
 export * from "./skill/semver.js";
