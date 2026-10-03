@@ -128,3 +128,82 @@ describe("a connector the worker cannot reach", () => {
     expect(problems.join()).toContain("acme");
   });
 });
+
+describe("the processes behind a worker's tools", () => {
+  const mcp = unwrap(
+    createConnector(
+      {
+        officeId: "office-1" as OfficeId,
+        kind: "mcp",
+        name: "acme",
+        tools: ["send_email"],
+        config: { command: "acme-mcp" },
+      },
+      [],
+      { id: () => "conn-mcp" as ConnectorId, now: () => new Date("2026-10-03T09:00:00Z") },
+    ),
+  );
+
+  /** A connector list that can change between asks, as the canvas changes it. */
+  const changing = (lists: readonly (readonly unknown[])[]) => {
+    let at = 0;
+    return () => {
+      const value = lists[Math.min(at, lists.length - 1)] ?? [];
+      at += 1;
+      return Promise.resolve({ ok: true as const, value: value as never });
+    };
+  };
+
+  /** Counts the sessions opened and closed behind the broker. */
+  const sessions = () => {
+    const count = { opened: 0, closed: 0 };
+    return {
+      count,
+      connect: () => {
+        count.opened += 1;
+        return {
+          listTools: () =>
+            Promise.resolve([
+              { name: "send_email", inputSchema: { type: "object", properties: {} } },
+            ]),
+          callTool: () => Promise.resolve({ text: "sent", isError: false }),
+          onToolsChanged: () => undefined,
+          protocolVersion: () => "2025-06-18",
+          close: () => {
+            count.closed += 1;
+            return Promise.resolve();
+          },
+        };
+      },
+    };
+  };
+
+  it("keeps one broker while the office keeps saying the same thing", async () => {
+    // An MCP connector is a child process. Building a new broker per call would
+    // spawn one per call and close none of them, which is a worker that falls
+    // over after a day of ordinary work.
+    const { count, connect } = sessions();
+    const tools = officeTools(api({ listConnectors: changing([[mcp]]) }), "office-1", { connect });
+
+    await tools.describe();
+    await tools.call({ name: "acme__send_email", input: {} });
+    await tools.describe();
+
+    expect(count.opened).toBe(1);
+    expect(count.closed).toBe(0);
+  });
+
+  it("builds a new one when a connector changes, and closes the old one", async () => {
+    const { count, connect } = sessions();
+    const off = { ...mcp, enabled: false };
+    const tools = officeTools(api({ listConnectors: changing([[mcp], [off]]) }), "office-1", {
+      connect,
+    });
+
+    expect(await tools.describe()).toHaveLength(1);
+    // Switched off on the canvas: a different office to reach, so a different
+    // broker, and the process the old one was holding is let go.
+    expect(await tools.describe()).toEqual([]);
+    expect(count.closed).toBe(1);
+  });
+});

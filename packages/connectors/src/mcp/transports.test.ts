@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { notesServer } from "./fixtures/notes-server.mjs";
 import { mcpSession, type McpSession } from "./session.js";
-import { stdioTransport } from "./stdio.js";
+import { CLOSE_GRACE_MS, stdioTransport } from "./stdio.js";
 import { httpTransport } from "./http.js";
 
 const FIXTURE = new URL("./fixtures/notes-stdio.mjs", import.meta.url).pathname;
@@ -188,4 +188,30 @@ describe("talking to an MCP server over HTTP", () => {
 
     await expect(session.listTools()).rejects.toThrow();
   });
+});
+
+describe("putting a stdio server away", () => {
+  it("closes its input and lets it finish, rather than killing it mid-sentence", async () => {
+    const session = overStdio();
+    await session.listTools();
+
+    const started = Date.now();
+    await session.close();
+
+    // It went on its own, well inside the moment it is given.
+    expect(Date.now() - started).toBeLessThan(CLOSE_GRACE_MS);
+  });
+
+  it("insists when a server does not go", async () => {
+    // A server that ignores a closed stdin is still a process somebody has to
+    // get rid of, which is what the grace period ends with.
+    const session = mcpSession({
+      transport: stdioTransport({
+        command: process.execPath,
+        args: ["-e", "process.stdin.resume(); setInterval(() => {}, 1000);"],
+      }),
+    });
+
+    await expect(session.close()).resolves.toBeUndefined();
+  }, 10_000);
 });

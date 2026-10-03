@@ -32,6 +32,16 @@ export interface StdioOptions {
 /** How much of a server's own logging is kept to explain a failure. */
 export const MAX_STDERR_CHARS = 2_000;
 
+/**
+ * How long a server is given to go on its own after its input is closed.
+ *
+ * Closing stdin is how a stdio server is told the conversation is over, and a
+ * well-behaved one finishes what it was doing and exits. Killing it in the same
+ * breath makes that impossible — anything it was flushing is lost, which is a
+ * nasty way to end a tool call that already happened.
+ */
+export const CLOSE_GRACE_MS = 1_000;
+
 interface Waiting {
   readonly resolve: (response: JsonRpcResponse) => void;
   readonly reject: (error: Error) => void;
@@ -167,11 +177,15 @@ export function stdioTransport(options: StdioOptions): McpTransport {
       child = null;
       if (running === null) return Promise.resolve();
       return new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          running.kill();
+        }, CLOSE_GRACE_MS);
         running.once("close", () => {
+          clearTimeout(timer);
           resolve();
         });
+        // Told, then given a moment, then insisted upon.
         running.stdin.end();
-        running.kill();
       });
     },
   };

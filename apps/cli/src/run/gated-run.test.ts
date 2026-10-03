@@ -11,6 +11,7 @@
  * command named in an office file, and the point is that this is what it does.
  */
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,10 @@ import { runOffice, type GateDecision } from "./office-run.js";
  * would not be a fixture a deployed office could run.
  */
 const SERVER = `
+import { writeFileSync } from "node:fs";
+process.stdin.on("end", () => {
+  writeFileSync(process.env.VO_CLOSED_MARK ?? "/tmp/vo-closed", "closed");
+});
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -244,5 +249,30 @@ describe("a headless office asked to do something that leaves the building", () 
 
     expect(result.tasks[0]?.status).toBe("done");
     expect(result.tasks[0]?.history.map((one) => one.to)).not.toContain("blocked");
+  });
+});
+
+describe("putting the connectors away", () => {
+  it("closes the server it started, rather than leaving a process behind", async () => {
+    // A connector can be a process. A run that leaves one behind leaves one
+    // behind per run, and `vo run` in a loop is how somebody finds that out.
+    const config = await office();
+    const mark = join(dir ?? tmpdir(), `closed-${String(Date.now())}`);
+    const marked = {
+      ...config,
+      connectors: config.connectors.map((connector) => ({
+        ...connector,
+        config: { ...connector.config, env: ["VO_CLOSED_MARK"] },
+      })),
+    };
+    process.env["VO_CLOSED_MARK"] = mark;
+
+    await runOffice({ config: marked, tasks: [brief(marked)], provider: clerk("read_log") });
+
+    for (let wait = 0; wait < 40 && !existsSync(mark); wait += 1) {
+      await new Promise((wake) => setTimeout(wake, 50));
+    }
+    expect(existsSync(mark)).toBe(true);
+    delete process.env["VO_CLOSED_MARK"];
   });
 });

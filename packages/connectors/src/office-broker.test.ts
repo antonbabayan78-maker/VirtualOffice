@@ -113,3 +113,30 @@ describe("an office whose connector cannot be reached", () => {
     expect(problems.join()).toContain("could not be run");
   });
 });
+
+describe("an office putting its connectors away", () => {
+  it("closes what it opened, so a worker does not keep a process per call", async () => {
+    let closed = 0;
+    const broker = officeBroker([connector("acme", "mcp", { command: "acme-mcp" })], {
+      connect: () => ({
+        listTools: () => Promise.resolve([]),
+        callTool: () => Promise.resolve({ text: "", isError: false }),
+        onToolsChanged: () => undefined,
+        protocolVersion: () => "2025-06-18",
+        close: () => {
+          closed += 1;
+          return Promise.resolve();
+        },
+      }),
+    });
+    await broker.describe();
+
+    await broker.close();
+
+    expect(closed).toBe(1);
+  });
+
+  it("has nothing to close in an office that reaches nothing", async () => {
+    await expect(officeBroker([]).close()).resolves.toBeUndefined();
+  });
+});
