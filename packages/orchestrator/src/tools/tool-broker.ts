@@ -17,7 +17,7 @@
  * looks: `find_tool` searches this catalogue, so a tool left in it that the
  * employee cannot call is a tool the model will find, ask for, and be refused.
  */
-import { resolveToolAccess, toolWireName, type GrantContext } from "@vo/core";
+import { resolveToolAccess, toolWireName, type GatedAction, type GrantContext } from "@vo/core";
 import type { ToolDefinition } from "@vo/llm";
 import { ToolCatalog, type CatalogTool } from "./tool-catalog.js";
 
@@ -26,6 +26,17 @@ export interface DescribedTool extends ToolDefinition {
   /** Which connector offers it, as the office knows that connector. */
   readonly connectorId: string;
   readonly tags?: readonly string[];
+  /**
+   * What calling this does that an office holds for a person: sending outside,
+   * spending, deploying, deleting. Declared here because the connector layer is
+   * the only part that knows whether `post_message` leaves the building — the
+   * run loop reads it and stops the call before it happens.
+   *
+   * Absent is not the same as empty. Empty is a connector saying it considered
+   * the question and this tool is harmless; absent is a connector that has
+   * never been asked, which is every connector written before the gate.
+   */
+  readonly gates?: readonly GatedAction[];
 }
 
 /**
@@ -116,11 +127,6 @@ export function recordingToolBroker(outcomes: Readonly<Record<string, BrokerOutc
     broker: {
       describe: () => Promise.resolve(described),
       call(call) {
-        console.log(
-          "BROKER CALLED",
-          call.name,
-          new Error().stack?.split("\n").slice(1, 6).join(" | "),
-        );
         calls.push(call);
         const outcome = outcomes[call.name];
         if (outcome === undefined) {

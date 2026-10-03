@@ -2,11 +2,14 @@
  * Tool catalog: every tool an employee may call, with a one-line index for the
  * prompt and keyword search so the model can find a tool before loading it.
  */
+import type { GatedAction } from "@vo/core";
 import type { ToolDefinition } from "@vo/llm";
 
 export interface CatalogTool extends ToolDefinition {
   readonly connectorId: string;
   readonly tags?: readonly string[];
+  /** The categories the connector declared for it; see `DescribedTool.gates`. */
+  readonly gates?: readonly GatedAction[];
 }
 
 const byName = (a: { name: string }, b: { name: string }): number =>
