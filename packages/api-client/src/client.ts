@@ -55,6 +55,39 @@ export interface SpendSummary {
   readonly byEmployee: Readonly<Record<string, number>>;
 }
 
+/**
+ * Something the office is waiting on a person for.
+ *
+ * Three kinds, and they are not the same kind of thing: a call a run may not
+ * make, finished work a department holds, and work that simply stopped. Shaped
+ * here rather than imported, so a browser bundle gains no orchestrator.
+ */
+interface WaitingBase {
+  readonly taskId: string;
+  readonly title: string;
+  readonly departmentId: string;
+  readonly assigneeId: string | null;
+  /** When it started waiting. */
+  readonly since: Date;
+}
+
+export type Waiting =
+  | (WaitingBase & {
+      readonly kind: "call";
+      readonly key: string;
+      readonly name: string;
+      /** What the call would do it with: the thing being decided. */
+      readonly input: Readonly<Record<string, unknown>>;
+      readonly gates: readonly string[];
+      readonly detail: string;
+    })
+  | (WaitingBase & { readonly kind: "review"; readonly gates: readonly string[] })
+  | (WaitingBase & {
+      readonly kind: "stopped";
+      readonly status: "blocked" | "escalated";
+      readonly reason: string | null;
+    });
+
 /** A person's answer about one call a run is holding. */
 export interface RunDecision {
   readonly key: string;
@@ -134,6 +167,12 @@ export interface ApiClient {
    * one, and nor has a browser bundle.
    */
   loadRunState(taskId: string): Promise<ApiResult<RunStateSnapshot>>;
+  /**
+   * What this office is waiting on a person for, oldest first. One question
+   * with one answer: the held calls live in the run checkpoints, which only the
+   * office can read.
+   */
+  listApprovals(officeId: string): Promise<ApiResult<readonly Waiting[]>>;
   /** Where a run got to, so another process can take it on. */
   saveRunCheckpoint(
     taskId: string,
@@ -603,6 +642,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     discoverConnectorTools: async (id) =>
       interpret(await call(`/connectors/${id}/discover`, { method: "POST" }), reviveConnector),
+
+    listApprovals: async (officeId) =>
+      interpret(await call(`/offices/${officeId}/approvals`), (raw) =>
+        (Array.isArray(raw["items"]) ? (raw["items"] as Record<string, unknown>[]) : []).flatMap(
+          (item) => {
+            const kind = item["kind"];
+            // A kind this canvas does not know is passed over rather than
+            // rendered as a row nobody can read or answer.
+            if (kind !== "call" && kind !== "review" && kind !== "stopped") return [];
+            return [{ ...item, since: new Date(item["since"] as string) } as unknown as Waiting];
+          },
+        ),
+      ),
 
     loadRunState: async (taskId) =>
       interpret(await call(`/tasks/${taskId}/run-checkpoint`), (raw) => ({

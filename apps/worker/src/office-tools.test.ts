@@ -39,6 +39,7 @@ const api = (overrides: Partial<ApiClient> = {}): ApiClient => {
     deleteConnector: unused,
     discoverConnectorTools: unused,
     loadRunState: unused,
+    listApprovals: unused,
     saveRunCheckpoint: unused,
     ...overrides,
   } as ApiClient;

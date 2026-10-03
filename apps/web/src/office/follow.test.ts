@@ -89,6 +89,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     getDocument: () => Promise.reject(new Error("not used here")),
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     listUsage: () => Promise.resolve({ ok: true, value: [] }),
+    listApprovals: () => Promise.resolve({ ok: true, value: [] }),
     officeSpend: () =>
       Promise.resolve({
         ok: true,
@@ -671,5 +672,75 @@ describe("what the office has spent, when the canvas loads", () => {
     await follower.reload();
 
     expect(officeSpend).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("what the office is waiting on a person for", () => {
+  const waiting = [
+    {
+      kind: "call" as const,
+      taskId: "task-1",
+      title: "Tell the customer",
+      departmentId: eng.id as string,
+      assigneeId: ada.id as string,
+      since: at,
+      key: "toolu_1",
+      name: "post__send_email",
+      input: { to: "customer@acme.test" },
+      gates: ["external_send"],
+      detail: 'tool "post__send_email" (external_send)',
+    },
+  ];
+
+  it("asks for it when the canvas loads", async () => {
+    const listApprovals = vi.fn(() => Promise.resolve({ ok: true as const, value: waiting }));
+
+    await follow(fakeApi({ listApprovals })).reload();
+
+    expect(listApprovals).toHaveBeenCalledWith(officeId);
+    expect(store.getState().waiting).toHaveLength(1);
+  });
+
+  it("asks again when a task moves, which is what makes the badge live", async () => {
+    // Half of this lives in a run's checkpoint, so a task event is the only
+    // sign the canvas gets that something started or stopped waiting.
+    const listApprovals = vi.fn(() => Promise.resolve({ ok: true as const, value: waiting }));
+    const follower = follow(fakeApi({ listApprovals }));
+    await follower.reload();
+
+    await follower.apply({
+      offset: 5,
+      officeId,
+      at: 0,
+      data: { kind: "task.updated", id: "task-1" },
+    });
+
+    expect(listApprovals).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not ask again for something that has nothing to do with it", async () => {
+    const listApprovals = vi.fn(() => Promise.resolve({ ok: true as const, value: waiting }));
+    const follower = follow(fakeApi({ listApprovals }));
+    await follower.reload();
+
+    await follower.apply({
+      offset: 5,
+      officeId,
+      at: 0,
+      data: { kind: "employee.updated", id: ada.id },
+    });
+
+    expect(listApprovals).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens an office that cannot say, rather than failing to open", async () => {
+    const api = fakeApi({
+      listApprovals: () => Promise.resolve({ ok: false, kind: "transport", message: "no answer" }),
+    } as never);
+
+    await follow(api).reload();
+
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().waiting).toEqual([]);
   });
 });

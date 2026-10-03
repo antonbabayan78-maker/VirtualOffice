@@ -1173,3 +1173,154 @@ describe("saying which entry won a contest, from the canvas", () => {
     );
   });
 });
+
+describe("answering what the office is waiting for", () => {
+  const held = {
+    kind: "call" as const,
+    taskId: "task-1",
+    title: "Tell the customer",
+    departmentId: "dept-eng",
+    assigneeId: "emp-ada",
+    since: new Date("2026-10-03T09:00:00Z"),
+    key: "toolu_1",
+    name: "post__send_email",
+    input: { to: "customer@acme.test" },
+    gates: ["external_send"],
+    detail: 'tool "post__send_email" (external_send)',
+  };
+
+  const parked = (overrides: Record<string, unknown> = {}): Task =>
+    ({
+      id: "task-1",
+      officeId,
+      departmentId: eng.id,
+      title: "Tell the customer",
+      status: "blocked",
+      assigneeId: ada.id,
+      contestId: null,
+      won: null,
+      reviewerIds: [],
+      approvals: [],
+      stage: null,
+      gatedActions: [],
+      dependsOn: [],
+      artifacts: [],
+      route: [],
+      acceptanceCriteria: [],
+      checkedBy: [],
+      tokenBudget: null,
+      deadline: null,
+      history: [],
+      createdAt: new Date("2026-10-03T09:00:00Z"),
+      updatedAt: new Date("2026-10-03T09:00:00Z"),
+      ...overrides,
+    }) as unknown as Task;
+
+  /** An office that accepts every event and answers with the task it moved. */
+  const answering = (answer: unknown = { ok: true, value: parked({ status: "in_progress" }) }) => {
+    const posted: { taskId: string; event: Record<string, unknown> }[] = [];
+    open([eng], [ada]);
+    store.getState().putTask(parked());
+    store.getState().loadWaiting([held]);
+    store.getState().connect({
+      postTaskEvent: (taskId: string, event: Record<string, unknown>) => {
+        posted.push({ taskId, event });
+        return Promise.resolve(answer);
+      },
+    } as never);
+    return posted;
+  };
+
+  it("holds what the office said it is waiting for", () => {
+    answering();
+    expect(store.getState().waiting).toHaveLength(1);
+  });
+
+  it("allows a held call, naming the call and not the tool", async () => {
+    const posted = answering();
+
+    const outcome = await store.getState().decideCall("task-1" as TaskId, "toolu_1", "approved");
+
+    expect(outcome.ok).toBe(true);
+    expect(posted).toEqual([
+      {
+        taskId: "task-1",
+        event: { type: "call_decided", key: "toolu_1", decision: "approved" },
+      },
+    ]);
+  });
+
+  it("refuses one with a reason the run is told", async () => {
+    const posted = answering();
+
+    await store
+      .getState()
+      .decideCall("task-1" as TaskId, "toolu_1", "declined", "not that address");
+
+    expect(posted[0]?.event).toMatchObject({ decision: "declined", reason: "not that address" });
+  });
+
+  it("takes the answered call off the list, so the badge is right at once", async () => {
+    answering();
+
+    await store.getState().decideCall("task-1" as TaskId, "toolu_1", "approved");
+
+    expect(store.getState().waiting).toEqual([]);
+  });
+
+  it("keeps the work where the office put it, rather than guessing", async () => {
+    answering();
+
+    await store.getState().decideCall("task-1" as TaskId, "toolu_1", "approved");
+
+    expect(store.getState().tasks[0]?.status).toBe("in_progress");
+  });
+
+  it("leaves the list alone when the office refuses the decision", async () => {
+    const posted = answering({
+      ok: false,
+      kind: "validation",
+      errors: [{ path: "status", message: "that work is not waiting any more" }],
+    });
+
+    const outcome = await store.getState().decideCall("task-1" as TaskId, "toolu_1", "approved");
+
+    expect(outcome.ok).toBe(false);
+    expect(posted).toHaveLength(1);
+    expect(store.getState().waiting).toHaveLength(1);
+  });
+
+  it("approves finished work a department held", async () => {
+    const posted = answering();
+
+    await store.getState().decideGate("task-1" as TaskId, "approved");
+
+    expect(posted[0]?.event).toEqual({ type: "gate_decided", decision: "approved" });
+  });
+
+  it("sends finished work back with the reason the office insists on", async () => {
+    const posted = answering();
+
+    await store.getState().decideGate("task-1" as TaskId, "rejected", "not on a Friday");
+
+    expect(posted[0]?.event).toMatchObject({ decision: "rejected", reason: "not on a Friday" });
+  });
+
+  it("puts stopped work back to work, which is the one thing to do with it", async () => {
+    const posted = answering();
+
+    await store.getState().putBackToWork("task-1" as TaskId);
+
+    expect(posted[0]?.event).toEqual({ type: "unblock" });
+  });
+
+  it("says so when there is no office to tell", async () => {
+    open([eng], [ada]);
+    store.getState().loadWaiting([held]);
+
+    const outcome = await store.getState().decideCall("task-1" as TaskId, "toolu_1", "approved");
+
+    expect(outcome.ok).toBe(false);
+    expect(store.getState().waiting).toHaveLength(1);
+  });
+});

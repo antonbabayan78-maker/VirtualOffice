@@ -36,6 +36,19 @@ export interface OfficeFollower {
 }
 
 export function followOffice({ store, api, officeId }: FollowOptions): OfficeFollower {
+  /**
+   * What the office is waiting on a person for.
+   *
+   * Asked of the office rather than worked out here: half of it lives in the
+   * run checkpoints, which only the office can read. An office that cannot say
+   * is an office with nothing waiting rather than a canvas that fails to open —
+   * the same terms as the usage figures.
+   */
+  const askWhatIsWaiting = async (): Promise<void> => {
+    const answer = await api.listApprovals(officeId);
+    store.getState().loadWaiting(answer.ok ? answer.value : []);
+  };
+
   const replaceDepartment = (department: Department): void => {
     const departments = store.getState().departments;
     const known = departments.some((candidate) => candidate.id === department.id);
@@ -75,6 +88,10 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         // event that changes what the figures on the canvas are doing.
         const fetched = await api.getTask(id);
         if (fetched.ok) store.getState().putTask(fetched.value);
+        // And it is the only sign the canvas gets that something started or
+        // stopped waiting for a person, since the held calls are not in the
+        // task. This is what makes the badge live.
+        await askWhatIsWaiting();
       } else if (kind === "employee.created" || kind === "employee.updated") {
         const fetched = await api.getEmployee(id);
         if (fetched.ok) replaceEmployee(fetched.value);
@@ -163,6 +180,8 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
     // saying something false about the money.
     const spend = await api.officeSpend(officeId, "day");
     store.getState().loadSpend(spend.ok ? spend.value : null);
+
+    await askWhatIsWaiting();
   };
 
   return { apply, reload };
