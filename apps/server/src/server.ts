@@ -390,16 +390,33 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     });
   }
 
+  /**
+   * Whether this office has a route for what is being asked.
+   *
+   * Fastify's types say `findRoute` always answers; it answers null for a miss,
+   * which is the whole question here.
+   */
+  const officeAnswers = (request: FastifyRequest, path: string): boolean => {
+    const found: unknown = app.findRoute({ method: request.method, url: path });
+    return found !== null;
+  };
+
   app.addHook("onRequest", (request: FastifyRequest, reply: FastifyReply, done) => {
     const path = request.url.split("?")[0] ?? "";
     if (OPEN_PATHS.includes(path)) {
       done();
       return;
     }
-    // Anything that is not the office is the canvas, and the canvas is open: a
-    // browser cannot send a credential before it has been given the page that
-    // asks for one, and the page itself holds nothing worth guarding.
-    if (options.webRoot !== undefined && !isOfficePath(path)) {
+    // Anything this office has no route for is the canvas, and the canvas is
+    // open: a browser cannot send a credential before it has been given the
+    // page that asks for one, and the page itself holds nothing worth guarding.
+    //
+    // Asked of the route table rather than of a list of prefixes, because a
+    // section of the canvas may share a name with a route of the office — and
+    // one does. `/tasks` is a screen; `/tasks/:id` is this office's work, and
+    // only the second of those is a route. A browser reloading on the board
+    // used to be handed a 401 for a page it had not been given yet.
+    if (options.webRoot !== undefined && (!isOfficePath(path) || !officeAnswers(request, path))) {
       done();
       return;
     }
@@ -489,9 +506,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const webRoot = options.webRoot;
     void app.register(fastifyStatic, { root: webRoot, wildcard: false });
     app.setNotFoundHandler((request, reply) => {
+      // Nothing matched, so this is not an address the office answers — it is
+      // either a section of the canvas or nothing at all, and the canvas says
+      // "Nothing here" better than JSON does. A client asking for JSON still
+      // gets JSON: handed HTML, it reports a parse error rather than a 404.
       const wantsPage =
         request.method === "GET" && (request.headers.accept ?? "").includes("text/html");
-      if (wantsPage && !isOfficePath(request.url.split("?")[0] ?? "")) {
+      if (wantsPage) {
         return reply.type("text/html").sendFile("index.html");
       }
       return reply.code(404).send({ error: "no such thing here" });

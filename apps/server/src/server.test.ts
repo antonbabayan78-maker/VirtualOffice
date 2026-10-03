@@ -3402,15 +3402,38 @@ describe("an office that serves its own canvas", () => {
     expect(response.headers["content-type"]).toContain("json");
   });
 
-  it("answers an office address with a 404 even to a browser", async () => {
-    // Somebody typing /offices into the address bar is looking at the API, and
-    // the canvas has no page at that address to give them.
-    const response = await open("/offices/office-1/nothing-like-this", {
+  it("serves the page at a section whose name the office also uses", async () => {
+    // /tasks is both a section of the canvas and the prefix of this office's
+    // task routes. A person who types it, or reloads on it, is a browser
+    // asking for a page — and the office has no route there at all.
+    const response = await open("/tasks", { accept: "text/html" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("Virtual Office");
+  });
+
+  it("still keeps the work behind that prefix to itself", async () => {
+    // The page is open; what the page then asks for is not. A route that
+    // exists needs a credential however the asker dresses up.
+    const response = await open("/tasks/task-1", { accept: "text/html" });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("gives a browser the canvas at an address nothing answers, and a client a 404", async () => {
+    // The canvas says "Nothing here" at an address it does not know, which is
+    // a better answer to a person than raw JSON. A client asking for JSON gets
+    // JSON, because being handed HTML is a parse error rather than a 404.
+    const page = await open("/offices/office-1/nothing-like-this", { accept: "text/html" });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("Virtual Office");
+
+    const api = await open("/offices/office-1/nothing-like-this", {
       authorization: `Bearer ${TOKEN}`,
-      accept: "text/html",
+      accept: "application/json",
     });
-    expect(response.statusCode).toBe(404);
-    expect(response.headers["content-type"]).toContain("json");
+    expect(api.statusCode).toBe(404);
+    expect(api.headers["content-type"]).toContain("json");
   });
 
   it("lets a signed-in browser through to the office", async () => {
