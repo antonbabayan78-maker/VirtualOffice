@@ -32,6 +32,7 @@
     "@fastify/websocket": "^11.3.1",
     "@vo/connectors": "workspace:*",
     "@vo/core": "workspace:*",
+    "@vo/llm": "workspace:*",
     "@vo/notifications": "workspace:*",
     "@vo/orchestrator": "workspace:*",
     "@vo/storage": "workspace:*",

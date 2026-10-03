@@ -1521,3 +1521,210 @@ describe("changing a piece of work", () => {
     }
   });
 });
+
+const serviceRow = {
+  id: "svc-1",
+  officeId: "office-1",
+  kind: "openai-compatible",
+  name: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  tokenEnv: "OPENAI_API_KEY",
+  secretRef: null,
+  models: [{ id: "gpt-5", pricing: { inputPerMTok: 1.25, outputPerMTok: 10 } }],
+  enabled: true,
+  createdAt: "2026-10-03T09:00:00.000Z",
+};
+
+describe("the AI services an office can reach", () => {
+  it("lists them, with real dates", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/services`, () =>
+        HttpResponse.json({ items: [serviceRow] }),
+      ),
+    );
+
+    const result = await client().listServices("office-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]?.name).toBe("openai");
+      expect(result.value[0]?.createdAt).toBeInstanceOf(Date);
+      expect(result.value[0]?.models[0]?.id).toBe("gpt-5");
+    }
+  });
+
+  it("promises the lists its type promises, for an office that predates them", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/services`, () =>
+        HttpResponse.json({ items: [{ ...serviceRow, models: undefined, enabled: undefined }] }),
+      ),
+    );
+
+    const result = await client().listServices("office-1");
+
+    if (!result.ok) throw new Error("expected this list to load");
+    expect(result.value[0]?.models).toEqual([]);
+    expect(result.value[0]?.enabled).toBe(true);
+  });
+
+  it("adds one, and never sends a key with it", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/offices/office-1/services`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(serviceRow, { status: 201 });
+      }),
+    );
+
+    await client().createService("office-1", {
+      kind: "openai-compatible",
+      name: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+
+    expect(sent).toMatchObject({ name: "openai" });
+    expect(sent).not.toHaveProperty("apiKey");
+  });
+
+  it("changes one, saying where it was reading from", async () => {
+    let offset: string | null = null;
+    server.use(
+      http.patch(`${BASE}/services/svc-1`, ({ request }) => {
+        offset = request.headers.get("x-vo-since-offset");
+        return HttpResponse.json({ ...serviceRow, enabled: false });
+      }),
+    );
+
+    const result = await client().patchService("svc-1", { enabled: false }, 12);
+
+    expect(offset).toBe("12");
+    if (result.ok) expect(result.value.enabled).toBe(false);
+  });
+
+  it("forgets one", async () => {
+    server.use(
+      http.delete(`${BASE}/services/svc-1`, () => new HttpResponse(null, { status: 204 })),
+    );
+
+    expect((await client().deleteService("svc-1")).ok).toBe(true);
+  });
+
+  it("sets a key, and gets back a service that does not contain it", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.put(`${BASE}/services/svc-1/credential`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...serviceRow, tokenEnv: null, secretRef: "vault://abc" });
+      }),
+    );
+
+    const result = await client().setServiceCredential("svc-1", { apiKey: "sk-live-1" });
+
+    expect(sent).toEqual({ apiKey: "sk-live-1" });
+    if (!result.ok) throw new Error("expected the key to be set");
+    expect(result.value.secretRef).toBe("vault://abc");
+    expect(JSON.stringify(result.value)).not.toContain("sk-live-1");
+  });
+
+  it("names a variable instead", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.put(`${BASE}/services/svc-1/credential`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(serviceRow);
+      }),
+    );
+
+    await client().setServiceCredential("svc-1", { tokenEnv: "OPENAI_API_KEY" });
+
+    expect(sent).toEqual({ tokenEnv: "OPENAI_API_KEY" });
+  });
+
+  it("carries back an office that will not keep a key, since the canvas must say so", async () => {
+    server.use(
+      http.put(`${BASE}/services/svc-1/credential`, () =>
+        HttpResponse.json({ error: "this office cannot keep a key" }, { status: 501 }),
+      ),
+    );
+
+    const result = await client().setServiceCredential("svc-1", { apiKey: "sk-live-1" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "transport") {
+      expect(result.message).toContain("cannot keep a key");
+    } else {
+      throw new Error("expected to be told why not");
+    }
+  });
+
+  it("gives a key back", async () => {
+    server.use(
+      http.delete(`${BASE}/services/svc-1/credential`, () =>
+        HttpResponse.json({ ...serviceRow, tokenEnv: null, secretRef: null }),
+      ),
+    );
+
+    const result = await client().clearServiceCredential("svc-1");
+
+    if (!result.ok) throw new Error("expected the key to be given back");
+    expect(result.value.secretRef).toBeNull();
+  });
+
+  it("reads a key, which is what a worker does with its own token", async () => {
+    server.use(
+      http.get(`${BASE}/services/svc-1/credential`, () =>
+        HttpResponse.json({ apiKey: "sk-live-1" }),
+      ),
+    );
+
+    const result = await client().serviceCredential("svc-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe("sk-live-1");
+  });
+
+  it("says a service keeps nothing without calling that a failure", async () => {
+    // A service pointed at a local model has no key, and a worker asking for
+    // one is not an error it should report.
+    server.use(
+      http.get(`${BASE}/services/svc-1/credential`, () =>
+        HttpResponse.json({ error: "key not found" }, { status: 404 }),
+      ),
+    );
+
+    const result = await client().serviceCredential("svc-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBeNull();
+  });
+
+  it("asks a service what models it has", async () => {
+    server.use(
+      http.post(`${BASE}/services/svc-1/discover`, () =>
+        HttpResponse.json({ ...serviceRow, models: [{ id: "gpt-5" }, { id: "gpt-5-mini" }] }),
+      ),
+    );
+
+    const result = await client().discoverServiceModels("svc-1");
+
+    if (!result.ok) throw new Error("expected the models to be written down");
+    expect(result.value.models.map((model) => model.id)).toEqual(["gpt-5", "gpt-5-mini"]);
+  });
+
+  it("carries back why a service could not be asked, which is the whole point of asking", async () => {
+    server.use(
+      http.post(`${BASE}/services/svc-1/discover`, () =>
+        HttpResponse.json({ error: "connection refused" }, { status: 502 }),
+      ),
+    );
+
+    const result = await client().discoverServiceModels("svc-1");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "transport") {
+      expect(result.message).toContain("connection refused");
+    } else {
+      throw new Error("expected to be told why not");
+    }
+  });
+});

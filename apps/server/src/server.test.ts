@@ -4196,3 +4196,429 @@ describe("changing a piece of work, and handing it on", () => {
     expect(refused.statusCode).toBe(400);
   });
 });
+
+describe("the AI services an office can reach", () => {
+  const aService = (overrides: Record<string, unknown> = {}) => ({
+    kind: "openai-compatible",
+    name: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    ...overrides,
+  });
+
+  const servicesOf = async (officeId: string) =>
+    (await get(`/offices/${officeId}/services`)).json<{ items: Record<string, unknown>[] }>().items;
+
+  it("has none until somebody adds one", async () => {
+    const officeId = await anOffice();
+
+    expect(await servicesOf(officeId)).toEqual([]);
+  });
+
+  it("takes one, and says so on the stream", async () => {
+    const officeId = await anOffice();
+
+    const created = await post(`/offices/${officeId}/services`, aService());
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      name: "openai",
+      kind: "openai-compatible",
+      baseUrl: "https://api.openai.com/v1",
+      enabled: true,
+      models: [],
+    });
+    expect(events.since(officeId, 0).map((event) => event.data["kind"])).toContain(
+      "service.created",
+    );
+  });
+
+  it("takes a local server with no key at all", async () => {
+    const officeId = await anOffice();
+
+    const created = await post(
+      `/offices/${officeId}/services`,
+      aService({ name: "workshop", baseUrl: "http://10.0.0.12:11434/v1" }),
+    );
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ tokenEnv: null, secretRef: null });
+  });
+
+  it("refuses what core refuses, in core's words", async () => {
+    const officeId = await anOffice();
+
+    const refused = await post(
+      `/offices/${officeId}/services`,
+      aService({ baseUrl: "http://api.openai.com/v1" }),
+    );
+
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json<{ errors: { path: string }[] }>().errors[0]?.path).toBe("baseUrl");
+  });
+
+  it("refuses a body that is not what it says, rather than throwing", async () => {
+    const officeId = await anOffice();
+
+    const refused = await post(`/offices/${officeId}/services`, { kind: 7, name: { a: 1 } });
+
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("refuses a key pasted into the record itself", async () => {
+    // There is one way in for a key, and it is not this one.
+    const officeId = await anOffice();
+
+    const refused = await post(`/offices/${officeId}/services`, aService({ apiKey: "sk-live-1" }));
+
+    expect(refused.statusCode).toBe(201);
+    expect(JSON.stringify(refused.json())).not.toContain("sk-live-1");
+  });
+
+  it("knows nothing of an office it does not have", async () => {
+    expect((await get("/offices/nope/services")).statusCode).toBe(404);
+    expect((await post("/offices/nope/services", aService())).statusCode).toBe(404);
+  });
+
+  it("changes one, and refuses a change to one that moved on", async () => {
+    const officeId = await anOffice();
+    const id = (await post(`/offices/${officeId}/services`, aService())).json<{ id: string }>().id;
+
+    const changed = await patch(`/services/${id}`, {
+      models: [{ id: "gpt-5", pricing: { inputPerMTok: 1.25, outputPerMTok: 10 } }],
+    });
+
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json<{ models: { id: string }[] }>().models[0]?.id).toBe("gpt-5");
+    const stale = await server.inject({
+      method: "PATCH",
+      url: `/services/${id}`,
+      headers: { ...auth, "x-vo-since-offset": "0" },
+      payload: { enabled: false },
+    });
+    expect(stale.statusCode).toBe(409);
+  });
+
+  it("switches one off without forgetting it", async () => {
+    const officeId = await anOffice();
+    const id = (await post(`/offices/${officeId}/services`, aService())).json<{ id: string }>().id;
+
+    await patch(`/services/${id}`, { enabled: false });
+
+    expect((await servicesOf(officeId))[0]).toMatchObject({ enabled: false });
+  });
+
+  it("forgets one that is asked to go", async () => {
+    const officeId = await anOffice();
+    const id = (await post(`/offices/${officeId}/services`, aService())).json<{ id: string }>().id;
+
+    const gone = await server.inject({ method: "DELETE", url: `/services/${id}`, headers: auth });
+
+    expect(gone.statusCode).toBe(204);
+    expect(await servicesOf(officeId)).toEqual([]);
+  });
+
+  it("has nothing to say about a service it does not have", async () => {
+    expect((await patch("/services/nope", { enabled: false })).statusCode).toBe(404);
+    expect(
+      (await server.inject({ method: "DELETE", url: "/services/nope", headers: auth })).statusCode,
+    ).toBe(404);
+  });
+});
+
+describe("a key the office keeps for a service", () => {
+  /** A vault, as the office sees one: the real one satisfies this. */
+  const keeper = () => {
+    const kept = new Map<string, string>();
+    let next = 0;
+    return {
+      kept,
+      secrets: {
+        put: (_name: string, value: string) => {
+          const ref = `vault://kept-${String(++next)}`;
+          kept.set(ref, value);
+          return Promise.resolve(ref);
+        },
+        update: (ref: string, value: string) => {
+          kept.set(ref, value);
+          return Promise.resolve(ref);
+        },
+        get: (ref: string) => Promise.resolve(kept.get(ref) ?? null),
+        delete: (ref: string) => Promise.resolve(kept.delete(ref)),
+      },
+    };
+  };
+
+  const office = async (extra: Record<string, unknown> = {}) => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-09-28T09:00:00.000Z"),
+      ...extra,
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const created = await post(`/offices/${officeId}/services`, {
+      kind: "openai-compatible",
+      name: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    return { officeId, id: created.json<{ id: string }>().id };
+  };
+
+  it("takes a key pasted in and keeps a reference to it, never the key", async () => {
+    const vault = keeper();
+    const { officeId, id } = await office({ secrets: vault.secrets });
+
+    const set = await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toMatchObject({ secretRef: "vault://kept-1", tokenEnv: null });
+    expect(JSON.stringify(set.json())).not.toContain("sk-live-1");
+    expect(JSON.stringify(await servicesIn(officeId))).not.toContain("sk-live-1");
+    expect(vault.kept.get("vault://kept-1")).toBe("sk-live-1");
+  });
+
+  const servicesIn = async (officeId: string) =>
+    (await get(`/offices/${officeId}/services`)).json<{ items: unknown[] }>().items;
+
+  it("replaces a key it already keeps, rather than keeping two", async () => {
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+    const again = await put(`/services/${id}/credential`, { apiKey: "sk-live-2" });
+
+    expect(again.json()).toMatchObject({ secretRef: "vault://kept-1" });
+    expect(vault.kept.get("vault://kept-1")).toBe("sk-live-2");
+    expect(vault.kept.size).toBe(1);
+  });
+
+  it("takes the name of a variable instead, and lets go of a key it was keeping", async () => {
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    const named = await put(`/services/${id}/credential`, { tokenEnv: "OPENAI_API_KEY" });
+
+    expect(named.json()).toMatchObject({ tokenEnv: "OPENAI_API_KEY", secretRef: null });
+    expect(vault.kept.size).toBe(0);
+  });
+
+  it("gives a key back when asked to forget it", async () => {
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    const forgotten = await server.inject({
+      method: "DELETE",
+      url: `/services/${id}/credential`,
+      headers: auth,
+    });
+
+    expect(forgotten.statusCode).toBe(200);
+    expect(forgotten.json()).toMatchObject({ secretRef: null, tokenEnv: null });
+    expect(vault.kept.size).toBe(0);
+  });
+
+  it("lets go of a kept key when the service itself goes", async () => {
+    // Nothing would ever ask for it again, and a vault full of keys for
+    // services nobody has is a vault nobody can audit.
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    await server.inject({ method: "DELETE", url: `/services/${id}`, headers: auth });
+
+    expect(vault.kept.size).toBe(0);
+  });
+
+  it("refuses to keep one when this office has no vault, and says to name a variable", async () => {
+    const { id } = await office();
+
+    const refused = await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    expect(refused.statusCode).toBe(501);
+    expect(refused.json<{ error: string }>().error).toMatch(/variable/i);
+  });
+
+  it("still takes the name of a variable without a vault, which needs nothing kept", async () => {
+    const { id } = await office();
+
+    const named = await put(`/services/${id}/credential`, { tokenEnv: "OPENAI_API_KEY" });
+
+    expect(named.statusCode).toBe(200);
+    expect(named.json()).toMatchObject({ tokenEnv: "OPENAI_API_KEY" });
+  });
+
+  it("refuses a credential that is neither", async () => {
+    const { id } = await office({ secrets: keeper().secrets });
+
+    expect((await put(`/services/${id}/credential`, {})).statusCode).toBe(400);
+    expect((await put(`/services/${id}/credential`, { apiKey: "" })).statusCode).toBe(400);
+    expect((await put(`/services/${id}/credential`, { tokenEnv: "lower case" })).statusCode).toBe(
+      400,
+    );
+  });
+
+  it("hands the key to a worker, which is the only thing that needs it", async () => {
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    const read = await get(`/services/${id}/credential`);
+
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toEqual({ apiKey: "sk-live-1" });
+  });
+
+  it("never hands it to a browser, however it signed in", async () => {
+    // The canvas can set a key and can never read one back: anybody who can
+    // open the canvas could otherwise walk off with every key in the office.
+    const vault = keeper();
+    const { id } = await office({ secrets: vault.secrets });
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    const asBrowser = await server.inject({
+      method: "GET",
+      url: `/services/${id}/credential`,
+      headers: { cookie: `vo_session=${TOKEN}` },
+    });
+
+    expect(asBrowser.statusCode).toBe(403);
+    expect(asBrowser.body).not.toContain("sk-live-1");
+  });
+
+  it("says a service keeps nothing when it keeps nothing", async () => {
+    const { id } = await office({ secrets: keeper().secrets });
+
+    const read = await get(`/services/${id}/credential`);
+
+    expect(read.statusCode).toBe(404);
+  });
+});
+
+describe("asking a service what models it has", () => {
+  const office = async (
+    discover?: (
+      service: { readonly name: string },
+      apiKey: string | null,
+    ) => Promise<readonly string[]>,
+    extra: Record<string, unknown> = {},
+  ) => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-09-28T09:00:00.000Z"),
+      ...(discover === undefined ? {} : { discoverModels: discover }),
+      ...extra,
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const created = await post(`/offices/${officeId}/services`, {
+      kind: "openai-compatible",
+      name: "workshop",
+      baseUrl: "http://localhost:11434/v1",
+    });
+    return { officeId, id: created.json<{ id: string }>().id };
+  };
+
+  it("writes the names down, which is how a local server gets its list", async () => {
+    const { id } = await office(() => Promise.resolve(["qwen3-coder", "llama3"]));
+
+    const answer = await post(`/services/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json<{ models: { id: string }[] }>().models.map((model) => model.id)).toEqual([
+      "qwen3-coder",
+      "llama3",
+    ]);
+  });
+
+  it("keeps the prices somebody typed for a model it already knew", async () => {
+    // Discovering again must not quietly make every model unpriced.
+    const { id } = await office(() => Promise.resolve(["qwen3-coder", "llama3"]));
+    await patch(`/services/${id}`, {
+      models: [{ id: "qwen3-coder", pricing: { inputPerMTok: 0.1, outputPerMTok: 0.2 } }],
+    });
+
+    const answer = await post(`/services/${id}/discover`, {});
+
+    const models = answer.json<{ models: { id: string; pricing?: unknown }[] }>().models;
+    expect(models.find((model) => model.id === "qwen3-coder")?.pricing).toEqual({
+      inputPerMTok: 0.1,
+      outputPerMTok: 0.2,
+    });
+    expect(models.find((model) => model.id === "llama3")?.pricing).toBeUndefined();
+  });
+
+  it("hands over the key, since a service will not answer without one", async () => {
+    const kept = new Map<string, string>([["vault://k1", "sk-live-1"]]);
+    const keys: (string | null)[] = [];
+    const { id } = await office(
+      (_service, apiKey) => {
+        keys.push(apiKey);
+        return Promise.resolve(["gpt-5"]);
+      },
+      {
+        secrets: {
+          put: () => Promise.resolve("vault://k1"),
+          update: (ref: string) => Promise.resolve(ref),
+          get: (ref: string) => Promise.resolve(kept.get(ref) ?? null),
+          delete: () => Promise.resolve(true),
+        },
+      },
+    );
+    await put(`/services/${id}/credential`, { apiKey: "sk-live-1" });
+
+    await post(`/services/${id}/discover`, {});
+
+    expect(keys).toEqual(["sk-live-1"]);
+  });
+
+  it("hands over the key out of the variable the service names", async () => {
+    const keys: (string | null)[] = [];
+    const { id } = await office(
+      (_service, apiKey) => {
+        keys.push(apiKey);
+        return Promise.resolve(["gpt-5"]);
+      },
+      { env: { OPENAI_API_KEY: "sk-from-env" } },
+    );
+    await put(`/services/${id}/credential`, { tokenEnv: "OPENAI_API_KEY" });
+
+    await post(`/services/${id}/discover`, {});
+
+    expect(keys).toEqual(["sk-from-env"]);
+  });
+
+  it("says what went wrong, because somebody pressed a button and is waiting", async () => {
+    const { id } = await office(() => Promise.reject(new Error("connection refused")));
+
+    const answer = await post(`/services/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(answer.json<{ error: string }>().error).toContain("connection refused");
+  });
+
+  it("changes nothing when a service answers with no models at all", async () => {
+    const { id } = await office(() => Promise.resolve([]));
+    await patch(`/services/${id}`, { models: [{ id: "qwen3-coder" }] });
+
+    const answer = await post(`/services/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(answer.json<{ current: { models: { id: string }[] } }>().current.models).toHaveLength(1);
+  });
+
+  it("says so when this office has no way to ask", async () => {
+    const { id } = await office();
+
+    expect((await post(`/services/${id}/discover`, {})).statusCode).toBe(501);
+  });
+});

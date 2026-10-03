@@ -241,3 +241,106 @@ describe("a server told to use storage it cannot open", () => {
     );
   });
 });
+
+describe("an office that keeps a key for a service", () => {
+  const send = (url: string, method: string, body?: unknown) =>
+    fetch(url, {
+      method,
+      headers: { authorization: "Bearer sk-owner", "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  /** A 32-byte key, as the vault wants it. */
+  const VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
+
+  const aService = async (url: string, name = "workshop", baseUrl = "http://localhost:1/v1") => {
+    const office = await send(`${url}/offices`, "POST", { name: "Northwind" });
+    const officeId = ((await office.json()) as { id: string }).id;
+    const created = await send(`${url}/offices/${officeId}/services`, "POST", {
+      kind: "openai-compatible",
+      name,
+      baseUrl,
+    });
+    return { officeId, id: ((await created.json()) as { id: string }).id };
+  };
+
+  it("keeps a pasted key where the blobs are, and hands it back to a token", async () => {
+    await running({ VO_VAULT_KEY: VAULT_KEY }, async (started) => {
+      const { id } = await aService(started.url);
+
+      const set = await send(`${started.url}/services/${id}/credential`, "PUT", {
+        apiKey: "sk-live-1",
+      });
+
+      expect(set.status).toBe(200);
+      const service = (await set.json()) as { secretRef: string | null };
+      expect(service.secretRef).toMatch(/^vault:\/\//);
+      // Through the real vault, encrypted and read back again.
+      const read = await get(`${started.url}/services/${id}/credential`);
+      expect(await read.json()).toEqual({ apiKey: "sk-live-1" });
+    });
+  });
+
+  it("refuses to keep one without a key of its own, rather than storing it in the clear", async () => {
+    await running({}, async (started) => {
+      const { id } = await aService(started.url);
+
+      const refused = await send(`${started.url}/services/${id}/credential`, "PUT", {
+        apiKey: "sk-live-1",
+      });
+
+      expect(refused.status).toBe(501);
+      expect(((await refused.json()) as { error: string }).error).toMatch(/variable/i);
+    });
+  });
+
+  it("asks a real service which models it has", async () => {
+    // The office's own `discoverModels`, against a server that answers like
+    // every one of them does: this is the wiring no unit test can prove.
+    const asked: string[] = [];
+    const listener = createServer((request, response) => {
+      asked.push(`${request.method ?? ""} ${request.url ?? ""}`);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "qwen3-coder" }, { id: "llama3" }] }));
+    });
+    await new Promise<void>((resolve) => {
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (listener.address() as { port: number }).port;
+
+    try {
+      await running({}, async (started) => {
+        const { id } = await aService(
+          started.url,
+          "workshop",
+          `http://127.0.0.1:${String(port)}/v1`,
+        );
+
+        const found = await send(`${started.url}/services/${id}/discover`, "POST", {});
+
+        expect(found.status).toBe(200);
+        const service = (await found.json()) as { models: { id: string }[] };
+        expect(service.models.map((model) => model.id)).toEqual(["qwen3-coder", "llama3"]);
+        expect(asked).toEqual(["GET /v1/models"]);
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  it("says why a service could not be asked, because somebody is waiting", async () => {
+    await running({}, async (started) => {
+      // Nothing is listening on port 1.
+      const { id } = await aService(started.url, "workshop", "http://127.0.0.1:1/v1");
+
+      const failed = await send(`${started.url}/services/${id}/discover`, "POST", {});
+
+      expect(failed.status).toBe(502);
+      expect(((await failed.json()) as { error: string }).error.length).toBeGreaterThan(0);
+    });
+  });
+});
