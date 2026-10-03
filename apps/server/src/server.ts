@@ -41,6 +41,7 @@ import {
   updateNotificationChannel,
   usageRecordOf,
   createLlmService,
+  recordCorrection,
   updateConnection,
   updateConnector,
   updateLlmService,
@@ -55,6 +56,7 @@ import {
   type Connector,
   type GatedAction,
   type ConnectorId,
+  type Correction,
   type LlmService,
   type LlmServiceId,
   type UpdateLlmServiceInput,
@@ -80,6 +82,7 @@ import {
   performCreateWork,
   whatIsWaiting,
   type HeldCall,
+  type VoiceSample,
   type RunCheckpoint,
   type WorkflowContext,
   type WorkflowEvent,
@@ -187,6 +190,25 @@ export interface ServerOptions {
     service: LlmService,
     apiKey: string | null,
   ) => Promise<readonly string[]>;
+  /**
+   * Reads somebody's writing once and answers with a style card.
+   *
+   * Injected for the reason the other two are: this process opens no socket a
+   * test did not ask for, and the words it would use belong in the package that
+   * owns every other prompt. An office without it answers 501, and the owner
+   * can still write a card by hand.
+   */
+  readonly studyVoice?: (request: StudyRequest) => Promise<string>;
+}
+
+/** What a study is asked about: whose voice, what to read, and on whose model. */
+export interface StudyRequest {
+  readonly officeId: string;
+  readonly person: string;
+  readonly samples: readonly VoiceSample[];
+  readonly corrections: readonly Correction[];
+  /** The employee's own model, so a study runs where their work runs. */
+  readonly llm: { readonly provider: string; readonly model: string };
 }
 
 /**
@@ -824,6 +846,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           // untyped, as the llm block is: core is where it is judged.
           ...(body["instructions"] === undefined ? {} : { instructions: body["instructions"] }),
           ...(body["examples"] === undefined ? {} : { examples: body["examples"] }),
+          ...(body["understudy"] === undefined
+            ? {}
+            : { understudy: recordedHere(body["understudy"], request) }),
         },
         {
           department: { id: department.id, officeId: department.officeId },
@@ -845,6 +870,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     const employee = await store.employees.get(id);
     return employee ?? missing(reply, "employee");
   });
+
+  /**
+   * Who said this employee may stand in for a real person.
+   *
+   * Taken from whoever is calling, never from the body: that one field is the
+   * office's record of somebody's consent, and a browser claiming it on another
+   * person's behalf is exactly the claim that must not be taken at face value.
+   */
+  const recordedHere = (asked: unknown, request: FastifyRequest): unknown => {
+    if (asked === null || typeof asked !== "object") return asked;
+    return { ...(asked as Record<string, unknown>), recordedBy: personOf(request) };
+  };
 
   app.patch("/employees/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -872,7 +909,16 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         ? null
         : await store.employees.get(body.supervisorId);
 
-    const updated = updateEmployee(employee, request.body as Record<string, never>, {
+    // Who recorded a voice is stamped from the token rather than read out of
+    // the body; everything else core judges as it always did.
+    const asked = request.body as Record<string, unknown>;
+    const changes = (
+      "understudy" in asked
+        ? { ...asked, understudy: recordedHere(asked["understudy"], request) }
+        : asked
+    ) as Record<string, never>;
+
+    const updated = updateEmployee(employee, changes, {
       supervisor:
         supervisor === null
           ? null
@@ -882,6 +928,129 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.employees.put(updated.value);
     events.publish(employee.officeId, { kind: "employee.updated", id });
     return updated.value;
+  });
+
+  /**
+   * Reading the writing somebody handed over, once.
+   *
+   * The samples are documents in this employee's in-tray, where the owner put
+   * them deliberately — that act is the consent. They are read here, turned
+   * into a card, and never copied onto the employee: what the office keeps is
+   * its own page about how somebody writes, and the writing stays where it was
+   * put.
+   *
+   * The same shape as asking a service what models it has: an injected
+   * capability, 501 when this office has none, 502 when the model refuses.
+   */
+  app.post("/employees/:id/study", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    if (employee === null) return missing(reply, "employee");
+
+    const standing = employee.understudy;
+    if (standing === null) {
+      return fail(reply, [
+        {
+          path: "understudy",
+          message: "this person stands in for nobody, so there is nobody to study",
+        },
+      ]);
+    }
+
+    const study = options.studyVoice;
+    if (study === undefined) {
+      return reply.code(501).send({ error: "this office has no way to study how somebody writes" });
+    }
+    if (blobs === undefined) {
+      return reply.code(501).send({ error: "this office keeps no documents to study" });
+    }
+
+    // Text only, the way a turn reads what it was handed: a headshot in the
+    // tray is not writing, and a sample nothing can decode teaches nothing.
+    const held = await listTray(store.documents, { kind: "employee", id }, "in");
+    const samples: VoiceSample[] = [];
+    for (const document of held) {
+      if (!document.mediaType.startsWith("text/")) continue;
+      const read = await readDocument({ documents: store.documents, blobs }, document.id);
+      if (read === null) continue;
+      samples.push({ name: document.name, text: new TextDecoder().decode(read.body) });
+    }
+    if (samples.length === 0) {
+      return fail(reply, [
+        {
+          path: "samples",
+          message:
+            "put some of their writing in this person's in-tray first: plain text, five or more",
+        },
+      ]);
+    }
+
+    let card: string;
+    try {
+      card = await study({
+        officeId: employee.officeId,
+        person: standing.person,
+        samples,
+        corrections: standing.corrections,
+        llm: { provider: employee.llm.provider, model: employee.llm.model },
+      });
+    } catch (error) {
+      return reply
+        .code(502)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (card.trim().length === 0) {
+      return reply.code(502).send({
+        error: `nothing was written about how ${standing.person} writes, so nothing was changed`,
+        current: employee,
+      });
+    }
+
+    const updated = updateEmployee(
+      employee,
+      {
+        understudy: {
+          ...standing,
+          card,
+          cardMadeAt: now(),
+          cardFromSamples: samples.length,
+        },
+      },
+      { supervisor: null },
+    );
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.employees.put(updated.value);
+    events.publish(employee.officeId, { kind: "employee.updated", id });
+    return updated.value;
+  });
+
+  /**
+   * What the real person changed about a draft.
+   *
+   * Worth more to the next study than another twenty samples, and worth it only
+   * if the office keeps both halves: what it wrote, and what they made it say.
+   */
+  app.post("/employees/:id/corrections", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    if (employee === null) return missing(reply, "employee");
+
+    const body = request.body as Record<string, unknown>;
+    const problems: ValidationError[] = [];
+    const before = text(body, "before", problems);
+    const after = text(body, "after", problems);
+    const taskId = text(body, "taskId", problems);
+    if (problems.length > 0) return fail(reply, problems);
+
+    const corrected = recordCorrection(
+      employee,
+      { before, after, ...(taskId.length === 0 ? {} : { taskId }) },
+      { now },
+    );
+    if (isErr(corrected)) return fail(reply, corrected.error);
+    await store.employees.put(corrected.value);
+    events.publish(employee.officeId, { kind: "employee.updated", id });
+    return corrected.value;
   });
 
   /**

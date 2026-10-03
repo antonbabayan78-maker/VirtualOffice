@@ -1787,3 +1787,103 @@ describe("an employee from an office that predates being taught", () => {
     expect(result.value.examples).toHaveLength(1);
   });
 });
+
+describe("an employee that stands in for a real person", () => {
+  const sam = {
+    id: "emp-sam",
+    officeId: "office-1",
+    departmentId: "dept-support",
+    name: "Sam",
+    role: "Clerk",
+    toolGrants: [],
+    understudy: {
+      person: "Anna Petrova",
+      recordedBy: "owner-1",
+      recordedAt: "2026-10-03T09:00:00.000Z",
+      enabled: true,
+      card: "Opens with the first name.",
+      cardMadeAt: "2026-10-03T09:00:00.000Z",
+      cardFromSamples: 3,
+      corrections: [
+        {
+          at: "2026-10-03T10:00:00.000Z",
+          taskId: "task-1",
+          before: "Dear Sir,",
+          after: "Hi Tom,",
+        },
+      ],
+    },
+    createdAt: "2026-09-30T09:00:00.000Z",
+    statusChangedAt: "2026-09-30T09:00:00.000Z",
+  };
+
+  it("turns the dates on a voice back into dates", async () => {
+    // A Date that is secretly a string survives until something formats it,
+    // and "studied on 2026-10-03T09:00:00.000Z" is not a sentence.
+    server.use(http.get(`${BASE}/employees/emp-sam`, () => HttpResponse.json(sam)));
+
+    const result = await client().getEmployee("emp-sam");
+
+    if (!result.ok) throw new Error("expected this person to load");
+    expect(result.value.understudy?.recordedAt).toBeInstanceOf(Date);
+    expect(result.value.understudy?.cardMadeAt).toBeInstanceOf(Date);
+    expect(result.value.understudy?.corrections[0]?.at).toBeInstanceOf(Date);
+  });
+
+  it("stands in for nobody when the office says nothing", async () => {
+    server.use(
+      http.get(`${BASE}/employees/emp-ada`, () =>
+        HttpResponse.json({ ...sam, id: "emp-ada", understudy: undefined }),
+      ),
+    );
+
+    const result = await client().getEmployee("emp-ada");
+
+    if (!result.ok) throw new Error("expected this person to load");
+    expect(result.value.understudy).toBeNull();
+  });
+
+  it("asks the office to study them, and gets the card back", async () => {
+    server.use(http.post(`${BASE}/employees/emp-sam/study`, () => HttpResponse.json(sam)));
+
+    const result = await client().studyVoice("emp-sam");
+
+    if (!result.ok) throw new Error("expected the study to answer");
+    expect(result.value.understudy?.card).toBe("Opens with the first name.");
+  });
+
+  it("carries back why a study could not happen, since somebody is waiting", async () => {
+    server.use(
+      http.post(`${BASE}/employees/emp-sam/study`, () =>
+        HttpResponse.json({ error: "this office has no model to study with" }, { status: 502 }),
+      ),
+    );
+
+    const result = await client().studyVoice("emp-sam");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "transport") {
+      expect(result.message).toContain("no model to study with");
+    } else {
+      throw new Error("expected to be told why not");
+    }
+  });
+
+  it("records what the real person changed", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/employees/emp-sam/corrections`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(sam);
+      }),
+    );
+
+    await client().recordCorrection("emp-sam", {
+      before: "Dear Sir,",
+      after: "Hi Tom,",
+      taskId: "task-1",
+    });
+
+    expect(sent).toEqual({ before: "Dear Sir,", after: "Hi Tom,", taskId: "task-1" });
+  });
+});

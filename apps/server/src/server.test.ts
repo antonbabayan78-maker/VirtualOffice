@@ -4681,3 +4681,218 @@ describe("teaching somebody over the wire", () => {
     expect(hired.statusCode).toBe(400);
   });
 });
+
+describe("an employee that stands in for a real person", () => {
+  const hire = async (officeId: string, departmentId: string, body: Record<string, unknown> = {}) =>
+    post(`/offices/${officeId}/employees`, {
+      name: "Sam",
+      role: "Clerk",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      ...body,
+    });
+
+  it("records who they stand in for, and who said so", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+
+    const hired = await hire(officeId, departmentId, {
+      understudy: { person: "Anna Petrova", recordedBy: "anton@acme.test" },
+    });
+
+    expect(hired.statusCode).toBe(201);
+    expect(hired.json()).toMatchObject({
+      // `recordedBy` is whoever is calling, not what the body claimed — the
+      // test below is about that.
+      understudy: { person: "Anna Petrova", recordedBy: "owner-1", enabled: true },
+    });
+  });
+
+  it("stamps who recorded it from the token, not from the body", async () => {
+    // Who agreed to this is a fact about a person, and a browser saying so
+    // about somebody else is exactly the claim that must not be taken.
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+
+    const hired = await hire(officeId, departmentId, {
+      understudy: { person: "Anna Petrova", recordedBy: "somebody-else" },
+    });
+
+    expect(hired.json<{ understudy: { recordedBy: string } }>().understudy.recordedBy).toBe(
+      "owner-1",
+    );
+  });
+
+  it("stops standing in for anybody", async () => {
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const id = (
+      await hire(officeId, departmentId, {
+        understudy: { person: "Anna Petrova", recordedBy: "anton@acme.test" },
+      })
+    ).json<{ id: string }>().id;
+
+    const stopped = await patch(`/employees/${id}`, { understudy: null });
+
+    expect(stopped.json<{ understudy: unknown }>().understudy).toBeNull();
+  });
+});
+
+describe("studying how a real person writes", () => {
+  const office = async (
+    study?: (request: {
+      person: string;
+      samples: readonly { name: string; text: string }[];
+      llm: { provider: string; model: string };
+    }) => Promise<string>,
+  ) => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs: new InMemoryBlobStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-09-28T09:00:00.000Z"),
+      ...(study === undefined ? {} : { studyVoice: study }),
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const employee = await post(`/offices/${officeId}/employees`, {
+      name: "Sam",
+      role: "Clerk",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      understudy: { person: "Anna Petrova", recordedBy: "anton@acme.test" },
+    });
+    return { officeId, id: employee.json<{ id: string }>().id };
+  };
+
+  const sample = (officeId: string, employeeId: string, name: string, text: string) =>
+    post(`/offices/${officeId}/documents`, {
+      ownerKind: "employee",
+      ownerId: employeeId,
+      tray: "in",
+      name,
+      mediaType: "text/plain",
+      contentBase64: Buffer.from(text, "utf8").toString("base64"),
+    });
+
+  it("reads what is in their in-tray and writes down the card", async () => {
+    const studied: { person: string; samples: readonly { name: string; text: string }[] }[] = [];
+    const { officeId, id } = await office((request) => {
+      studied.push(request);
+      return Promise.resolve("Opens with the first name. Never uses bullets.");
+    });
+    await sample(officeId, id, "reply.txt", "Hi Tom,\n\nSorted.\n\nAnna");
+
+    const answer = await post(`/employees/${id}/study`, {});
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).toMatchObject({
+      understudy: {
+        card: "Opens with the first name. Never uses bullets.",
+        cardFromSamples: 1,
+      },
+    });
+    expect(studied[0]?.person).toBe("Anna Petrova");
+    expect(studied[0]?.samples[0]).toEqual({
+      name: "reply.txt",
+      text: "Hi Tom,\n\nSorted.\n\nAnna",
+    });
+    // Studied on the model that does this person's work.
+    expect((studied[0] as unknown as { llm: { model: string } }).llm.model).toBe("claude-sonnet-5");
+  });
+
+  it("studies only what it can read, and says so when there is nothing", async () => {
+    const { officeId, id } = await office(() => Promise.resolve("never asked"));
+    await post(`/offices/${officeId}/documents`, {
+      ownerKind: "employee",
+      ownerId: id,
+      tray: "in",
+      name: "headshot.png",
+      mediaType: "image/png",
+      contentBase64: Buffer.from([1, 2, 3]).toString("base64"),
+    });
+
+    const answer = await post(`/employees/${id}/study`, {});
+
+    expect(answer.statusCode).toBe(400);
+    expect(answer.json<{ errors: { message: string }[] }>().errors[0]?.message).toMatch(/in-tray/i);
+  });
+
+  it("refuses to study somebody who stands in for nobody", async () => {
+    const { officeId, id } = await office(() => Promise.resolve("never asked"));
+    await patch(`/employees/${id}`, { understudy: null });
+    await sample(officeId, id, "reply.txt", "Hi Tom,");
+
+    expect((await post(`/employees/${id}/study`, {})).statusCode).toBe(400);
+  });
+
+  it("says so when this office has no way to study anybody", async () => {
+    const { officeId, id } = await office();
+    await sample(officeId, id, "reply.txt", "Hi Tom,");
+
+    expect((await post(`/employees/${id}/study`, {})).statusCode).toBe(501);
+  });
+
+  it("says what went wrong, because somebody pressed a button and is waiting", async () => {
+    const { officeId, id } = await office(() => Promise.reject(new Error("the model refused")));
+    await sample(officeId, id, "reply.txt", "Hi Tom,");
+
+    const answer = await post(`/employees/${id}/study`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(answer.json<{ error: string }>().error).toContain("the model refused");
+  });
+
+  it("keeps the samples out of the record it saves", async () => {
+    // The card is what the office keeps; the writing stays where somebody put
+    // it, in the tray, and is never copied into the employee.
+    const { officeId, id } = await office(() => Promise.resolve("Short sentences."));
+    await sample(officeId, id, "reply.txt", "Hi Tom, the parcel goes out today.");
+
+    const answer = await post(`/employees/${id}/study`, {});
+
+    expect(JSON.stringify(answer.json())).not.toContain("the parcel goes out today");
+  });
+
+  it("keeps what the real person changed, newest first", async () => {
+    const { id } = await office(() => Promise.resolve("Short sentences."));
+
+    await post(`/employees/${id}/corrections`, {
+      before: "Dear Sir or Madam,",
+      after: "Hi Tom,",
+      taskId: "task-1",
+    });
+    const second = await post(`/employees/${id}/corrections`, {
+      before: "Kind regards,",
+      after: "Thanks,",
+    });
+
+    expect(second.statusCode).toBe(200);
+    const corrections = second.json<{ understudy: { corrections: { after: string }[] } }>()
+      .understudy.corrections;
+    expect(corrections.map((one) => one.after)).toEqual(["Thanks,", "Hi Tom,"]);
+  });
+
+  it("refuses a correction that corrects nothing", async () => {
+    const { id } = await office(() => Promise.resolve("Short sentences."));
+
+    const refused = await post(`/employees/${id}/corrections`, { before: "same", after: "same" });
+
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("has nothing to say about somebody it does not have", async () => {
+    await office(() => Promise.resolve("never asked"));
+
+    expect((await post("/employees/nope/study", {})).statusCode).toBe(404);
+    expect(
+      (await post("/employees/nope/corrections", { before: "a", after: "b" })).statusCode,
+    ).toBe(404);
+  });
+});

@@ -344,3 +344,145 @@ describe("an office that keeps a key for a service", () => {
     });
   });
 });
+
+describe("an office that can study how somebody writes", () => {
+  const send = (url: string, method: string, body?: unknown) =>
+    fetch(url, {
+      method,
+      headers: { authorization: "Bearer sk-owner", "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  it("asks a service of its own, and keeps the card it answers with", async () => {
+    // The wiring no unit test can prove: a real office, a real service row, and
+    // a server answering the way every one of them does.
+    const asked: { system: string; user: string }[] = [];
+    const listener = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => (body += String(chunk)));
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        if ((request.url ?? "").endsWith("/models")) {
+          response.end(JSON.stringify({ data: [{ id: "qwen3-coder" }] }));
+          return;
+        }
+        const sent = JSON.parse(body) as {
+          messages: { role: string; content: string }[];
+        };
+        asked.push({
+          system: sent.messages.find((one) => one.role === "system")?.content ?? "",
+          user: sent.messages.find((one) => one.role === "user")?.content ?? "",
+        });
+        response.end(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            model: "qwen3-coder",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: { role: "assistant", content: "Opens with the first name." },
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 10 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (listener.address() as { port: number }).port;
+
+    try {
+      await running({}, async (started) => {
+        const office = await send(`${started.url}/offices`, "POST", { name: "Northwind" });
+        const officeId = ((await office.json()) as { id: string }).id;
+        const department = await send(`${started.url}/offices/${officeId}/departments`, "POST", {
+          name: "Support",
+          color: "#3366ff",
+          position: { x: 0, y: 0 },
+        });
+        const departmentId = ((await department.json()) as { id: string }).id;
+        await send(`${started.url}/offices/${officeId}/services`, "POST", {
+          kind: "openai-compatible",
+          name: "workshop",
+          baseUrl: `http://127.0.0.1:${String(port)}/v1`,
+        });
+        const hired = await send(`${started.url}/offices/${officeId}/employees`, "POST", {
+          name: "Sam",
+          role: "Clerk",
+          color: "#00aa66",
+          department: departmentId,
+          llm: { provider: "workshop", model: "qwen3-coder" },
+          understudy: { person: "Anna Petrova", recordedBy: "ignored" },
+        });
+        const employeeId = ((await hired.json()) as { id: string }).id;
+
+        await send(`${started.url}/offices/${officeId}/documents`, "POST", {
+          ownerKind: "employee",
+          ownerId: employeeId,
+          tray: "in",
+          name: "reply.txt",
+          mediaType: "text/plain",
+          contentBase64: Buffer.from("Hi Tom,\n\nSorted — goes out today.\n\nAnna").toString(
+            "base64",
+          ),
+        });
+
+        const studied = await send(`${started.url}/employees/${employeeId}/study`, "POST", {});
+
+        expect(studied.status).toBe(200);
+        const employee = (await studied.json()) as {
+          understudy: { card: string; cardFromSamples: number };
+        };
+        expect(employee.understudy.card).toBe("Opens with the first name.");
+        expect(employee.understudy.cardFromSamples).toBe(1);
+        // It studied the right person, and was given the writing to study.
+        expect(asked[0]?.system).toContain("Anna Petrova");
+        expect(asked[0]?.user).toContain("Sorted — goes out today.");
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  it("says it cannot when the office has no service and no key", async () => {
+    await running({}, async (started) => {
+      const office = await send(`${started.url}/offices`, "POST", { name: "Northwind" });
+      const officeId = ((await office.json()) as { id: string }).id;
+      const department = await send(`${started.url}/offices/${officeId}/departments`, "POST", {
+        name: "Support",
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+      });
+      const departmentId = ((await department.json()) as { id: string }).id;
+      const hired = await send(`${started.url}/offices/${officeId}/employees`, "POST", {
+        name: "Sam",
+        role: "Clerk",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+        understudy: { person: "Anna Petrova", recordedBy: "ignored" },
+      });
+      const employeeId = ((await hired.json()) as { id: string }).id;
+      await send(`${started.url}/offices/${officeId}/documents`, "POST", {
+        ownerKind: "employee",
+        ownerId: employeeId,
+        tray: "in",
+        name: "reply.txt",
+        mediaType: "text/plain",
+        contentBase64: Buffer.from("Hi Tom,").toString("base64"),
+      });
+
+      const studied = await send(`${started.url}/employees/${employeeId}/study`, "POST", {});
+
+      expect(studied.status).toBe(502);
+      expect(((await studied.json()) as { error: string }).error).toMatch(/no model|key|service/i);
+    });
+  });
+});

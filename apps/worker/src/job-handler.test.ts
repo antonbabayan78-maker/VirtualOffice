@@ -63,6 +63,8 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     clearServiceCredential: () => Promise.reject(new Error("not used here")),
     serviceCredential: () => Promise.reject(new Error("not used here")),
     discoverServiceModels: () => Promise.reject(new Error("not used here")),
+    studyVoice: () => Promise.reject(new Error("not used here")),
+    recordCorrection: () => Promise.reject(new Error("not used here")),
     // Every run asks what a person decided about the calls it was holding.
     loadRunState: () => Promise.resolve({ ok: true, value: { checkpoint: null, decisions: [] } }),
     listApprovals: () => Promise.reject(new Error("not used here")),

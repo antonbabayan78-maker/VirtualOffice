@@ -46,6 +46,8 @@ const api = (overrides: Partial<ApiClient> = {}): ApiClient => {
     clearServiceCredential: unused,
     serviceCredential: unused,
     discoverServiceModels: unused,
+    studyVoice: unused,
+    recordCorrection: unused,
     loadRunState: unused,
     listApprovals: unused,
     patchTask: unused,

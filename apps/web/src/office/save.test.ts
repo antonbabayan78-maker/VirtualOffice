@@ -61,6 +61,8 @@ function scriptedApi(): {
     clearServiceCredential: () => Promise.reject(new Error("not used here")),
     serviceCredential: () => Promise.reject(new Error("not used here")),
     discoverServiceModels: () => Promise.reject(new Error("not used here")),
+    studyVoice: () => Promise.reject(new Error("not used here")),
+    recordCorrection: () => Promise.reject(new Error("not used here")),
     patchTask: () => Promise.reject(new Error("not used here")),
     loadRunState: () => Promise.reject(new Error("not used here")),
     saveRunCheckpoint: () => Promise.reject(new Error("not used here")),
