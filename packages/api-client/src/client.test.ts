@@ -865,6 +865,36 @@ describe("connectors", () => {
     expect(sent).toMatchObject({ kind: "web", name: "design-web", tools: ["fetch_url"] });
   });
 
+  it("asks one what it offers, and gets back what the office wrote down", async () => {
+    server.use(
+      http.post(`${BASE}/connectors/conn-web/discover`, () =>
+        HttpResponse.json({ ...connectorRow, tools: ["read_notes", "send_email"] }),
+      ),
+    );
+
+    const result = await client().discoverConnectorTools("conn-web");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.tools).toEqual(["read_notes", "send_email"]);
+  });
+
+  it("carries back why a server could not be asked, which is the whole point of asking", async () => {
+    server.use(
+      http.post(`${BASE}/connectors/conn-web/discover`, () =>
+        HttpResponse.json({ error: "acme-mcp could not be run" }, { status: 502 }),
+      ),
+    );
+
+    const result = await client().discoverConnectorTools("conn-web");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "transport") {
+      expect(result.message).toContain("could not be run");
+    } else {
+      throw new Error(`expected a transport failure, got ${JSON.stringify(result)}`);
+    }
+  });
+
   it("switches one off, saying what it was working from", async () => {
     let offset: string | null = null;
     server.use(

@@ -133,6 +133,27 @@ describe("what an MCP connector says it can do", () => {
     expect(await one.broker.describe()).toEqual([]);
   });
 
+  it("says why it is offering nothing, so somebody can be told", async () => {
+    // describe() stays forgiving — one unreachable server must not empty the
+    // catalogue — but silence is how a broken connector goes unnoticed for a
+    // week. The reason goes to whoever asked, and the discover route turns it
+    // into the answer somebody pressing a button needs.
+    const problems: string[] = [];
+    const one = mcpBroker({
+      connectorId,
+      name: "acme",
+      config: {},
+      connect: () => {
+        throw new Error("/definitely/not/a/program could not be run");
+      },
+      onProblem: (message) => problems.push(message),
+    });
+
+    expect(await one.describe()).toEqual([]);
+    expect(problems.join()).toContain("not/a/program");
+    expect(problems.join()).toContain("acme");
+  });
+
   it("starts no session until it is asked something", () => {
     expect(broker().connections()).toBe(0);
   });

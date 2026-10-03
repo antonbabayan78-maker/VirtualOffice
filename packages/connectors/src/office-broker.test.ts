@@ -98,3 +98,18 @@ describe("an office with more than one connector", () => {
     expect(await officeBroker([off], { fetch: page }).describe()).toEqual([]);
   });
 });
+
+describe("an office whose connector cannot be reached", () => {
+  it("offers nothing from it, and says why it is missing", async () => {
+    const problems: string[] = [];
+    const broker = officeBroker([connector("acme", "mcp", { command: "acme-mcp" })], {
+      connect: () => {
+        throw new Error("acme-mcp could not be run");
+      },
+      onProblem: (message) => problems.push(message),
+    });
+
+    expect(await broker.describe()).toEqual([]);
+    expect(problems.join()).toContain("could not be run");
+  });
+});

@@ -160,6 +160,43 @@ describe("starting a server from its configuration", () => {
   });
 });
 
+describe("a started server asking a connector what it offers", () => {
+  const post = (url: string, body: unknown) =>
+    fetch(url, {
+      method: "POST",
+      headers: { authorization: "Bearer sk-owner", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  /**
+   * Proof that the real discoverer is wired, without spawning anything: the
+   * only way this answer can be produced is by actually trying to run the
+   * command the connector names.
+   */
+  it("really tries, and says why it could not", async () => {
+    await running({}, async (started) => {
+      const office = (await (
+        await post(`${started.url}/offices`, { name: "Northwind" })
+      ).json()) as {
+        id: string;
+      };
+      const connector = (await (
+        await post(`${started.url}/offices/${office.id}/connectors`, {
+          kind: "mcp",
+          name: "acme",
+          tools: [],
+          config: { command: "/definitely/not/a/program" },
+        })
+      ).json()) as { id: string };
+
+      const answer = await post(`${started.url}/connectors/${connector.id}/discover`, {});
+
+      expect(answer.status).toBe(502);
+      expect(((await answer.json()) as { error: string }).error).toMatch(/not\/a\/program|ENOENT/);
+    });
+  });
+});
+
 describe("a server that keeps an office on disk, which is what a deployment is", () => {
   const onDisk = (): Promise<string> => mkdtemp(join(tmpdir(), "vo-start-"));
 

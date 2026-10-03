@@ -191,6 +191,15 @@ export interface OfficeStoreState {
   addConnector(input: AddConnectorInput): Promise<SaveOutcome>;
   /** Changes one here and then at the office, like any other save. */
   saveConnector(id: ConnectorId, changes: UpdateConnectorInput): Promise<SaveOutcome>;
+  /**
+   * Asks a connector what tools it offers and keeps what the office wrote down.
+   *
+   * Not optimistic, and nothing to roll back: only the server knows its tools,
+   * so there is nothing to show until it has answered. A failure comes back as
+   * a problem rather than a notice, because somebody pressed a button and is
+   * waiting for this particular answer.
+   */
+  discoverConnectorTools(id: ConnectorId): Promise<SaveOutcome>;
   /** Takes one off the canvas first, and puts it back if the office refuses. */
   removeConnector(id: ConnectorId): Promise<SaveOutcome>;
   loadDocuments(documents: readonly Document[]): void;
@@ -740,6 +749,29 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         }
         get().putConnector(before);
         if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      discoverConnectorTools: async (id) => {
+        const before = get().connectors.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such connector" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to ask" }],
+          };
+        }
+
+        const answer = await connected.discoverConnectorTools(id);
+        if (answer.ok) {
+          get().putConnector(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 
