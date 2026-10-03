@@ -104,6 +104,18 @@ export type WorkflowEvent =
       readonly met?: readonly string[];
     }
   | { readonly type: "request_changes"; readonly actorId: EmployeeId; readonly reason: string }
+  | {
+      /**
+       * Work changing hands. A transition rather than a field edit, and two of
+       * them: `transferred`, then `assigned` to whoever has it now, because
+       * that is the only way across the state machine from work in flight.
+       */
+      readonly type: "reassign";
+      readonly toEmployeeId: EmployeeId;
+      readonly reason?: string;
+      /** Who moved it, when an employee did; absent when a person did. */
+      readonly actorId?: EmployeeId;
+    }
   | { readonly type: "block"; readonly reason: string; readonly actorId?: EmployeeId }
   | { readonly type: "unblock"; readonly actorId?: EmployeeId }
   | { readonly type: "cancel"; readonly reason: string; readonly actorId?: EmployeeId }

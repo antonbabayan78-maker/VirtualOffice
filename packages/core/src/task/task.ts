@@ -237,26 +237,111 @@ function uniqueIds(ids: readonly string[], path: string, label: string): Validat
   return [];
 }
 
+/** A title is a line somebody can read on a card. Shared with `updateTask`. */
+function validateTitle(title: string): ValidationError[] {
+  if (title.length === 0) return [{ path: "title", message: "must not be empty" }];
+  if (title.length > TASK_TITLE_MAX_LENGTH) {
+    return [
+      { path: "title", message: `must be at most ${String(TASK_TITLE_MAX_LENGTH)} characters` },
+    ];
+  }
+  return [];
+}
+
+function validateBrief(brief: string): ValidationError[] {
+  return brief.length > TASK_BRIEF_MAX_LENGTH
+    ? [
+        {
+          path: "brief",
+          message: `must be at most ${String(TASK_BRIEF_MAX_LENGTH)} characters`,
+        },
+      ]
+    : [];
+}
+
+/**
+ * What would make this work acceptable: each one a line a reviewer answers, and
+ * never the same line twice — asked about twice is answered twice, and a
+ * reviewer left wondering which one it meant.
+ */
+function validateCriteria(criteria: readonly string[]): ValidationError[] {
+  const errors: ValidationError[] = [];
+  if (
+    criteria.some(
+      (criterion) =>
+        typeof criterion !== "string" ||
+        criterion.trim().length === 0 ||
+        criterion.length > TASK_TITLE_MAX_LENGTH,
+    )
+  ) {
+    errors.push({
+      path: "acceptanceCriteria",
+      message: `must each be text of at most ${String(TASK_TITLE_MAX_LENGTH)} characters`,
+    });
+  }
+  errors.push(...uniqueIds(criteria, "acceptanceCriteria", "criterion"));
+  return errors;
+}
+
+/**
+ * What may be said again about a piece of work after it exists.
+ *
+ * Deliberately only what it is *for*. Who is holding it and how far along it is
+ * are transitions — `transitionTask` and the workflow engine own those — and a
+ * field edit that moved work would be a second way to do one thing, which is
+ * how a board and an office come to disagree. `gatedActions` is left out for a
+ * sharper reason: what work involves is what a department's gate holds it for,
+ * and editing it afterwards is a way to walk work past the gate.
+ */
+export interface UpdateTaskInput {
+  readonly title?: string;
+  readonly brief?: string;
+  /** Loose on the way in, narrow on the entity, as creating one is. */
+  readonly priority?: string;
+  readonly acceptanceCriteria?: readonly string[];
+}
+
+export function updateTask(task: Task, changes: UpdateTaskInput, at: Date): Result<Task> {
+  if (TERMINAL_TASK_STATUSES.includes(task.status)) {
+    return err([{ path: "status", message: `work that is ${task.status} cannot be changed` }]);
+  }
+
+  const errors: ValidationError[] = [];
+
+  const title = (changes.title ?? task.title).trim();
+  errors.push(...validateTitle(title));
+
+  const brief = changes.brief ?? task.brief;
+  errors.push(...validateBrief(brief));
+
+  const priority = changes.priority ?? task.priority;
+  if (!isPriority(priority)) {
+    errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
+  }
+
+  const acceptanceCriteria = changes.acceptanceCriteria ?? task.acceptanceCriteria;
+  errors.push(...validateCriteria(acceptanceCriteria));
+
+  if (errors.length > 0 || !isPriority(priority)) return err(errors);
+  return ok({
+    ...task,
+    title,
+    brief,
+    priority,
+    acceptanceCriteria: [...acceptanceCriteria],
+    updatedAt: at,
+  });
+}
+
 export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task> {
   const errors: ValidationError[] = [];
   const id = deps.id();
 
   const title = input.title.trim();
-  if (title.length === 0) errors.push({ path: "title", message: "must not be empty" });
-  else if (title.length > TASK_TITLE_MAX_LENGTH) {
-    errors.push({
-      path: "title",
-      message: `must be at most ${String(TASK_TITLE_MAX_LENGTH)} characters`,
-    });
-  }
+  errors.push(...validateTitle(title));
 
   const brief = input.brief ?? "";
-  if (brief.length > TASK_BRIEF_MAX_LENGTH) {
-    errors.push({
-      path: "brief",
-      message: `must be at most ${String(TASK_BRIEF_MAX_LENGTH)} characters`,
-    });
-  }
+  errors.push(...validateBrief(brief));
 
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
@@ -295,22 +380,7 @@ export function createTask(input: CreateTaskInput, deps: TaskDeps): Result<Task>
   }
 
   const acceptanceCriteria = input.acceptanceCriteria ?? [];
-  if (
-    acceptanceCriteria.some(
-      (criterion) =>
-        typeof criterion !== "string" ||
-        criterion.trim().length === 0 ||
-        criterion.length > TASK_TITLE_MAX_LENGTH,
-    )
-  ) {
-    errors.push({
-      path: "acceptanceCriteria",
-      message: `must each be text of at most ${String(TASK_TITLE_MAX_LENGTH)} characters`,
-    });
-  }
-  // Asked about twice, answered twice, and a reviewer left wondering which one
-  // it meant.
-  errors.push(...uniqueIds(acceptanceCriteria, "acceptanceCriteria", "criterion"));
+  errors.push(...validateCriteria(acceptanceCriteria));
 
   const checkedBy = input.checkedBy ?? [];
   if (checkedBy.some((id) => typeof id !== "string" || id.length === 0)) {
