@@ -45,6 +45,7 @@ import type { HeldCall, WorkflowEvent } from "../workflow/workflow-types.js";
 import { runAgent, type ToolUse } from "./agent-run-loop.js";
 import type { ApprovalDecision, RunApprovalGate } from "./approval-gate.js";
 import type { RunCheckpointStore } from "./checkpoint.js";
+import type { ProviderLookup } from "./provider-lookup.js";
 import { FIND_TOOL_NAME, LazyToolset } from "../tools/lazy-toolset.js";
 import { ToolCatalog, type CatalogTool } from "../tools/tool-catalog.js";
 import type { BrokerOutcome, ToolBroker } from "../tools/tool-broker.js";
@@ -171,7 +172,13 @@ export interface TurnAttribution {
 }
 
 export interface AgentTurnOptions {
+  /** The one to call when nothing else says which: an office with no services. */
   readonly provider: LlmProvider;
+  /**
+   * Finds the service the employee names. Handed in rather than built here,
+   * because resolving a name means reading the office and fetching a key.
+   */
+  readonly providerFor?: ProviderLookup;
   /**
    * Wraps the provider for this particular turn — metering, in practice. Passed
    * in rather than imported so the orchestrator does not depend on telemetry.
@@ -272,7 +279,10 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
       employeeId: actor.id,
       taskId: task.id,
     };
-    const provider = options.wrapProvider?.(options.provider, attribution) ?? options.provider;
+    // The service the employee was given, where the office has one; metering
+    // wraps whichever was chosen, so a call is priced as what actually made it.
+    const chosen = options.providerFor?.(actor.llm) ?? options.provider;
+    const provider = options.wrapProvider?.(chosen, attribution) ?? chosen;
 
     const instruction = reviewing
       ? `Review the work on this task and call ${REVIEW_TOOL.name} with your decision.` +
