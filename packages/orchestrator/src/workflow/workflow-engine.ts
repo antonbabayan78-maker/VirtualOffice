@@ -9,7 +9,14 @@
  * approve and request_changes are delegated to the handler registered for the
  * department's review policy, so each policy can be added on its own.
  */
-import type { GatedAction, Result, Task } from "@vo/core";
+import {
+  err,
+  transitionTask,
+  type EmployeeId,
+  type GatedAction,
+  type Result,
+  type Task,
+} from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
 import { handoffEffects } from "./handoff.js";
 import { watchEffects } from "./watch.js";
@@ -172,6 +179,49 @@ export class WorkflowEngine {
       }
       case "cancel":
         return applyTransition(task, "cancelled", event, context, [], event.reason);
+      case "reassign": {
+        const to = event.toEmployeeId.trim();
+        if (to.length === 0) {
+          return workflowError("toEmployeeId", "work has to be handed to somebody");
+        }
+        if (to === task.assigneeId) {
+          return workflowError("toEmployeeId", "that is already who is holding it");
+        }
+        const why = (event.reason ?? "").trim();
+        const said = why.length === 0 ? "handed over" : `handed over: ${why}`;
+
+        // Across, then down. The state machine has no in_progress → assigned,
+        // deliberately: work changing hands is something that happened to it,
+        // and the history should read that way.
+        const across = applyTransition(task, "transferred", event, context, [], said);
+        if (!across.ok) return across;
+        // The reviewers were chosen for whoever was doing it before; somebody
+        // else's work is reviewed when it is submitted again.
+        const handed: Task = { ...across.value.task, reviewerIds: [], approvals: [] };
+        // Through the state machine directly rather than `applyTransition`:
+        // this is the one transition that also says who the work is now for,
+        // and an assignee is not something an event carries anywhere else.
+        const landed = transitionTask(handed, "assigned", {
+          at: context.now,
+          actorId: event.actorId ?? null,
+          assigneeId: to as EmployeeId,
+          reason: said,
+        });
+        if (!landed.ok) return err(landed.error);
+        return {
+          ok: true,
+          value: {
+            task: landed.value,
+            effects: [
+              {
+                type: "notify",
+                audience: "assignee",
+                message: `task "${task.title}" is yours now${why.length === 0 ? "" : `: ${why}`}`,
+              },
+            ],
+          },
+        };
+      }
       case "await_decision": {
         if (event.items.length === 0) {
           return workflowError("items", "work cannot wait for a decision about nothing");

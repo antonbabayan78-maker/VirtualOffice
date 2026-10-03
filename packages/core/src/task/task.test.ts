@@ -17,6 +17,7 @@ import {
   TASK_TRANSITIONS,
   TERMINAL_TASK_STATUSES,
   transitionTask,
+  updateTask,
   type Task,
   type TaskId,
   type TaskStatus,
@@ -532,5 +533,104 @@ describe("work a bench placed", () => {
     );
     const moved = unwrap(transitionTask(task, "in_progress", { at: t1, actorId: ada }));
     expect(moved.benchId).toBe(benchId);
+  });
+});
+
+describe("changing what a piece of work is for", () => {
+  const t2 = new Date("2026-09-23T00:00:00Z");
+
+  it("takes a better title", () => {
+    const changed = unwrap(updateTask(make(), { title: "Write the YAML parser" }, t2));
+
+    expect(changed.title).toBe("Write the YAML parser");
+  });
+
+  it("leaves everything it was not asked about alone", () => {
+    const before = make({ brief: "the one in the office file", priority: "high" });
+
+    const after = unwrap(updateTask(before, { title: "Write the YAML parser" }, t2));
+
+    expect(after.brief).toBe(before.brief);
+    expect(after.priority).toBe("high");
+    expect(after.status).toBe(before.status);
+    expect(after.assigneeId).toBe(before.assigneeId);
+    expect(after.history).toEqual(before.history);
+  });
+
+  it("says when it last changed, since a board shows how long work has sat", () => {
+    expect(unwrap(updateTask(make(), { title: "Something else" }, t2)).updatedAt).toEqual(t2);
+  });
+
+  it("refuses a title that is not one", () => {
+    expect(isErr(updateTask(make(), { title: "   " }, t2))).toBe(true);
+    expect(isErr(updateTask(make(), { title: "x".repeat(TASK_TITLE_MAX_LENGTH + 1) }, t2))).toBe(
+      true,
+    );
+  });
+
+  it("trims a title, as making one does", () => {
+    expect(unwrap(updateTask(make(), { title: "  Write it  " }, t2)).title).toBe("Write it");
+  });
+
+  it("takes a brief, and refuses one longer than the office keeps", () => {
+    expect(unwrap(updateTask(make(), { brief: "do the thing" }, t2)).brief).toBe("do the thing");
+    expect(isErr(updateTask(make(), { brief: "x".repeat(20_001) }, t2))).toBe(true);
+  });
+
+  it("takes a priority the office understands, and no other", () => {
+    expect(unwrap(updateTask(make(), { priority: "urgent" }, t2)).priority).toBe("urgent");
+    expect(isErr(updateTask(make(), { priority: "immediately" }, t2))).toBe(true);
+  });
+
+  it("takes what would make the work acceptable", () => {
+    const changed = unwrap(
+      updateTask(make(), { acceptanceCriteria: ["handles malformed input", "has tests"] }, t2),
+    );
+
+    expect(changed.acceptanceCriteria).toEqual(["handles malformed input", "has tests"]);
+  });
+
+  it("refuses a criterion that is blank, or asked for twice", () => {
+    expect(isErr(updateTask(make(), { acceptanceCriteria: ["  "] }, t2))).toBe(true);
+    expect(isErr(updateTask(make(), { acceptanceCriteria: ["has tests", "has tests"] }, t2))).toBe(
+      true,
+    );
+  });
+
+  it("clears the list when it is given an empty one, which is a decision too", () => {
+    const stated = make({ acceptanceCriteria: ["has tests"] });
+
+    expect(unwrap(updateTask(stated, { acceptanceCriteria: [] }, t2)).acceptanceCriteria).toEqual(
+      [],
+    );
+  });
+
+  it("will not move work, because moving work is a transition", () => {
+    // Two ways to do one thing is how a board and an office come to disagree.
+    const changed = unwrap(updateTask(make(), { assigneeId: bob, status: "done" } as never, t2));
+
+    expect(changed.assigneeId).toBeNull();
+    expect(changed.status).toBe("backlog");
+  });
+
+  it("will not change what the work involves, which is what a gate holds it for", () => {
+    const changed = unwrap(updateTask(make(), { gatedActions: ["deploy"] } as never, t2));
+
+    expect(changed.gatedActions).toEqual([]);
+  });
+
+  it("refuses to change work that is finished", () => {
+    const done = walk(make({ assigneeId: ada }), ["in_progress", "done"]);
+
+    expect(isErr(updateTask(done, { title: "Too late" }, t2))).toBe(true);
+  });
+
+  it("says everything that is wrong at once, rather than one thing at a time", () => {
+    const refused = updateTask(make(), { title: "", priority: "immediately" }, t2);
+
+    expect(isErr(refused) && refused.error.map((error) => error.path).sort()).toEqual([
+      "priority",
+      "title",
+    ]);
   });
 });

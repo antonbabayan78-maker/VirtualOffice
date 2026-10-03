@@ -732,3 +732,78 @@ describe("a decision on a held call", () => {
     expect(JSON.stringify(outcome.effects[0])).toContain("owner-1");
   });
 });
+
+describe("handing work to somebody else", () => {
+  const bob = "emp-bob" as EmployeeId;
+  const moved = (toEmployeeId: EmployeeId = bob, reason?: string): WorkflowEvent => ({
+    type: "reassign",
+    toEmployeeId,
+    ...(reason === undefined ? {} : { reason }),
+  });
+
+  it("gives it to them, and says so", () => {
+    const outcome = unwrap(engine.handle(task("in_progress"), moved(), context()));
+
+    expect(outcome.task.assigneeId).toBe(bob);
+    expect(outcome.task.status).toBe("assigned");
+  });
+
+  it("goes through transferred, which is the only way across from in progress", () => {
+    // Not decoration: the state machine has no in_progress → assigned, because
+    // work changing hands is a thing that happened to it and not a field edit.
+    const outcome = unwrap(engine.handle(task("in_progress"), moved(), context()));
+
+    expect(outcome.task.history.slice(-2).map((event) => event.to)).toEqual([
+      "transferred",
+      "assigned",
+    ]);
+  });
+
+  it("records why, where anybody reading the history will find it", () => {
+    const outcome = unwrap(
+      engine.handle(task("in_progress"), moved(bob, "Ada is away"), context()),
+    );
+
+    expect(JSON.stringify(outcome.task.history)).toContain("Ada is away");
+  });
+
+  it("tells the person it landed on", () => {
+    const outcome = unwrap(engine.handle(task("in_progress"), moved(), context()));
+
+    expect(outcome.effects).toHaveLength(1);
+    expect(outcome.effects[0]).toMatchObject({ type: "notify", audience: "assignee" });
+  });
+
+  it("takes work that is waiting, stopped or sent back, which is most of why", () => {
+    for (const from of ["assigned", "blocked", "escalated", "changes_requested"] as const) {
+      const outcome = engine.handle(task(from), moved(), context());
+      expect(isOk(outcome) && outcome.value.task.assigneeId).toBe(bob);
+    }
+  });
+
+  it("will not move work that is finished", () => {
+    expect(isErr(engine.handle(task("done"), moved(), context()))).toBe(true);
+    expect(isErr(engine.handle(task("cancelled"), moved(), context()))).toBe(true);
+  });
+
+  it("will not move work to the person already holding it", () => {
+    expect(isErr(engine.handle(task("in_progress"), moved(ada), context()))).toBe(true);
+  });
+
+  it("needs somebody to move it to", () => {
+    expect(isErr(engine.handle(task("in_progress"), moved("" as EmployeeId), context()))).toBe(
+      true,
+    );
+  });
+
+  it("leaves a review to be arranged again, rather than keeping the old one", () => {
+    // The reviewers were chosen for whoever was doing it; somebody else's work
+    // is reviewed when it is submitted again.
+    const reviewed = task("in_progress", { reviewerIds: [boss], approvals: [boss] });
+
+    const outcome = unwrap(engine.handle(reviewed, moved(), context()));
+
+    expect(outcome.task.reviewerIds).toEqual([]);
+    expect(outcome.task.approvals).toEqual([]);
+  });
+});
