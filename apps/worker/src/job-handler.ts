@@ -18,6 +18,7 @@
  */
 import type { ApiClient, ApiResult } from "@vo/api-client";
 import { officeBroker } from "@vo/connectors";
+import { runDecisions } from "./run-state.js";
 import type { Connector, ToolGrant } from "@vo/core";
 import {
   acceptanceCriteriaFor,
@@ -233,6 +234,11 @@ export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Prom
       toolCatalog: await catalogueFor(connectors, departmentGrants, actor.value.toolGrants),
       connectors,
       toolGrants: grants,
+      // What a person decided about the calls this run was holding. Read every
+      // time rather than only for a task that looks parked: a redelivered job
+      // and a resumed one are the same job, and the run loop is what knows
+      // which calls are still unanswered.
+      approvals: await runDecisions(options.api, taskId, options.onProblem),
     });
 
     for (const event of events) {

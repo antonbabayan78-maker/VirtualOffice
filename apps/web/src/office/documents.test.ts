@@ -60,6 +60,8 @@ function scriptedApi(): Scripted {
     patchConnector: unused,
     deleteConnector: unused,
     discoverConnectorTools: unused,
+    loadRunState: unused,
+    saveRunCheckpoint: unused,
     setOfficeRunState: unused,
     setDepartmentRunState: unused,
     setEmployeeStatus: unused,

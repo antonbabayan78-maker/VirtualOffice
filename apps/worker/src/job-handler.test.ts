@@ -55,6 +55,9 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
     discoverConnectorTools: () => Promise.reject(new Error("not used here")),
+    // Every run asks what a person decided about the calls it was holding.
+    loadRunState: () => Promise.resolve({ ok: true, value: { checkpoint: null, decisions: [] } }),
+    saveRunCheckpoint: () => Promise.resolve({ ok: true, value: true }),
     setOfficeRunState: () => Promise.reject(new Error("not used here")),
     setDepartmentRunState: () => Promise.reject(new Error("not used here")),
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),
@@ -577,5 +580,29 @@ describe("deciding a shootout", () => {
     })(judging());
 
     expect(said.join(" ")).toMatch(/judge/i);
+  });
+});
+
+describe("a run that was waiting for a person", () => {
+  it("is given what was decided, so the held call is answered rather than asked again", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+    const decisions = [{ key: "call-1", decision: "approved" as const, decidedBy: "owner-1" }];
+
+    await officeJobHandler({
+      api: api({
+        loadRunState: () => Promise.resolve({ ok: true, value: { checkpoint: null, decisions } }),
+      }),
+      agent,
+    })(job());
+
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ approvals: decisions }));
+  });
+
+  it("is given none when the office has nothing, which is every ordinary run", async () => {
+    const agent = vi.fn(() => Promise.resolve([]));
+
+    await officeJobHandler({ api: api(), agent })(job());
+
+    expect(agent).toHaveBeenCalledWith(expect.objectContaining({ approvals: [] }));
   });
 });

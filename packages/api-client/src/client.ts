@@ -55,6 +55,20 @@ export interface SpendSummary {
   readonly byEmployee: Readonly<Record<string, number>>;
 }
 
+/** A person's answer about one call a run is holding. */
+export interface RunDecision {
+  readonly key: string;
+  readonly decision: "approved" | "declined";
+  readonly decidedBy: string;
+  readonly reason?: string;
+}
+
+export interface RunStateSnapshot {
+  /** Where the run got to, or null when nothing has been saved. */
+  readonly checkpoint: Readonly<Record<string, unknown>> | null;
+  readonly decisions: readonly RunDecision[];
+}
+
 export interface ApiClient {
   /**
    * Hands the office a token once, so the browser need not keep one.
@@ -111,6 +125,20 @@ export interface ApiClient {
    * they become grantable without anybody typing them.
    */
   discoverConnectorTools(id: string): Promise<ApiResult<Connector>>;
+  /**
+   * What the office is holding for a run in flight: where it got to, and what a
+   * person has decided about the calls it is waiting on.
+   *
+   * Shaped loosely on purpose. A checkpoint is the run loop's own business and
+   * this package does not depend on the orchestrator — a canvas has no use for
+   * one, and nor has a browser bundle.
+   */
+  loadRunState(taskId: string): Promise<ApiResult<RunStateSnapshot>>;
+  /** Where a run got to, so another process can take it on. */
+  saveRunCheckpoint(
+    taskId: string,
+    checkpoint: Readonly<Record<string, unknown>>,
+  ): Promise<ApiResult<true>>;
   /**
    * The switch: stopping work, and starting it again. Separate from `patch*`
    * because stopping an office is not editing one, and because an instruction
@@ -575,6 +603,15 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     discoverConnectorTools: async (id) =>
       interpret(await call(`/connectors/${id}/discover`, { method: "POST" }), reviveConnector),
+
+    loadRunState: async (taskId) =>
+      interpret(await call(`/tasks/${taskId}/run-checkpoint`), (raw) => ({
+        checkpoint: (raw["checkpoint"] ?? null) as Readonly<Record<string, unknown>> | null,
+        decisions: Array.isArray(raw["decisions"]) ? (raw["decisions"] as RunDecision[]) : [],
+      })),
+
+    saveRunCheckpoint: async (taskId, checkpoint) =>
+      nothing(await put(`/tasks/${taskId}/run-checkpoint`, checkpoint)),
 
     setOfficeRunState: async (id, runState) =>
       interpret(await put(`/offices/${id}/run-state`, { runState }), reviveOffice),

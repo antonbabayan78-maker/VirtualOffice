@@ -1308,3 +1308,85 @@ describe("finding out which offices there are", () => {
     }
   });
 });
+
+describe("a run the office is holding", () => {
+  it("reads where it got to and what was decided", async () => {
+    server.use(
+      http.get(`${BASE}/tasks/task-1/run-checkpoint`, () =>
+        HttpResponse.json({
+          checkpoint: { runId: "task-1", step: 2, messages: [] },
+          decisions: [{ key: "call-1", decision: "approved", decidedBy: "owner-1" }],
+        }),
+      ),
+    );
+
+    const result = await client().loadRunState("task-1");
+
+    if (!result.ok) throw new Error("expected the run state to load");
+    expect(result.value.checkpoint).toMatchObject({ step: 2 });
+    expect(result.value.decisions).toEqual([
+      { key: "call-1", decision: "approved", decidedBy: "owner-1" },
+    ]);
+  });
+
+  it("reads nothing as nothing, rather than as a failure", async () => {
+    server.use(
+      http.get(`${BASE}/tasks/task-1/run-checkpoint`, () =>
+        HttpResponse.json({ checkpoint: null, decisions: [] }),
+      ),
+    );
+
+    const result = await client().loadRunState("task-1");
+
+    if (!result.ok) throw new Error("expected the run state to load");
+    expect(result.value.checkpoint).toBeNull();
+    expect(result.value.decisions).toEqual([]);
+  });
+
+  it("promises the list its type promises, for an office that predates it", async () => {
+    server.use(http.get(`${BASE}/tasks/task-1/run-checkpoint`, () => HttpResponse.json({})));
+
+    const result = await client().loadRunState("task-1");
+
+    if (!result.ok) throw new Error("expected the run state to load");
+    expect(result.value.decisions).toEqual([]);
+  });
+
+  it("saves where a run got to", async () => {
+    let sent: unknown;
+    server.use(
+      http.put(`${BASE}/tasks/task-1/run-checkpoint`, async ({ request }) => {
+        sent = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const result = await client().saveRunCheckpoint("task-1", {
+      runId: "task-1",
+      step: 2,
+      messages: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sent).toMatchObject({ runId: "task-1", step: 2 });
+  });
+
+  it("says when an office has nowhere to keep one", async () => {
+    // An office with no documents has no trays and no run state either, which
+    // a worker has to be able to tell from a failure.
+    server.use(
+      http.put(
+        `${BASE}/tasks/task-1/run-checkpoint`,
+        () => new HttpResponse(null, { status: 404 }),
+      ),
+    );
+
+    const result = await client().saveRunCheckpoint("task-1", {
+      runId: "task-1",
+      step: 1,
+      messages: [],
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});

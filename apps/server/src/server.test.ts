@@ -3450,3 +3450,217 @@ describe("what counts as the office rather than the canvas", () => {
     }
   });
 });
+
+describe("a run the office is holding for a worker", () => {
+  let app: FastifyInstance;
+  let log: OfficeEventLog;
+  let blobs: InMemoryBlobStore;
+  let taskId: string;
+  let employeeId: string;
+
+  const send = (
+    method: "POST" | "GET" | "PUT" | "DELETE",
+    url: string,
+    payload?: Body,
+  ): Promise<LightMyRequestResponse> =>
+    app.inject({ method, url, headers: auth, ...(payload === undefined ? {} : { payload }) });
+
+  const checkpoint = (overrides: Record<string, unknown> = {}) => ({
+    runId: taskId,
+    step: 1,
+    messages: [{ role: "user", content: [{ type: "text", text: "Do the work" }] }],
+    budget: { spend: { inputTokens: 10, outputTokens: 5, cachedTokens: 0, usd: 0.01 } },
+    spendApproved: false,
+    droppedMessages: 0,
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  });
+
+  const held = {
+    type: "await_decision",
+    actorId: "",
+    summary: 'tool "acme__send_email" (external_send)',
+    items: [
+      {
+        key: "call-1",
+        name: "acme__send_email",
+        gates: ["external_send"],
+        detail: 'tool "acme__send_email" (external_send)',
+      },
+    ],
+  };
+
+  beforeEach(async () => {
+    let n = 0;
+    log = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    blobs = new InMemoryBlobStore();
+    app = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs,
+      events: log,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++n)}`,
+      now: () => new Date("2026-10-03T09:00:00.000Z"),
+    });
+    await app.ready();
+
+    const officeId = (await send("POST", "/offices", { name: "Acme" })).json<{ id: string }>().id;
+    const departmentId = (
+      await send("POST", `/offices/${officeId}/departments`, {
+        name: "Engineering",
+        color: "#3366ff",
+        position: { x: 0, y: 0 },
+      })
+    ).json<{ id: string }>().id;
+    employeeId = (
+      await send("POST", `/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    const made = await send("POST", `/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Tell the customer",
+      assigneeId: employeeId,
+    });
+    taskId = made.json<{ id: string }>().id;
+    await send("POST", `/tasks/${taskId}/events`, { type: "start", actorId: employeeId });
+  });
+
+  it("has nothing for a run nobody has saved", async () => {
+    const answer = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).toEqual({ checkpoint: null, decisions: [] });
+  });
+
+  it("keeps what a worker saved, and hands it back", async () => {
+    expect((await send("PUT", `/tasks/${taskId}/run-checkpoint`, checkpoint())).statusCode).toBe(
+      204,
+    );
+
+    const answer = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(answer.json<{ checkpoint: { step: number } }>().checkpoint.step).toBe(1);
+  });
+
+  it("survives the process that wrote it, which is the whole point", async () => {
+    await send("PUT", `/tasks/${taskId}/run-checkpoint`, checkpoint());
+    const kept = taskId;
+
+    // A second office over the same documents: a new worker, or this one after
+    // a crash, reading what the old one wrote.
+    const second = buildServer({
+      store: new InMemoryRelationalStore(),
+      blobs,
+      events: new OfficeEventLog({ now: () => 1 }),
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => "id-x",
+      now: () => new Date("2026-10-03T09:00:00.000Z"),
+    });
+    await second.ready();
+    const answer = await second.inject({
+      method: "GET",
+      url: `/tasks/${kept}/run-checkpoint`,
+      headers: auth,
+    });
+
+    // The task is not in this store, so the route answers about the run only.
+    expect(answer.statusCode).toBe(404);
+    const blob = await blobs.get(`runs/${kept}.json`);
+    expect(blob).not.toBeNull();
+  });
+
+  it("refuses a checkpoint for another run, since it is keyed by this one", async () => {
+    const answer = await send("PUT", `/tasks/${taskId}/run-checkpoint`, {
+      ...checkpoint({ runId: "task-somewhere-else" }),
+    });
+
+    expect(answer.statusCode).toBe(400);
+  });
+
+  it("records a decision, and starts the work again", async () => {
+    await send("POST", `/tasks/${taskId}/events`, { ...held, actorId: employeeId });
+    await send("PUT", `/tasks/${taskId}/run-checkpoint`, checkpoint());
+
+    const answer = await send("POST", `/tasks/${taskId}/events`, {
+      type: "call_decided",
+      key: "call-1",
+      decision: "approved",
+      decidedBy: "owner-1",
+    });
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json<{ status: string }>().status).toBe("in_progress");
+    const state = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(state.json<{ decisions: { key: string }[] }>().decisions).toEqual([
+      { key: "call-1", decision: "approved", decidedBy: "owner-1" },
+    ]);
+  });
+
+  it("keeps the checkpoint while the work is parked, so the run can resume", async () => {
+    await send("PUT", `/tasks/${taskId}/run-checkpoint`, checkpoint());
+    await send("POST", `/tasks/${taskId}/events`, { ...held, actorId: employeeId });
+
+    const state = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(state.json<{ checkpoint: unknown }>().checkpoint).not.toBeNull();
+  });
+
+  it("forgets it when the work moves on, so the next attempt starts clean", async () => {
+    // A finished checkpoint read by a later attempt would hand back the answer
+    // the first attempt gave, which is a task that submits work nobody did.
+    await send("PUT", `/tasks/${taskId}/run-checkpoint`, checkpoint());
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "submit",
+      actorId: employeeId,
+      artifacts: ["told them"],
+    });
+
+    const state = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(state.json()).toEqual({ checkpoint: null, decisions: [] });
+  });
+
+  it("forgets the decisions too, since they were about that attempt's calls", async () => {
+    await send("POST", `/tasks/${taskId}/events`, { ...held, actorId: employeeId });
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "call_decided",
+      key: "call-1",
+      decision: "approved",
+      decidedBy: "owner-1",
+    });
+    await send("POST", `/tasks/${taskId}/events`, {
+      type: "submit",
+      actorId: employeeId,
+      artifacts: ["told them"],
+    });
+
+    const state = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(state.json<{ decisions: unknown[] }>().decisions).toEqual([]);
+  });
+
+  it("does not record a decision the office refused", async () => {
+    // The task is in progress, not parked: there is no held call to answer, and
+    // a decision kept anyway would be applied to the next thing that parks.
+    const answer = await send("POST", `/tasks/${taskId}/events`, {
+      type: "call_decided",
+      key: "call-1",
+      decision: "approved",
+      decidedBy: "owner-1",
+    });
+
+    expect(answer.statusCode).toBe(400);
+    const state = await send("GET", `/tasks/${taskId}/run-checkpoint`);
+    expect(state.json<{ decisions: unknown[] }>().decisions).toEqual([]);
+  });
+
+  it("has never heard of a run on a task that is not there", async () => {
+    expect((await send("GET", "/tasks/nope/run-checkpoint")).statusCode).toBe(404);
+  });
+
+  it("is not something a stranger may read", async () => {
+    const answer = await app.inject({ method: "GET", url: `/tasks/${taskId}/run-checkpoint` });
+    expect(answer.statusCode).toBe(401);
+  });
+});
