@@ -48,6 +48,7 @@ import {
   isErr,
   updateDepartment,
   updateEmployee,
+  updateTask,
   type ConnectionId,
   type Connector,
   type GatedAction,
@@ -170,6 +171,7 @@ const KNOWN_EVENTS: readonly string[] = [
   "gate_decided",
   "await_decision",
   "call_decided",
+  "reassign",
 ];
 
 /**
@@ -1342,6 +1344,35 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   }
 
   /**
+   * What a piece of work is *for*: its title, its brief, what would make it
+   * acceptable, how urgent it is.
+   *
+   * Pointedly not who is holding it or how far along it is. Those are
+   * transitions — the events route below owns them — and a field edit that
+   * moved work would be a second way to do one thing, which is how a board and
+   * an office come to disagree. `updateTask` refuses them whatever the body
+   * says; this route does not have to.
+   */
+  app.patch("/tasks/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const task = await store.tasks.get(id);
+    if (task === null) return missing(reply, "task");
+
+    const since = claimedOffset(request);
+    if (since !== null && events.changedSince(task.officeId, id, since)) {
+      return reply
+        .code(409)
+        .send({ error: "this work changed since you loaded it", current: task });
+    }
+
+    const changed = updateTask(task, request.body as Record<string, never>, now());
+    if (isErr(changed)) return fail(reply, changed.error);
+    await store.tasks.put(changed.value);
+    events.publish(task.officeId, { kind: "task.updated", id, status: changed.value.status });
+    return changed.value;
+  });
+
+  /**
    * Moving a task is not a field change, so it is not a PATCH. The office
    * decides what a move means — who reviews, when it escalates — and this hands
    * the event to the same workflow engine the worker uses. One set of rules.
@@ -1401,6 +1432,18 @@ export function buildServer(options: ServerOptions): FastifyInstance {
         connections: (await store.connections.list({ where: { officeId: task.officeId } })).items,
       },
     };
+
+    // Work can only be handed to somebody this office actually has. The engine
+    // knows the state machine; it has never seen the roster.
+    if (type === "reassign") {
+      const to = typeof body["toEmployeeId"] === "string" ? body["toEmployeeId"] : "";
+      const employee = to.length === 0 ? null : await store.employees.get(to);
+      if (employee?.officeId !== task.officeId) {
+        return fail(reply, [
+          { path: "toEmployeeId", message: "this office has nobody by that id" },
+        ]);
+      }
+    }
 
     // A decision names one call, and the run has to be holding it. A key typed
     // wrong would otherwise start the work again, which parks on the same call
