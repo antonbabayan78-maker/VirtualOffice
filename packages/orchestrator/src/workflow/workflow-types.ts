@@ -80,6 +80,8 @@ export interface HeldCall {
   readonly gates: readonly GatedAction[];
   /** One line for whoever is deciding. */
   readonly detail: string;
+  /** The call's own arguments; empty for the run's spending. */
+  readonly input: Readonly<Record<string, unknown>>;
 }
 
 export type WorkflowEvent =

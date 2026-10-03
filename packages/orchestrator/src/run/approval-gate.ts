@@ -49,6 +49,15 @@ export interface PendingItem {
   readonly gates: readonly GatedAction[];
   /** One line for the approvals inbox. */
   readonly detail: string;
+  /**
+   * The call's own arguments — the thing a person is actually deciding about.
+   * Empty for the run's spending, which is not a call.
+   *
+   * Recorded here because this is where they are in hand. Without them an inbox
+   * can only offer "may this task send email", which is approving the tool in
+   * advance and is the thing this gate exists not to be.
+   */
+  readonly input: Readonly<Record<string, unknown>>;
 }
 
 export interface PendingApproval {
@@ -105,6 +114,7 @@ export function pendingApprovalFor(
       detail:
         `this run has cost $${state.spentUsd.toFixed(2)}, at or past the ` +
         `$${threshold.toFixed(2)} approval threshold`,
+      input: {},
     });
   }
 
@@ -117,6 +127,7 @@ export function pendingApprovalFor(
       name: call.name,
       gates,
       detail: `tool "${call.name}" (${gates.join(", ")})`,
+      input: call.input,
     });
   }
 

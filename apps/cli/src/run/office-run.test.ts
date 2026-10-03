@@ -260,6 +260,24 @@ describe("work that needs a person", () => {
     expect(asked[0]).toEqual({ title: "Ship release 4.2", gates: ["deploy"] });
   });
 
+  it("asks about nothing when the work involved nothing this room holds", async () => {
+    // The same rule the engine and the inbox read: a department that gates
+    // deploys and work that deploys nothing is work nobody needs to answer for.
+    const asked: unknown[] = [];
+    const result = await runOffice({
+      config: gatedOffice(),
+      tasks: [{ ...deployTask(), gatedActions: [] }],
+      provider: agreeable(),
+      decide: (request) => {
+        asked.push(request);
+        return null;
+      },
+    });
+
+    expect(asked).toEqual([]);
+    expect(result.tasks[0]?.status).toBe("done");
+  });
+
   it("finishes the work once the owner approves it", async () => {
     const result = await runOffice({
       config: gatedOffice(),
