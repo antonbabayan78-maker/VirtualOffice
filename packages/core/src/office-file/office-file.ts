@@ -144,6 +144,22 @@ export function exportOfficeYaml(config: OfficeConfig): string {
         // wants to read.
         instructions: e.instructions,
         examples: e.examples.length > 0 ? e.examples.map((one) => omitNull({ ...one })) : null,
+        // The card and the consent travel; the drafts behind them do not. What
+        // the real person changed is theirs, and a file is a thing people paste
+        // into messages.
+        understudy:
+          e.understudy === null
+            ? null
+            : omitNull({
+                person: e.understudy.person,
+                recordedBy: e.understudy.recordedBy,
+                recordedAt: e.understudy.recordedAt.toISOString(),
+                enabled: e.understudy.enabled ? null : false,
+                card: e.understudy.card,
+                cardMadeAt: e.understudy.cardMadeAt?.toISOString() ?? null,
+                cardFromSamples:
+                  e.understudy.cardFromSamples > 0 ? e.understudy.cardFromSamples : null,
+              }),
         tools: e.toolGrants.map((g) => ({ connector: g.connectorId, tool: g.tool })),
         schedule: e.schedule,
         supervisor: e.supervisorId,
@@ -623,6 +639,7 @@ export function importOfficeYaml(
         ...(typeof e["workspace"] === "string" ? { workspaceRef: e["workspace"] } : {}),
         ...("instructions" in e ? { instructions: e["instructions"] } : {}),
         ...("examples" in e ? { examples: e["examples"] } : {}),
+        ...("understudy" in e ? { understudy: e["understudy"] } : {}),
       },
       { department: { id: departmentId as DepartmentId, officeId }, supervisor },
       { id: () => id as EmployeeId, now: () => created },

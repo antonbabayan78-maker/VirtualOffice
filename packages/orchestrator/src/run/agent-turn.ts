@@ -254,18 +254,36 @@ async function fileOne(
  * Every category the office understands is held: which tools fall into them is
  * the connector's declaration, and a department's review policy has no say —
  * a room with a manager still must not send mail unasked.
+ *
+ * **An understudy is different.** Somebody standing in for a real person is
+ * acting in that person's name every time they reach an outside system, whether
+ * or not the connector thought the tool worth declaring: a connector saying a
+ * tool is harmless is a statement about the office, not about doing it as Anna.
+ * So every connector tool is held for them, and the office's own — filing a
+ * draft, finding a tool, submitting work — is not, because drafting as somebody
+ * is ordinary and only going out in their name needs their say-so.
  */
-export function gateForCatalog(catalog: ToolCatalog | undefined): RunApprovalGate | null {
+export function gateForCatalog(
+  catalog: ToolCatalog | undefined,
+  actor?: Employee,
+): RunApprovalGate | null {
   if (catalog === undefined) return null;
+  const standing = actor?.understudy ?? null;
+  const asPerson = standing?.enabled === true;
+
   const byName = new Map<string, readonly GatedAction[]>();
   for (const tool of catalog.all()) {
-    const gates = tool.gates ?? [];
+    const declared = tool.gates ?? [];
+    const outside = tool.connectorId !== OFFICE_CONNECTOR_ID;
+    const gates: GatedAction[] =
+      asPerson && outside ? [...declared, "as_person" as const] : [...declared];
     if (gates.length > 0) byName.set(tool.name, gates);
   }
   if (byName.size === 0) return null;
   return {
     gatedActions: GATED_ACTIONS,
     classify: (call) => byName.get(call.name) ?? [],
+    ...(standing === null ? {} : { asPerson: standing.person }),
   };
 }
 
@@ -319,13 +337,18 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
             alwaysLoaded: sink === undefined ? [] : [FILE_DOCUMENT_TOOL.name],
           });
 
-    const gate = reviewing ? null : gateForCatalog(catalog);
+    const gate = reviewing ? null : gateForCatalog(catalog, actor);
 
     const result = await runAgent({
       provider,
       model: actor.llm.model,
       system: {
-        stable: [`You are ${actor.name}, ${actor.role}.`, ...standingBlocks(actor)],
+        stable: [
+          `You are ${actor.name}, ${actor.role}.`,
+          // A reviewer is given no voice: reading in the voice it is judging
+          // would be agreeing with itself.
+          ...standingBlocks(actor, { voice: !reviewing }),
+        ],
         dynamic,
       },
       messages: [{ role: "user", content: [{ type: "text", text: instruction }] }],

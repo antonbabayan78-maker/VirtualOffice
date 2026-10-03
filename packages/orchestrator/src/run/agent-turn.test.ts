@@ -1140,3 +1140,200 @@ describe("what the office told this person about how to work", () => {
     expect(systemOf(provider)).toContain("Reject anything with a promise in it.");
   });
 });
+
+describe("an employee standing in for a real person", () => {
+  const standingIn = (changes: Record<string, unknown> = {}): Employee =>
+    unwrap(
+      updateEmployee(
+        ada,
+        {
+          understudy: {
+            person: "Anna Petrova",
+            recordedBy: "anton@acme.test",
+            card: "Opens with the first name. Short paragraphs. Never uses bullets.",
+            ...changes,
+          },
+        },
+        { supervisor: null },
+      ),
+    );
+
+  const cachedOf = (provider: FakeLlmProvider): string => {
+    const blocks = provider.calls[0]?.system;
+    return (typeof blocks === "string" ? [] : (blocks ?? []))
+      .filter((block) => block.cache)
+      .map((block) => block.text)
+      .join("\n");
+  };
+
+  const ran = async (actor: Employee, kind = AGENT_RUN_JOB): Promise<FakeLlmProvider> => {
+    const provider = new FakeLlmProvider({
+      script: [
+        kind === AGENT_REVIEW_JOB
+          ? toolCall("review_verdict", { approved: true, reason: "fine" })
+          : toolCall("submit_work", { summary: "done" }),
+      ],
+    });
+    await llmAgentTurn({ provider })({
+      task: kind === AGENT_REVIEW_JOB ? inReview : assigned,
+      actor,
+      kind: kind as typeof AGENT_RUN_JOB,
+    });
+    return provider;
+  };
+
+  it("writes in that person's voice, from the card the office made", async () => {
+    const provider = await ran(standingIn());
+
+    expect(cachedOf(provider)).toContain("Opens with the first name.");
+    expect(cachedOf(provider)).toContain("Anna Petrova");
+  });
+
+  it("says the card is how they write, not what to do", async () => {
+    // A style card read as an instruction is a card that changes the work.
+    const provider = await ran(standingIn());
+
+    expect(cachedOf(provider)).toMatch(/how .* writes?|not an instruction/i);
+  });
+
+  it("carries it in the cached half, like everything else standing", async () => {
+    const provider = await ran(standingIn());
+    const dynamic = (provider.calls[0]?.system ?? []) as { text: string; cache: boolean }[];
+
+    expect(
+      dynamic
+        .filter((block) => !block.cache)
+        .map((block) => block.text)
+        .join("\n"),
+    ).not.toContain("Opens with the first name.");
+  });
+
+  it("never gives a reviewer somebody else's voice to read in", async () => {
+    // A reviewer reading in the voice it is judging is a reviewer agreeing
+    // with itself.
+    const reviewer = unwrap(
+      updateEmployee(
+        grace,
+        {
+          understudy: {
+            person: "Anna Petrova",
+            recordedBy: "anton@acme.test",
+            card: "Opens with the first name.",
+          },
+        },
+        { supervisor: null },
+      ),
+    );
+
+    const provider = await ran(reviewer, AGENT_REVIEW_JOB);
+
+    expect(JSON.stringify(provider.calls[0]?.system)).not.toContain("Opens with the first name.");
+  });
+
+  it("says nothing when the voice is switched off", async () => {
+    const off = standingIn({ enabled: false });
+
+    const provider = await ran(off);
+
+    expect(cachedOf(provider)).toBe("You are Ada, Engineer.");
+  });
+
+  it("says nothing when the office has not studied them yet", async () => {
+    const unstudied = standingIn({ card: null });
+
+    const provider = await ran(unstudied);
+
+    expect(cachedOf(provider)).toBe("You are Ada, Engineer.");
+  });
+});
+
+describe("a tool call made in somebody else's name", () => {
+  const anna = (person: string): Employee =>
+    unwrap(
+      updateEmployee(
+        ada,
+        {
+          understudy: { person, recordedBy: "anton@acme.test", card: "Short paragraphs." },
+        },
+        { supervisor: null },
+      ),
+    );
+
+  const notes = unwrap(
+    createConnector({ officeId, kind: "mcp", name: "acme", tools: ["read_notes"] }, [], {
+      id: () => "conn-notes" as never,
+      now: () => at,
+    }),
+  );
+
+  /** A connector tool the office itself considers harmless. */
+  const harmless = catalogFor(
+    {
+      connectors: [notes],
+      departmentGrants: [{ connectorId: notes.id, tool: "read_notes" }],
+      employeeGrants: [],
+    },
+    [{ ...describedTool(notes.id, "read_notes", "Read the notes."), gates: [] }],
+  );
+
+  const asking = (tool: string) =>
+    new FakeLlmProvider({ script: [toolCall(tool, { topic: "refunds" })] });
+
+  it("is held for a person, even when the connector called it harmless", async () => {
+    // Acting in somebody's name is the gated thing here, not the sending. A
+    // connector that says a tool is harmless is talking about the office, not
+    // about doing it as Anna.
+    const { broker } = recordingToolBroker({ acme__read_notes: { summary: "nothing new" } });
+
+    const events = await llmAgentTurn({ provider: asking("acme__read_notes"), tools: broker })({
+      task: { ...assigned, status: "in_progress" },
+      actor: anna("Anna Petrova"),
+      kind: AGENT_RUN_JOB,
+      toolCatalog: harmless,
+    });
+
+    expect(events.find((event) => event.type === "await_decision")).toBeDefined();
+  });
+
+  it("says whose name it would act in, since that is the decision", async () => {
+    const { broker } = recordingToolBroker({ acme__read_notes: { summary: "nothing new" } });
+
+    const events = await llmAgentTurn({ provider: asking("acme__read_notes"), tools: broker })({
+      task: { ...assigned, status: "in_progress" },
+      actor: anna("Anna Petrova"),
+      kind: AGENT_RUN_JOB,
+      toolCatalog: harmless,
+    });
+
+    const held = events.find((event) => event.type === "await_decision");
+    expect(JSON.stringify(held)).toContain("Anna Petrova");
+    expect(JSON.stringify(held)).toContain("as_person");
+  });
+
+  it("leaves the office's own tools alone, because drafting as them is ordinary", async () => {
+    // Filing a draft in a tray is not acting as anybody outside this office.
+    const { broker } = recordingToolBroker({});
+
+    const events = await llmAgentTurn({ provider: asking("submit_work"), tools: broker })({
+      task: { ...assigned, status: "in_progress" },
+      actor: anna("Anna Petrova"),
+      kind: AGENT_RUN_JOB,
+      toolCatalog: harmless,
+    });
+
+    expect(events.map((event) => event.type)).not.toContain("await_decision");
+  });
+
+  it("holds nothing extra for somebody who stands in for nobody", async () => {
+    const { broker } = recordingToolBroker({ acme__read_notes: { summary: "nothing new" } });
+
+    const events = await llmAgentTurn({ provider: asking("acme__read_notes"), tools: broker })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: harmless,
+    });
+
+    expect(events.map((event) => event.type)).not.toContain("await_decision");
+  });
+});

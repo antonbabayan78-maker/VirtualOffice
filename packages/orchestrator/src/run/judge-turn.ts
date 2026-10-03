@@ -146,7 +146,8 @@ export function llmJudgeTurn(options: JudgeTurnOptions): JudgeTurn {
           `You are ${request.judge.name}, ${request.judge.role}.`,
           // A judge is an employee taking a turn, so what the office told them
           // about how they work holds here too.
-          ...standingBlocks(request.judge),
+          // No voice, for the reason a reviewer gets none.
+          ...standingBlocks(request.judge, { voice: false }),
         ],
         dynamic,
       },

@@ -38,6 +38,51 @@ export interface WorkExample {
   readonly good: string;
 }
 
+/**
+ * A draft the real person changed before it went out.
+ *
+ * Worth more than another twenty samples: it is the one place the office can
+ * see what it got wrong about somebody's voice, said by the person themselves.
+ */
+export interface Correction {
+  readonly at: Date;
+  /** The work it came from, where there was one. */
+  readonly taskId: string | null;
+  /** What the office wrote. */
+  readonly before: string;
+  /** What it should have said. */
+  readonly after: string;
+}
+
+/**
+ * An employee standing in for a real colleague.
+ *
+ * A voice is personal, so this records consent as much as configuration: who
+ * this employee stands in for, who said so, and when. The office can answer for
+ * it later, and the canvas says so wherever that work appears.
+ *
+ * The samples the card was made from are not here. They are documents in this
+ * employee's in-tray, where somebody deliberately put them, and they are read
+ * once — twenty emails in every prompt would be twenty emails paid for on every
+ * call, and the cached prefix would never hold.
+ */
+export interface Understudy {
+  /** The real colleague, by name. */
+  readonly person: string;
+  /** Who recorded it: a person, never an employee. */
+  readonly recordedBy: string;
+  readonly recordedAt: Date;
+  /** Off keeps the card and uses none of it. */
+  readonly enabled: boolean;
+  /** What the office learned from the samples. Null until it has studied them. */
+  readonly card: string | null;
+  readonly cardMadeAt: Date | null;
+  /** How many samples it was made from, so a thin card is visible rather than implied. */
+  readonly cardFromSamples: number;
+  /** What the real person changed, newest first. */
+  readonly corrections: readonly Correction[];
+}
+
 export interface Employee {
   readonly id: EmployeeId;
   readonly officeId: OfficeId;
@@ -78,6 +123,8 @@ export interface Employee {
   readonly instructions: string | null;
   /** Work somebody judged good, kept to show what good looks like here. */
   readonly examples: readonly WorkExample[];
+  /** The real person this employee stands in for, or null for one that writes as itself. */
+  readonly understudy: Understudy | null;
   readonly status: EmployeeStatus;
   readonly statusChangedAt: Date;
   readonly createdAt: Date;
@@ -100,6 +147,8 @@ export interface CreateEmployeeInput {
   /** How this person works. Loose on the way in, narrow on the entity. */
   readonly instructions?: unknown;
   readonly examples?: unknown;
+  /** Who this person stands in for, if anybody. */
+  readonly understudy?: unknown;
 }
 
 /** Facts the caller resolved from storage so the domain stays pure. */
@@ -125,6 +174,15 @@ export const WORK_EXAMPLE_MAX_LENGTH = 4_000;
 export const WORK_EXAMPLE_WHEN_MAX_LENGTH = 200;
 /** Few, because every one is carried in the prompt of every call this person makes. */
 export const MAX_WORK_EXAMPLES = 10;
+/** A page, not a corpus: the card is carried in every call this person makes. */
+export const STYLE_CARD_MAX_LENGTH = 8_000;
+export const PERSON_NAME_MAX_LENGTH = 200;
+export const CORRECTION_MAX_LENGTH = 4_000;
+/**
+ * The ten most recent, oldest dropped. A card made from what somebody corrected
+ * last month is worse than one made from fewer, newer answers.
+ */
+export const MAX_CORRECTIONS = 10;
 
 function validateText(raw: unknown, path: string): Result<string> {
   if (typeof raw !== "string") return err([{ path, message: "must be a string" }]);
@@ -212,6 +270,82 @@ function validateExamples(raw: unknown): Result<readonly WorkExample[]> {
   return errors.length > 0 ? err(errors) : ok(examples);
 }
 
+function validatePersonName(raw: unknown, path: string): ValidationError[] {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return [{ path, message: "is required: an office must be able to say whose voice this is" }];
+  }
+  return raw.length > PERSON_NAME_MAX_LENGTH
+    ? [{ path, message: `must be at most ${String(PERSON_NAME_MAX_LENGTH)} characters` }]
+    : [];
+}
+
+/**
+ * Who this employee stands in for, as the office records it.
+ *
+ * `recordedBy` is as required as `person`: a voice is personal, and an office
+ * that cannot say who agreed to this cannot answer for it later.
+ */
+function validateUnderstudy(
+  raw: unknown,
+  existing: Understudy | null,
+  now: Date,
+): Result<Understudy | null> {
+  if (raw === undefined || raw === null) return ok(null);
+  if (!isRecord(raw)) {
+    return err([{ path: "understudy", message: "must say who this person stands in for" }]);
+  }
+
+  const errors: ValidationError[] = [];
+  errors.push(...validatePersonName(raw["person"], "understudy.person"));
+  errors.push(...validatePersonName(raw["recordedBy"], "understudy.recordedBy"));
+
+  const card = raw["card"];
+  if (card !== undefined && card !== null) {
+    if (typeof card !== "string") {
+      errors.push({ path: "understudy.card", message: "must be a string" });
+    } else if (card.length > STYLE_CARD_MAX_LENGTH) {
+      errors.push({
+        path: "understudy.card",
+        message: `must be at most ${String(STYLE_CARD_MAX_LENGTH)} characters`,
+      });
+    }
+  }
+
+  const from = raw["cardFromSamples"];
+  if (from !== undefined && (typeof from !== "number" || !Number.isInteger(from) || from < 0)) {
+    errors.push({ path: "understudy.cardFromSamples", message: "must be a count of samples" });
+  }
+
+  const enabled = raw["enabled"];
+  if (enabled !== undefined && typeof enabled !== "boolean") {
+    errors.push({ path: "understudy.enabled", message: "must be true or false" });
+  }
+
+  if (errors.length > 0) return err(errors);
+
+  const said = typeof card === "string" && card.trim().length > 0 ? card : null;
+  return ok({
+    person: (raw["person"] as string).trim(),
+    recordedBy: (raw["recordedBy"] as string).trim(),
+    // Kept from the record that already exists: studying somebody's samples is
+    // not a new act of consent, and must not look like one.
+    recordedAt: existing?.recordedAt ?? now,
+    enabled: typeof enabled === "boolean" ? enabled : true,
+    card: said,
+    cardMadeAt: said === null ? null : (asDate(raw["cardMadeAt"]) ?? existing?.cardMadeAt ?? now),
+    cardFromSamples: typeof from === "number" ? from : 0,
+    corrections: existing?.corrections ?? [],
+  });
+}
+
+/** A date as it comes back from JSON, or null when it is not one. */
+function asDate(raw: unknown): Date | null {
+  if (raw instanceof Date) return raw;
+  if (typeof raw !== "string") return null;
+  const at = new Date(raw);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
 function validateSkillIds(raw: readonly string[] | undefined): Result<readonly string[]> {
   const ids = raw ?? [];
   const seen = new Set<string>();
@@ -286,6 +420,8 @@ export function createEmployee(
   if (!instructions.ok) errors.push(...instructions.error);
   const examples = validateExamples(input.examples);
   if (!examples.ok) errors.push(...examples.error);
+  const understudy = validateUnderstudy(input.understudy, null, deps.now());
+  if (!understudy.ok) errors.push(...understudy.error);
 
   const priority = input.priority ?? "normal";
   if (!isPriority(priority)) {
@@ -304,6 +440,7 @@ export function createEmployee(
     !supervisorId.ok ||
     !instructions.ok ||
     !examples.ok ||
+    !understudy.ok ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -327,6 +464,7 @@ export function createEmployee(
     workspaceRef: input.workspaceRef ?? null,
     instructions: instructions.value,
     examples: examples.value,
+    understudy: understudy.value,
     priority,
     status: "active",
     statusChangedAt: now,
@@ -355,6 +493,8 @@ export interface UpdateEmployeeInput {
   /** Null unteaches somebody; absent leaves what they were told alone. */
   readonly instructions?: string | null;
   readonly examples?: unknown;
+  /** Null stops them standing in for anybody, which takes the card with it. */
+  readonly understudy?: unknown;
 }
 
 export interface UpdateEmployeeContext {
@@ -430,6 +570,12 @@ export function updateEmployee(
     changes.examples === undefined ? ok(employee.examples) : validateExamples(changes.examples);
   if (!examples.ok) errors.push(...examples.error);
 
+  const understudy =
+    changes.understudy === undefined
+      ? ok(employee.understudy)
+      : validateUnderstudy(changes.understudy, employee.understudy, employee.statusChangedAt);
+  if (!understudy.ok) errors.push(...understudy.error);
+
   const priority = changes.priority ?? employee.priority;
   if (!isPriority(priority)) {
     errors.push({ path: "priority", message: `must be one of ${TASK_PRIORITIES.join(", ")}` });
@@ -445,6 +591,7 @@ export function updateEmployee(
     !toolGrants.ok ||
     !instructions.ok ||
     !examples.ok ||
+    !understudy.ok ||
     !isPriority(priority)
   ) {
     return err(errors);
@@ -464,7 +611,74 @@ export function updateEmployee(
     workspaceRef: changes.workspaceRef === undefined ? employee.workspaceRef : changes.workspaceRef,
     instructions: instructions.value,
     examples: examples.value,
+    understudy: understudy.value,
     priority,
+  });
+}
+
+export interface CorrectionInput {
+  readonly before: string;
+  readonly after: string;
+  readonly taskId?: string | null;
+}
+
+/**
+ * Keeps what the real person changed about a draft.
+ *
+ * Its own function rather than a field on an update, because the rule is a
+ * domain rule and not an assignment: the newest goes first and the oldest falls
+ * off the end. A card made from what somebody corrected months ago is worse
+ * than one made from fewer, newer answers.
+ */
+export function recordCorrection(
+  employee: Employee,
+  input: CorrectionInput,
+  deps: { readonly now: () => Date },
+): Result<Employee> {
+  const standing = employee.understudy;
+  if (standing === null) {
+    return err([
+      {
+        path: "understudy",
+        message: "this person stands in for nobody, so there is no voice to correct",
+      },
+    ]);
+  }
+
+  const errors: ValidationError[] = [];
+  for (const [field, value] of [
+    ["before", input.before],
+    ["after", input.after],
+  ] as const) {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      errors.push({ path: field, message: "is required: a correction is a before and an after" });
+    } else if (value.length > CORRECTION_MAX_LENGTH) {
+      errors.push({
+        path: field,
+        message: `must be at most ${String(CORRECTION_MAX_LENGTH)} characters`,
+      });
+    }
+  }
+  if (errors.length === 0 && input.before.trim() === input.after.trim()) {
+    errors.push({
+      path: "after",
+      message: "is the same as what was written, so it corrects nothing",
+    });
+  }
+  if (errors.length > 0) return err(errors);
+
+  const correction: Correction = {
+    at: deps.now(),
+    taskId: input.taskId ?? null,
+    before: input.before,
+    after: input.after,
+  };
+  return ok({
+    ...employee,
+    understudy: {
+      ...standing,
+      corrections: [correction, ...standing.corrections].slice(0, MAX_CORRECTIONS),
+    },
   });
 }
 
