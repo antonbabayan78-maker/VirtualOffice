@@ -103,6 +103,14 @@ describe("what the office can reach, from the office panel", () => {
   });
 });
 
+describe("the models the office may call, from the office panel", () => {
+  it("is on the office's own panel, beside the connectors", () => {
+    // A service belongs to the office for the same reason a connector does:
+    // two rooms on the same service are calling the same place on the same key.
+    expect(screen.getByRole("group", { name: /models this office may call/i })).toBeTruthy();
+  });
+});
+
 describe("stopping the office from its own panel", () => {
   it("offers the switch", () => {
     expect(screen.getByRole("group", { name: /whether this office picks up work/i })).toBeTruthy();

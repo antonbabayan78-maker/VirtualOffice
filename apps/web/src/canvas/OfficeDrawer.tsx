@@ -14,6 +14,7 @@ import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { BudgetField } from "./BudgetField.js";
 import { Connectors } from "./Connectors.js";
+import { Services } from "./Services.js";
 import { RunSwitch } from "./RunSwitch.js";
 import { PriorityField } from "./PriorityField.js";
 
@@ -112,6 +113,10 @@ export function OfficeDrawer({ store }: { readonly store: OfficeStore }): ReactN
       {/* Its own saves, not part of this drawer's draft: a connector is an
           entity of the office rather than a field of it. */}
       <Connectors store={store} />
+
+      {/* Beside the connectors and saved the same way: a service is an entity
+          of the office rather than a field of it. */}
+      <Services store={store} />
 
       <div className="mt-auto flex gap-2 pt-2">
         <Button variant="primary" onClick={save}>

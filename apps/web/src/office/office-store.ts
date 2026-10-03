@@ -25,6 +25,7 @@ import {
   updateDepartment,
   updateConnection,
   updateConnector,
+  updateLlmService,
   updateEmployee,
   updateOffice,
   type Connection,
@@ -46,6 +47,10 @@ import {
   type UpdateOfficeInput,
   type Employee,
   type EmployeeId,
+  type LlmService,
+  type LlmServiceId,
+  type LlmServiceKind,
+  type ModelOffer,
   type OfficeId,
   type Result,
   type Task,
@@ -114,6 +119,13 @@ export interface OfficeStoreState {
    * the canvas is recomputed from one.
    */
   readonly connectors: readonly Connector[];
+  /**
+   * The AI services this office can reach, switched on or not. Flat like the
+   * connectors, and holding no key: a service names the variable that holds one
+   * or refers to one the office is keeping, and the canvas can write a key but
+   * never read one back.
+   */
+  readonly services: readonly LlmService[];
   /**
    * What the office has been spent on. Loaded whole with the office, like the
    * documents, and replaced rather than added to — two loads must not double
@@ -243,6 +255,31 @@ export interface OfficeStoreState {
   discoverConnectorTools(id: ConnectorId): Promise<SaveOutcome>;
   /** Takes one off the canvas first, and puts it back if the office refuses. */
   removeConnector(id: ConnectorId): Promise<SaveOutcome>;
+  loadServices(services: readonly LlmService[]): void;
+  /** Told about one, from the office's event stream. */
+  putService(service: LlmService): void;
+  dropService(id: LlmServiceId): void;
+  /** Adds one at the office, which names it. Never carries a key. */
+  addService(input: AddServiceInput): Promise<SaveOutcome>;
+  saveService(id: LlmServiceId, changes: UpdateServiceInput): Promise<SaveOutcome>;
+  removeService(id: LlmServiceId): Promise<SaveOutcome>;
+  /**
+   * Sets the key for a service: pasted, which the office keeps in its vault, or
+   * named as a variable the deployment sets.
+   *
+   * The key goes to the office and never into this store. What comes back is
+   * the service, which holds a reference and not a key — and there is no way
+   * from here to read one back, by design.
+   */
+  setServiceKey(id: LlmServiceId, credential: ServiceCredential): Promise<SaveOutcome>;
+  clearServiceKey(id: LlmServiceId): Promise<SaveOutcome>;
+  /**
+   * Asks a service which models it has and keeps what the office wrote down.
+   *
+   * Not optimistic, as a connector's tools are not: only the service knows its
+   * models, so there is nothing to show until it has answered.
+   */
+  discoverServiceModels(id: LlmServiceId): Promise<SaveOutcome>;
   loadDocuments(documents: readonly Document[]): void;
   /** Told about one, from the office's event stream. */
   putDocument(document: Document): void;
@@ -317,6 +354,23 @@ export interface AddConnectorInput {
   readonly config?: Record<string, unknown>;
 }
 
+export interface AddServiceInput {
+  readonly kind: LlmServiceKind;
+  readonly name: string;
+  /** Absent for the office's own built-in provider. */
+  readonly baseUrl?: string;
+}
+
+export interface UpdateServiceInput {
+  readonly name?: string;
+  readonly baseUrl?: string;
+  readonly models?: readonly ModelOffer[];
+  readonly enabled?: boolean;
+}
+
+/** One way or the other, never both: the office refuses a body with two. */
+export type ServiceCredential = { readonly apiKey: string } | { readonly tokenEnv: string };
+
 export interface FileDocumentInput {
   readonly owner: DocumentOwnerRef;
   readonly tray: "in" | "out";
@@ -378,8 +432,8 @@ function drawable(
  * answer with, and a settings panel that rearranges itself while somebody is
  * using it is worse than one that loads slowly.
  */
-function byName(connectors: readonly Connector[]): readonly Connector[] {
-  return [...connectors].sort((a, b) => a.name.localeCompare(b.name));
+function byName<T extends { readonly name: string }>(things: readonly T[]): readonly T[] {
+  return [...things].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -523,6 +577,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       documents: [],
       uploading: false,
       connectors: [],
+      services: [],
       usage: [],
       spend: null,
 
@@ -941,6 +996,172 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         if (answer.ok) return { ok: true };
         get().putConnector(before);
         if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      loadServices: (services) => {
+        set({ services: byName(services) });
+      },
+
+      putService: (service) => {
+        const existing = get().services;
+        set({
+          services: byName(
+            existing.some((candidate) => candidate.id === service.id)
+              ? existing.map((candidate) => (candidate.id === service.id ? service : candidate))
+              : [...existing, service],
+          ),
+        });
+      },
+
+      dropService: (id) => {
+        set({ services: get().services.filter((candidate) => candidate.id !== id) });
+      },
+
+      addService: async (input) => {
+        // The office this canvas is showing, as adding a connector asks: the
+        // app builds its store before it has read its configuration.
+        const officeId = get().office?.id ?? deps.officeId;
+        if (connected === undefined || officeId === undefined) {
+          return { ok: false, problems: [{ path: "", message: "this canvas has no office yet" }] };
+        }
+
+        // No key, ever: there is one way in for one, and it is `setServiceKey`.
+        const answer = await connected.createService(officeId, {
+          kind: input.kind,
+          name: input.name,
+          ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
+        });
+        if (answer.ok) {
+          get().putService(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      saveService: async (id, changes) => {
+        const before = get().services.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such service" }] };
+        }
+
+        // The office's other services, for the name check: a service does not
+        // collide with itself.
+        const applied = updateLlmService(
+          before,
+          changes,
+          get().services.filter((candidate) => candidate.id !== id),
+        );
+        if (isErr(applied)) return { ok: false, problems: applied.error };
+        get().putService(applied.value);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.patchService(
+          id,
+          changes as Record<string, unknown>,
+          get().seenOffset,
+        );
+        if (answer.ok) {
+          get().putService(answer.value);
+          return { ok: true };
+        }
+        get().putService(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      removeService: async (id) => {
+        const before = get().services.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such service" }] };
+        }
+
+        // Employees naming it are left alone, as grants naming a connector are:
+        // the turn falls back to the office's own provider without it, and
+        // rewriting everybody from here is a change nobody asked this panel for.
+        get().dropService(id);
+        if (connected === undefined) return { ok: true };
+
+        const answer = await connected.deleteService(id);
+        if (answer.ok) return { ok: true };
+        get().putService(before);
+        if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      setServiceKey: async (id, credential) => {
+        const before = get().services.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such service" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to tell" }],
+          };
+        }
+
+        // Nothing optimistic: the key is the office's to keep, and showing a
+        // service as credentialled before it answered would be a claim about
+        // something this canvas cannot see.
+        const answer = await connected.setServiceCredential(id, credential);
+        if (answer.ok) {
+          get().putService(answer.value);
+          return { ok: true };
+        }
+        // Said as a problem rather than a notice: somebody pasted a key into a
+        // field and is waiting to be told whether it was kept. An office with
+        // no vault answers here, and the panel has to say so.
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      clearServiceKey: async (id) => {
+        const before = get().services.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such service" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to tell" }],
+          };
+        }
+
+        const answer = await connected.clearServiceCredential(id);
+        if (answer.ok) {
+          get().putService(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      discoverServiceModels: async (id) => {
+        const before = get().services.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such service" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to ask" }],
+          };
+        }
+
+        const answer = await connected.discoverServiceModels(id);
+        if (answer.ok) {
+          get().putService(answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 

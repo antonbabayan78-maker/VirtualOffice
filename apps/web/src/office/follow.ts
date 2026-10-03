@@ -125,6 +125,15 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
         // does not cost the canvas its departments.
         const listed = await api.listConnectors(officeId);
         if (listed.ok) store.getState().loadConnectors(listed.value);
+      } else if (
+        kind === "service.created" ||
+        kind === "service.updated" ||
+        kind === "service.deleted"
+      ) {
+        // Re-listed for the same reasons the connectors are: a handful of them,
+        // a rare event, and nothing to fetch for one that has gone.
+        const listed = await api.listServices(officeId);
+        if (listed.ok) store.getState().loadServices(listed.value);
       } else if (kind === "document.added") {
         const fetched = await api.getDocument(id);
         if (fetched.ok) store.getState().putDocument(fetched.value);
@@ -161,6 +170,11 @@ export function followOffice({ store, api, officeId }: FollowOptions): OfficeFol
       );
 
     store.getState().loadConnectors(snapshot.value.connectors);
+
+    // Asked for separately, as the trays are: an office running a version with
+    // no services is an office with none, not one that fails to open.
+    const services = await api.listServices(officeId);
+    if (services.ok) store.getState().loadServices(services.value);
 
     // Every tray in one request, since a tray is a filter over these. An office
     // that cannot answer is an office with no trays rather than one that fails
