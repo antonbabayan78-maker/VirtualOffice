@@ -32,6 +32,7 @@ import {
 
 export { applyTransition, workflowError } from "./workflow-types.js";
 export type {
+  HeldCall,
   PeerCandidate,
   PolicyEvent,
   PolicyHandler,
