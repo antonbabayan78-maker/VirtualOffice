@@ -306,3 +306,29 @@ describe("contests waiting for a judge", () => {
     ).toEqual([]);
   });
 });
+
+describe("who the office may look back over", () => {
+  it("carries the switch through, so the scheduler can see it", () => {
+    // Without this the switch is on in the office and invisible to the thing
+    // that acts on it, which is the quietest kind of broken.
+    const snapshot = officeSnapshot({
+      office,
+      departments: [eng],
+      employees: [{ ...ada, selfImprovement: true }],
+      tasks: [],
+    });
+
+    expect(snapshot.employees[0]?.selfImprovement).toBe(true);
+  });
+
+  it("leaves it off for everybody else", () => {
+    const snapshot = officeSnapshot({
+      office,
+      departments: [eng],
+      employees: [ada],
+      tasks: [],
+    });
+
+    expect(snapshot.employees[0]?.selfImprovement).toBe(false);
+  });
+});

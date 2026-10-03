@@ -110,6 +110,7 @@ export function officeSnapshot(input: OfficeSnapshotInput): SchedulerSnapshot {
       budget: employee.budget,
       spentUsd: input.spend?.byEmployee[employee.id] ?? 0,
       priority: employee.priority,
+      selfImprovement: employee.selfImprovement,
     })),
     tasks: input.tasks.map((task) => ({
       id: task.id,

@@ -73,6 +73,8 @@ export interface ScheduledEmployee {
   /** Spent in the current period. Absent means nothing has been. */
   readonly spentUsd?: number;
   readonly priority?: TaskPriority;
+  /** Whether the office may look back over their work. Absent is off. */
+  readonly selfImprovement?: boolean;
 }
 
 export interface RunnableTask {
@@ -198,6 +200,8 @@ export const AGENT_REVIEW_JOB = "agent_review";
  * set of tasks rather than one of them.
  */
 export const AGENT_JUDGE_JOB = "agent_judge";
+/** Looking back over one person's finished work, for whoever is switched on. */
+export const AGENT_RETROSPECTIVE_JOB = "agent_retrospective";
 
 interface Closure {
   readonly reason: SkipReason;
@@ -252,6 +256,11 @@ function closedBecause(
     if (!isOpen(employee.schedule, now)) return { reason: "employee_closed" };
   }
   return null;
+}
+
+/** The day a moment falls in, in UTC: what "once a day" is keyed on. */
+function dayOf(now: Date): string {
+  return now.toISOString().slice(0, 10);
 }
 
 export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork {
@@ -392,6 +401,46 @@ export function computeDueWork(snapshot: SchedulerSnapshot, now: Date): DueWork 
       }),
       // One verdict per contest, so one job per contest however many ticks see it.
       idempotencyKey: `${AGENT_JUDGE_JOB}:${contest.contestId}`,
+    });
+  }
+
+  /**
+   * One look back per switched-on person per day.
+   *
+   * Their own hours, status and budget apply, exactly as a judge's do: it is
+   * their turn, taken on their model and charged to them, so their day says
+   * whether it happens. Nobody is looked at who was not switched on, which is
+   * the whole of what the switch governs.
+   */
+  for (const employee of snapshot.employees) {
+    if (employee.selfImprovement !== true) continue;
+    const closed = closedBecause(
+      now,
+      offices.get(employee.officeId),
+      departments.get(employee.departmentId),
+      employee,
+    );
+    if (closed !== null) {
+      skipped.push({ what: employee.id, ...closed });
+      continue;
+    }
+
+    jobs.push({
+      officeId: employee.officeId,
+      employeeId: employee.id,
+      kind: AGENT_RETROSPECTIVE_JOB,
+      payload: { employeeId: employee.id, departmentId: employee.departmentId },
+      priority: orderingKey({
+        office: offices.get(employee.officeId)?.priority ?? "normal",
+        department: departments.get(employee.departmentId)?.priority ?? "normal",
+        employee: employee.priority ?? "normal",
+        // Below the work itself: thinking about how somebody works waits for
+        // the work they are doing.
+        task: "low",
+      }),
+      // One a day: a tick every second still means one look back, and tomorrow
+      // there is new work to read.
+      idempotencyKey: `${AGENT_RETROSPECTIVE_JOB}:${employee.id}:${dayOf(now)}`,
     });
   }
 
