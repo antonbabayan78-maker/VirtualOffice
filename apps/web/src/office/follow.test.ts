@@ -100,7 +100,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
     discoverConnectorTools: () => Promise.reject(new Error("not used here")),
-    listServices: () => Promise.reject(new Error("not used here")),
+    listServices: () => Promise.resolve({ ok: true, value: [] }),
     createService: () => Promise.reject(new Error("not used here")),
     patchService: () => Promise.reject(new Error("not used here")),
     deleteService: () => Promise.reject(new Error("not used here")),
@@ -751,5 +751,74 @@ describe("what the office is waiting on a person for", () => {
 
     expect(store.getState().departments).toHaveLength(1);
     expect(store.getState().waiting).toEqual([]);
+  });
+});
+
+describe("the AI services an office has, changing under you", () => {
+  const openai = {
+    id: "svc-openai",
+    officeId,
+    kind: "openai-compatible",
+    name: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    tokenEnv: "OPENAI_API_KEY",
+    secretRef: null,
+    models: [{ id: "gpt-5" }],
+    enabled: true,
+    createdAt: at,
+  } as never;
+
+  it("shows them when the office is loaded", async () => {
+    const api = fakeApi({ listServices: () => Promise.resolve({ ok: true, value: [openai] }) });
+
+    await follow(api).reload();
+
+    expect(store.getState().services.map((one) => one.name)).toEqual(["openai"]);
+  });
+
+  it("loads an office that cannot say, rather than failing to open", async () => {
+    // An office running a version with no services is an office with none.
+    const api = fakeApi({
+      listServices: () => Promise.resolve({ ok: false, kind: "transport", message: "no services" }),
+    });
+
+    await follow(api).reload();
+
+    expect(store.getState().departments).toHaveLength(1);
+    expect(store.getState().services).toEqual([]);
+  });
+
+  it("asks again when one is added, as it does for a connector", async () => {
+    const listServices = vi.fn(() => Promise.resolve({ ok: true as const, value: [openai] }));
+
+    await follow(fakeApi({ listServices })).apply({
+      offset: 9,
+      officeId,
+      at: 0,
+      data: { kind: "service.created", id: "svc-openai" },
+    });
+
+    expect(listServices).toHaveBeenCalledWith(officeId);
+    expect(store.getState().services).toHaveLength(1);
+  });
+
+  it("asks again when one is changed or taken away", async () => {
+    const listServices = vi.fn(() => Promise.resolve({ ok: true as const, value: [] }));
+    const api = fakeApi({ listServices });
+
+    await follow(api).apply({
+      offset: 10,
+      officeId,
+      at: 0,
+      data: { kind: "service.updated", id: "svc-openai" },
+    });
+    await follow(api).apply({
+      offset: 11,
+      officeId,
+      at: 0,
+      data: { kind: "service.deleted", id: "svc-openai" },
+    });
+
+    expect(listServices).toHaveBeenCalledTimes(2);
   });
 });

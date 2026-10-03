@@ -27,6 +27,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     loadOffice: () => Promise.resolve({ ok: true, value: snapshot as never }),
     listDocuments: nothing,
     listUsage: nothing,
+    listServices: nothing,
     listApprovals: () => Promise.resolve({ ok: true, value: [] }),
     officeSpend: () =>
       Promise.resolve({

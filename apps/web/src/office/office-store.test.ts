@@ -13,6 +13,7 @@ import {
   type DepartmentId,
   type Employee,
   type EmployeeId,
+  type LlmService,
   type OfficeId,
   type Task,
   type TaskId,
@@ -1458,5 +1459,285 @@ describe("changing a piece of work from the board", () => {
     store.getState().putTask(work());
 
     expect((await store.getState().reassignTask("task-1" as TaskId, grace.id)).ok).toBe(false);
+  });
+});
+
+describe("the AI services an office can reach, on the canvas", () => {
+  const acmeOffice = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    runState: "running" as const,
+    budget: null,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  const service = (overrides: Record<string, unknown> = {}): LlmService =>
+    ({
+      id: "svc-openai",
+      officeId,
+      kind: "openai-compatible",
+      name: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      tokenEnv: null,
+      secretRef: null,
+      models: [],
+      enabled: true,
+      createdAt: new Date("2026-09-28T09:00:00Z"),
+      ...overrides,
+    }) as unknown as LlmService;
+
+  /** Every call the canvas made, so a click is checked by its effect. */
+  function spyApi(answers: Record<string, unknown> = {}) {
+    const sent: { what: string; body: unknown }[] = [];
+    return {
+      sent,
+      api: {
+        createService: (_officeId: string, input: Record<string, unknown>) => {
+          sent.push({ what: "create", body: input });
+          return Promise.resolve(
+            answers["create"] ?? { ok: true, value: service({ id: "svc-new", ...input }) },
+          );
+        },
+        patchService: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "patch", body: { id, changes } });
+          return Promise.resolve(answers["patch"] ?? { ok: true, value: service(changes) });
+        },
+        deleteService: (id: string) => {
+          sent.push({ what: "delete", body: id });
+          return Promise.resolve(answers["delete"] ?? { ok: true, value: true });
+        },
+        setServiceCredential: (id: string, credential: Record<string, unknown>) => {
+          sent.push({ what: "credential", body: { id, credential } });
+          return Promise.resolve(
+            answers["credential"] ?? { ok: true, value: service({ secretRef: "vault://abc" }) },
+          );
+        },
+        clearServiceCredential: (id: string) => {
+          sent.push({ what: "clear", body: id });
+          return Promise.resolve(answers["clear"] ?? { ok: true, value: service() });
+        },
+        discoverServiceModels: (id: string) => {
+          sent.push({ what: "discover", body: id });
+          return Promise.resolve(
+            answers["discover"] ?? {
+              ok: true,
+              value: service({ models: [{ id: "gpt-5" }, { id: "gpt-5-mini" }] }),
+            },
+          );
+        },
+      } as never,
+    };
+  }
+
+  const connected = (answers: Record<string, unknown> = {}) => {
+    open([eng]);
+    store.getState().loadOffice(acmeOffice);
+    const spy = spyApi(answers);
+    store.getState().connect(spy.api);
+    return spy;
+  };
+
+  it("knows about none of them until it is told", () => {
+    open([eng]);
+    expect(store.getState().services).toEqual([]);
+  });
+
+  it("lists them by name, so a settings panel does not reorder itself", () => {
+    open([eng]);
+    store.getState().loadServices([service({ id: "svc-z", name: "workshop" }), service()]);
+    expect(store.getState().services.map((one) => one.name)).toEqual(["openai", "workshop"]);
+  });
+
+  it("replaces one it already knows rather than listing it twice", () => {
+    open([eng]);
+    store.getState().loadServices([service()]);
+    store.getState().putService(service({ enabled: false }));
+
+    expect(store.getState().services).toHaveLength(1);
+    expect(store.getState().services[0]?.enabled).toBe(false);
+  });
+
+  it("takes one it is told has gone", () => {
+    open([eng]);
+    store.getState().loadServices([service()]);
+    store.getState().dropService("svc-openai" as never);
+    expect(store.getState().services).toEqual([]);
+  });
+
+  it("adds one at the office, and never sends a key with it", async () => {
+    const spy = connected();
+
+    const result = await store.getState().addService({
+      kind: "openai-compatible",
+      name: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]?.what).toBe("create");
+    expect(JSON.stringify(spy.sent[0]?.body)).not.toContain("apiKey");
+    expect(store.getState().services.map((one) => one.name)).toEqual(["openai"]);
+  });
+
+  it("says which field the office objected to", async () => {
+    const spy = connected({
+      create: {
+        ok: false,
+        kind: "validation",
+        errors: [{ path: "baseUrl", message: "must be https" }],
+      },
+    });
+
+    const result = await store.getState().addService({
+      kind: "openai-compatible",
+      name: "openai",
+      baseUrl: "http://api.openai.com/v1",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.problems[0]?.path).toBe("baseUrl");
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("switches one off here and then at the office", async () => {
+    const spy = connected();
+    store.getState().loadServices([service()]);
+
+    await store.getState().saveService("svc-openai" as never, { enabled: false });
+
+    expect(store.getState().services[0]?.enabled).toBe(false);
+    expect(spy.sent[0]).toEqual({
+      what: "patch",
+      body: { id: "svc-openai", changes: { enabled: false } },
+    });
+  });
+
+  it("puts a refused change back, so the panel never shows what the office rejected", async () => {
+    const spy = connected({
+      patch: { ok: false, kind: "validation", errors: [{ path: "name", message: "taken" }] },
+    });
+    store.getState().loadServices([service()]);
+
+    const result = await store.getState().saveService("svc-openai" as never, { name: "other" });
+
+    expect(result.ok).toBe(false);
+    expect(store.getState().services[0]?.name).toBe("openai");
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("takes one off the canvas and then at the office", async () => {
+    const spy = connected();
+    store.getState().loadServices([service()]);
+
+    await store.getState().removeService("svc-openai" as never);
+
+    expect(store.getState().services).toEqual([]);
+    expect(spy.sent[0]).toEqual({ what: "delete", body: "svc-openai" });
+  });
+
+  it("puts one back when the office refuses to forget it", async () => {
+    const spy = connected({ delete: { ok: false, kind: "transport", message: "down" } });
+    store.getState().loadServices([service()]);
+
+    await store.getState().removeService("svc-openai" as never);
+
+    expect(store.getState().services.map((one) => one.name)).toEqual(["openai"]);
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("sets a key and keeps only what the office answered with", async () => {
+    // The key goes to the office and never into the canvas's own state: what
+    // comes back is the service, which holds a reference and not a key.
+    const spy = connected();
+    store.getState().loadServices([service()]);
+
+    const result = await store.getState().setServiceKey("svc-openai" as never, {
+      apiKey: "sk-live-1",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toEqual({
+      what: "credential",
+      body: { id: "svc-openai", credential: { apiKey: "sk-live-1" } },
+    });
+    expect(store.getState().services[0]?.secretRef).toBe("vault://abc");
+    expect(JSON.stringify(store.getState().services)).not.toContain("sk-live-1");
+  });
+
+  it("names a variable instead of pasting one", async () => {
+    const spy = connected();
+    store.getState().loadServices([service()]);
+
+    await store.getState().setServiceKey("svc-openai" as never, { tokenEnv: "OPENAI_API_KEY" });
+
+    expect(spy.sent[0]?.body).toEqual({
+      id: "svc-openai",
+      credential: { tokenEnv: "OPENAI_API_KEY" },
+    });
+  });
+
+  it("carries back an office that will not keep a key, since the panel must say so", async () => {
+    const spy = connected({
+      credential: { ok: false, kind: "transport", message: "this office cannot keep a key" },
+    });
+    store.getState().loadServices([service()]);
+
+    const result = await store.getState().setServiceKey("svc-openai" as never, {
+      apiKey: "sk-live-1",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.problems[0]?.message).toMatch(/cannot keep a key/);
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("gives a key back", async () => {
+    const spy = connected();
+    store.getState().loadServices([service({ secretRef: "vault://abc" })]);
+
+    await store.getState().clearServiceKey("svc-openai" as never);
+
+    expect(spy.sent[0]).toEqual({ what: "clear", body: "svc-openai" });
+    expect(store.getState().services[0]?.secretRef).toBeNull();
+  });
+
+  it("asks a service what models it has and keeps what the office wrote down", async () => {
+    const spy = connected();
+    store.getState().loadServices([service()]);
+
+    const result = await store.getState().discoverServiceModels("svc-openai" as never);
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toEqual({ what: "discover", body: "svc-openai" });
+    expect(store.getState().services[0]?.models.map((model) => model.id)).toEqual([
+      "gpt-5",
+      "gpt-5-mini",
+    ]);
+  });
+
+  it("says why a service could not be asked, because somebody pressed a button", async () => {
+    const spy = connected({
+      discover: { ok: false, kind: "transport", message: "connection refused" },
+    });
+    store.getState().loadServices([service()]);
+
+    const result = await store.getState().discoverServiceModels("svc-openai" as never);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.problems[0]?.message).toContain("connection refused");
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("does nothing to a service it does not have", async () => {
+    connected();
+
+    expect((await store.getState().saveService("nope" as never, { enabled: false })).ok).toBe(
+      false,
+    );
+    expect((await store.getState().removeService("nope" as never)).ok).toBe(false);
+    expect((await store.getState().discoverServiceModels("nope" as never)).ok).toBe(false);
   });
 });
