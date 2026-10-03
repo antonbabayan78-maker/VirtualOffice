@@ -39,56 +39,7 @@ import {
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
 import { Field, inputClass, Problems } from "../ui/field.js";
-
-/** What a set of usage rows comes to. */
-interface Spend {
-  readonly usd: number;
-  /** Calls the registry had no price for; a total holding one is a floor. */
-  readonly unpriced: number;
-  readonly ms: number;
-  readonly calls: number;
-}
-
-const NOTHING: Spend = { usd: 0, unpriced: 0, ms: 0, calls: 0 };
-
-function spendOf(rows: readonly UsageRecord[]): Spend {
-  return rows.reduce<Spend>((total, row) => {
-    const event = row.event;
-    const cost = event["cost"];
-    const usd =
-      typeof cost === "object" &&
-      cost !== null &&
-      typeof (cost as { totalUsd?: unknown }).totalUsd === "number"
-        ? (cost as { totalUsd: number }).totalUsd
-        : null;
-    const ms = typeof event["durationMs"] === "number" ? event["durationMs"] : 0;
-    return {
-      usd: total.usd + (usd ?? 0),
-      unpriced: total.unpriced + (usd === null ? 1 : 0),
-      ms: total.ms + ms,
-      calls: total.calls + 1,
-    };
-  }, NOTHING);
-}
-
-/** Money as somebody reads it, with a floor when something could not be priced. */
-function readableSpend(spend: Spend): string {
-  if (spend.calls === 0) return "cost not recorded";
-  // Two decimals would render a few tenths of a cent as "$0.01", overstating
-  // the cheap model whose whole point is that it is cheap; four decimals would
-  // pad every ordinary figure with zeros it does not have.
-  const money =
-    spend.usd > 0 && spend.usd < 0.01
-      ? `$${spend.usd.toFixed(4).replace(/0+$/, "")}`
-      : `$${spend.usd.toFixed(2)}`;
-  if (spend.unpriced === 0) return money;
-  const calls =
-    spend.unpriced === 1 ? "1 call unpriced" : `${String(spend.unpriced)} calls unpriced`;
-  return `at least ${money} · ${calls}`;
-}
-
-const readableTime = (ms: number): string =>
-  ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${String(Math.round(ms))} ms`;
+import { readableSpend, readableTime, spendOf, type Spend } from "../office/spend.js";
 
 /** One person's share, for the line that makes the split visible at a glance. */
 interface Share {

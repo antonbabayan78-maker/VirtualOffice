@@ -90,6 +90,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     listConnectors: () => Promise.resolve({ ok: true, value: [] }),
     listUsage: () => Promise.resolve({ ok: true, value: [] }),
     listApprovals: () => Promise.resolve({ ok: true, value: [] }),
+    patchTask: () => Promise.reject(new Error("not used here")),
     officeSpend: () =>
       Promise.resolve({
         ok: true,
