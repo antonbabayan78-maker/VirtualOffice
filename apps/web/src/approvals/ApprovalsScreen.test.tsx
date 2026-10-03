@@ -325,3 +325,65 @@ describe("reading the list", () => {
     expect(row(/send_email/i)).toHaveTextContent(/nobody/i);
   });
 });
+
+describe("a call waiting that would act in somebody's name", () => {
+  const standingIn: Employee = {
+    ...ada,
+    understudy: {
+      person: "Anna Petrova",
+      recordedBy: "owner-1",
+      recordedAt: at,
+      enabled: true,
+      card: "Opens with the first name.",
+      cardMadeAt: at,
+      cardFromSamples: 3,
+      corrections: [],
+    },
+  };
+
+  const openAsUnderstudy = (waiting: readonly Waiting[]) => {
+    cleanup();
+    posted = [];
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([post], [standingIn]);
+    store.getState().loadWaiting(waiting);
+    store.getState().connect({
+      postTaskEvent: (taskId: string, event: Record<string, unknown>) => {
+        posted.push({ taskId, event });
+        return Promise.resolve({ ok: true, value: { id: taskId, status: "in_progress" } });
+      },
+    } as never);
+    return render(<ApprovalsScreen store={store} />);
+  };
+
+  it("says whose name, because that is the decision being asked for", () => {
+    // "May this task send an email" and "may it send an email as Anna Petrova"
+    // are different questions, and only the second one is on the desk.
+    openAsUnderstudy([
+      call({
+        gates: ["external_send", "as_person"],
+        detail: 'tool "post__send_email" (external_send, as_person, as Anna Petrova)',
+      }),
+    ]);
+
+    expect(screen.getByRole("region", { name: /approvals/i })).toHaveTextContent(/Anna Petrova/);
+  });
+
+  it("says it on the row itself, not only in the detail nobody reads", () => {
+    openAsUnderstudy([call({ gates: ["external_send", "as_person"] })]);
+
+    expect(screen.getByRole("region", { name: /approvals/i })).toHaveTextContent(
+      /in Anna Petrova's voice|as Anna Petrova/i,
+    );
+  });
+
+  it("says nothing about a voice when the person writes as themselves", () => {
+    open([call()]);
+
+    expect(screen.getByRole("region", { name: /approvals/i })).not.toHaveTextContent(/voice/i);
+  });
+});

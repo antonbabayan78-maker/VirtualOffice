@@ -319,6 +319,18 @@ export interface OfficeStoreState {
   saveDepartment(id: DepartmentId, changes: UpdateDepartmentInput): Promise<SaveOutcome>;
   saveEmployee(id: EmployeeId, changes: UpdateEmployeeInput): Promise<SaveOutcome>;
   /**
+   * Asks the office to read the writing in somebody's in-tray and write down
+   * how the person they stand in for writes.
+   *
+   * Not optimistic, and nothing to roll back: only the office can read the
+   * samples and only a model can write the card, so there is nothing to show
+   * until it has answered. A failure comes back as a problem rather than a
+   * notice, because somebody pressed a button and is waiting for this answer.
+   */
+  studyVoice(id: EmployeeId): Promise<SaveOutcome>;
+  /** Keeps what the real person changed about a draft this employee wrote. */
+  recordCorrection(id: EmployeeId, correction: CorrectionDraft): Promise<SaveOutcome>;
+  /**
    * The switches: stopping work and starting it again. Apart from the `save*`
    * pair above because stopping something is not editing it — and because
    * these are pressed rather than drafted, so they carry no field changes and
@@ -352,6 +364,12 @@ export interface AddConnectorInput {
   readonly name: string;
   /** Whatever the kind needs; for the web, the hosts it may read. */
   readonly config?: Record<string, unknown>;
+}
+
+export interface CorrectionDraft {
+  readonly before: string;
+  readonly after: string;
+  readonly taskId?: string;
 }
 
 export interface AddServiceInput {
@@ -432,6 +450,19 @@ function drawable(
  * answer with, and a settings panel that rearranges itself while somebody is
  * using it is worse than one that loads slowly.
  */
+/** One person, as the office last answered with them. */
+function replaceEmployee(
+  set: (partial: { employees: readonly Employee[] }) => void,
+  get: () => { readonly employees: readonly Employee[] },
+  employee: Employee,
+): void {
+  set({
+    employees: get().employees.map((candidate) =>
+      candidate.id === employee.id ? employee : candidate,
+    ),
+  });
+}
+
 function byName<T extends { readonly name: string }>(things: readonly T[]): readonly T[] {
   return [...things].sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -1319,6 +1350,52 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         }
         restore(before);
         if (answer.kind === "transport") set({ notice: answer.message });
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      studyVoice: async (id) => {
+        const before = get().employees.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to ask" }],
+          };
+        }
+
+        const answer = await connected.studyVoice(id);
+        if (answer.ok) {
+          replaceEmployee(set, get, answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      recordCorrection: async (id, correction) => {
+        const before = get().employees.find((candidate) => candidate.id === id);
+        if (before === undefined) {
+          return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to tell" }],
+          };
+        }
+
+        const answer = await connected.recordCorrection(id, correction);
+        if (answer.ok) {
+          replaceEmployee(set, get, answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
 

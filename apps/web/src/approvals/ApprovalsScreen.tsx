@@ -22,6 +22,7 @@ import { useState, type ReactNode } from "react";
 import type { Waiting } from "@vo/api-client";
 import type { TaskId, ValidationError } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
+import { inTheirVoice } from "../office/voice.js";
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 
@@ -58,10 +59,16 @@ function Who({ store, item }: { readonly store: OfficeStore; readonly item: Wait
     departments.find((department) => department.id === item.departmentId)?.name ??
     item.departmentId;
 
+  // Whose name this would be done in, where it is not their own. The decision
+  // on the desk is not "may this task send an email" but "may it send an email
+  // as Anna Petrova", and a row that does not say so asks the wrong question.
+  const voice = inTheirVoice(employees.find((employee) => employee.id === item.assigneeId));
+
   return (
     <span className="flex items-baseline gap-2 text-[11px] text-ink-muted">
       <span className="truncate">
         {who} · {room}
+        {voice !== null && <span className="ml-1 text-ink">{voice}</span>}
       </span>
       <span className="ml-auto shrink-0 tabular-nums">{waitingSince(item.since)}</span>
     </span>

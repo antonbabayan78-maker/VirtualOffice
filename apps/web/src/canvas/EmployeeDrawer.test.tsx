@@ -557,3 +557,119 @@ describe("teaching somebody on their own panel", () => {
     expect(saved()?.instructions).toBeNull();
   });
 });
+
+describe("standing in for a real person, on their panel", () => {
+  const taught = (overrides: Record<string, unknown> = {}): Employee => ({
+    ...ada,
+    understudy: {
+      person: "Anna Petrova",
+      recordedBy: "anton@acme.test",
+      recordedAt: at,
+      enabled: true,
+      card: "Opens with the first name. Never uses bullets.",
+      cardMadeAt: at,
+      cardFromSamples: 3,
+      corrections: [],
+      ...overrides,
+    },
+  });
+
+  const openWith = (employee: Employee) => {
+    view.unmount();
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => at,
+    });
+    store.getState().load([eng], [employee, grace]);
+    store.getState().selectEmployee(employee.id);
+    return render(<EmployeeDrawer store={store} />);
+  };
+
+  it("offers to stand in for somebody, for an employee who writes as itself", () => {
+    expect(screen.getByLabelText("Stands in for")).toHaveValue("");
+  });
+
+  it("says who they stand in for, who recorded it and when", () => {
+    openWith(taught());
+    const drawer = screen.getByRole("dialog");
+
+    expect(screen.getByLabelText("Stands in for")).toHaveValue("Anna Petrova");
+    expect(drawer).toHaveTextContent("anton@acme.test");
+    expect(drawer).toHaveTextContent(/recorded/i);
+  });
+
+  it("says the samples go in the in-tray, which is the act of consent", () => {
+    openWith(taught({ card: null }));
+
+    expect(screen.getByRole("dialog")).toHaveTextContent(/in-tray/i);
+  });
+
+  it("asks the office to study them", async () => {
+    const studied: string[] = [];
+    openWith(taught({ card: null }));
+    store.getState().connect({
+      studyVoice: (id: string) => {
+        studied.push(id);
+        return Promise.resolve({ ok: true, value: taught() });
+      },
+    } as never);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Study the samples" }));
+
+    expect(studied).toEqual([ada.id]);
+  });
+
+  it("says why a study could not happen rather than looking like nothing happened", async () => {
+    openWith(taught({ card: null }));
+    store.getState().connect({
+      studyVoice: () =>
+        Promise.resolve({ ok: false, kind: "transport", message: "no model to study with" }),
+    } as never);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Study the samples" }));
+
+    expect(screen.getByRole("dialog")).toHaveTextContent(/no model to study with/);
+  });
+
+  it("shows the card, and how many samples it came from", () => {
+    openWith(taught());
+
+    expect(screen.getByLabelText("How they write")).toHaveValue(
+      "Opens with the first name. Never uses bullets.",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(/3 samples/i);
+  });
+
+  it("switches the voice off without forgetting it", async () => {
+    openWith(taught());
+    const user = userEvent.setup();
+
+    await user.click(screen.getByLabelText("Write in their voice"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const saved = store.getState().employees.find((one) => one.id === ada.id);
+    expect(saved?.understudy?.enabled).toBe(false);
+    expect(saved?.understudy?.card).toBe("Opens with the first name. Never uses bullets.");
+  });
+
+  it("stops standing in for anybody at all", async () => {
+    openWith(taught());
+    const user = userEvent.setup();
+
+    await user.clear(screen.getByLabelText("Stands in for"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(store.getState().employees.find((one) => one.id === ada.id)?.understudy).toBeNull();
+  });
+
+  it("says what the office keeps and what it does not", () => {
+    // Consent, a label and a card the office wrote; not a copy of somebody's
+    // writing. Saying so on the panel is the cheap half of being trustworthy.
+    openWith(taught());
+
+    expect(screen.getByRole("dialog")).toHaveTextContent(/never sent again|only the card/i);
+  });
+});
