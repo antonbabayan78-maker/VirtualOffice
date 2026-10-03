@@ -43,13 +43,12 @@ export function readWorkerConfig(env: Env): Result<WorkerConfig> {
   const officeId = required("VO_OFFICE_ID");
 
   const dryRun = (env["VO_DRY_RUN"] ?? "") !== "";
+  // No key is not a reason to refuse to start. An office whose people are all
+  // on services of its own — a model in its own network, say — needs nothing
+  // from Anthropic, and a worker that stopped for the want of a key it would
+  // never use could not serve that office at all. A turn that does need it
+  // fails with the reason, which is where the reason belongs.
   const apiKey = env["ANTHROPIC_API_KEY"];
-  if (!dryRun && (apiKey === undefined || apiKey.length === 0)) {
-    errors.push({
-      path: "ANTHROPIC_API_KEY",
-      message: "no model to work with: set ANTHROPIC_API_KEY, or set VO_DRY_RUN to rehearse",
-    });
-  }
 
   if (errors.length > 0) return err(errors);
   return ok({

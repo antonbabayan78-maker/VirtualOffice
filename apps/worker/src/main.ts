@@ -4,7 +4,7 @@
  * environment, the clock, the signal that stops it, stdout — and hands the rest
  * to code that is tested without any of them.
  */
-import { createAnthropicProvider, rehearsalProvider } from "@vo/llm";
+import { createAnthropicProvider, rehearsalProvider, unavailableProvider } from "@vo/llm";
 import { isErr } from "@vo/core";
 import { readWorkerConfig } from "./config.js";
 import { createOfficeWorker } from "./office-worker.js";
@@ -22,8 +22,22 @@ async function main(): Promise<number> {
   }
 
   const { baseUrl, officeId, dryRun, apiKey, tickMs, batchSize } = config.value;
-  const provider =
-    dryRun || apiKey === undefined ? rehearsalProvider() : createAnthropicProvider({ apiKey });
+  /**
+   * What a turn falls back to when the employee names no service of the
+   * office's own. A rehearsal when asked for one; otherwise the real provider,
+   * or — with no key — something that says what is missing when it is actually
+   * needed. Not a rehearsal in that case: an office that looked like it was
+   * working while calling nothing is worse than one that stops and says why.
+   */
+  const provider = dryRun
+    ? rehearsalProvider()
+    : apiKey === undefined
+      ? unavailableProvider(
+          "anthropic",
+          "no model to work with: set ANTHROPIC_API_KEY, give this office a service of its own," +
+            " or set VO_DRY_RUN to rehearse",
+        )
+      : createAnthropicProvider({ apiKey });
 
   const worker = createOfficeWorker({
     config: config.value,

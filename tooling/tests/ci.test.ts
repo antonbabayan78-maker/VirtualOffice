@@ -137,3 +137,28 @@ describe("nightly mutation testing", () => {
     expect(config.reporters).toContain("json");
   });
 });
+
+describe("the hook that runs before every commit", () => {
+  const hook = readFileSync(join(ROOT, ".husky", "pre-commit"), "utf8");
+  const steps = hook
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+  it("runs lint-staged, the TDD guard, typecheck and the tests, in that order", () => {
+    expect(steps.filter((line) => line.startsWith("pnpm"))).toEqual([
+      "pnpm lint-staged",
+      "pnpm tdd-guard",
+      "pnpm typecheck",
+      "pnpm test",
+    ]);
+  });
+
+  it("stops at the first one that fails", () => {
+    // Without this a shell script's status is its last command's, so a failing
+    // TDD guard or typecheck let the commit through as long as the tests
+    // passed — which made the rule the guard exists to enforce advisory, and
+    // nobody would find out until CI.
+    expect(steps[0]).toBe("set -e");
+  });
+});

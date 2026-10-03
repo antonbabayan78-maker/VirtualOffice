@@ -4,7 +4,13 @@ import {
   type CompletionRequest,
   type CompletionResponse,
 } from "../provider/types.js";
-import { estimateTokens, FakeLlmProvider, reply, toolCall } from "./fake-provider.js";
+import {
+  estimateTokens,
+  FakeLlmProvider,
+  reply,
+  toolCall,
+  unavailableProvider,
+} from "./fake-provider.js";
 
 const request = (text: string, overrides: Partial<CompletionRequest> = {}): CompletionRequest => ({
   model: "fake-1",
@@ -138,5 +144,32 @@ describe("FakeLlmProvider", () => {
     const events = [];
     for await (const e of provider.stream(request("x"))) events.push(e);
     expect(events.map((e) => e.type)).toEqual(["tool_use", "done"]);
+  });
+});
+
+describe("a provider this process could not build", () => {
+  it("says what is missing at the moment something asks it", async () => {
+    // Refusing at the start would stop an office whose people are all on
+    // services of its own — a model in its own network needs no key from
+    // anybody. This is the honest middle: the office runs, and the one turn
+    // that actually needs the missing key fails with the reason.
+    const provider = unavailableProvider("anthropic", "set ANTHROPIC_API_KEY");
+
+    expect(provider.id).toBe("anthropic");
+    await expect(provider.complete({ model: "x", messages: [] })).rejects.toThrow(
+      /ANTHROPIC_API_KEY/,
+    );
+  });
+
+  it("refuses a stream the same way, rather than ending it quietly", async () => {
+    const provider = unavailableProvider("anthropic", "set ANTHROPIC_API_KEY");
+
+    const drain = async (): Promise<void> => {
+      for await (const _event of provider.stream({ model: "x", messages: [] })) {
+        // drained
+      }
+    };
+
+    await expect(drain()).rejects.toThrow(/ANTHROPIC_API_KEY/);
   });
 });

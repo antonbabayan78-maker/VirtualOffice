@@ -26,4 +26,22 @@ describe("an office that calls its own services", () => {
       /ANTHROPIC_API_KEY/,
     );
   });
+
+  it("still answers to the name the employees use, so the fallback is recognisable", () => {
+    // The stand-in is `@vo/llm`'s, shared with the worker: two copies of "what
+    // to do when there is no key" is how the two of them come to disagree.
+    expect(createRunProvider({ dryRun: false, apiKey: undefined }).id).toBe("anthropic");
+  });
+
+  it("refuses a stream too, rather than ending it quietly", async () => {
+    const provider = createRunProvider({ dryRun: false, apiKey: undefined });
+
+    const drain = async (): Promise<void> => {
+      for await (const _event of provider.stream({ model: "claude-sonnet-5", messages: [] })) {
+        // drained
+      }
+    };
+
+    await expect(drain()).rejects.toThrow(/ANTHROPIC_API_KEY/);
+  });
 });
