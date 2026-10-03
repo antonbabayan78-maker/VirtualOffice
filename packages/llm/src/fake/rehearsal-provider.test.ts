@@ -75,3 +75,78 @@ describe("rehearsing a shootout", () => {
     if (block?.type === "tool_use") expect(block.input["winner"]).toBe("A");
   });
 });
+
+describe("rehearsing an office that was granted tools", () => {
+  /** A prompt shaped the way a lazy toolset writes one: an index, and find_tool. */
+  const withCatalogue = (
+    lines: readonly string[],
+    tools: string[] = ["find_tool", "submit_work"],
+  ): CompletionRequest => ({
+    ...ask(tools),
+    system: [{ text: `Tools you can ask for:\n${lines.join("\n")}`, cache: false }],
+  });
+
+  it("asks for a tool it was told about, rather than submitting untried work", async () => {
+    // A rehearsal that never calls a tool cannot rehearse an office with tools:
+    // the grants, the broker, the server behind it and the gate in front of it
+    // are all untested until something asks.
+    const response = await rehearsalProvider().complete(
+      withCatalogue(["post__send_email (conn-post): Send an email."]),
+    );
+
+    const block = response.content[0];
+    expect(block).toMatchObject({ type: "tool_use", name: "find_tool" });
+    if (block?.type === "tool_use") {
+      expect(block.input).toMatchObject({ query: "post__send_email" });
+    }
+  });
+
+  it("calls the tool once it has been handed it", async () => {
+    const response = await rehearsalProvider().complete(
+      withCatalogue(
+        ["post__send_email (conn-post): Send an email."],
+        ["find_tool", "post__send_email", "submit_work"],
+      ),
+    );
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "post__send_email" });
+  });
+
+  it("calls it once and then submits, so a rehearsal ends", async () => {
+    const provider = rehearsalProvider();
+    const request = withCatalogue(
+      ["post__send_email (conn-post): Send an email."],
+      ["find_tool", "post__send_email", "submit_work"],
+    );
+
+    await provider.complete(request);
+    const second = await provider.complete(request);
+
+    expect(second.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+  });
+
+  it("leaves the office's own filing tool alone, which is not what it is proving", async () => {
+    const response = await rehearsalProvider().complete(
+      withCatalogue([], ["file_document", "submit_work"]),
+    );
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+  });
+
+  it("submits as before in an office that granted nothing", async () => {
+    const response = await rehearsalProvider().complete(ask(["submit_work"]));
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "submit_work" });
+  });
+
+  it("does not reach for a tool while reviewing somebody else's work", async () => {
+    const response = await rehearsalProvider().complete(
+      withCatalogue(
+        ["post__send_email (conn-post): Send an email."],
+        ["find_tool", "review_verdict"],
+      ),
+    );
+
+    expect(response.content[0]).toMatchObject({ type: "tool_use", name: "review_verdict" });
+  });
+});
