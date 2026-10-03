@@ -10,6 +10,8 @@ export * from "./fake/fake-provider.js";
 export * from "./fake/rehearsal-provider.js";
 export * from "./fixtures/recorder.js";
 export * from "./anthropic/anthropic-provider.js";
+export * from "./openai/openai-compatible.js";
+export * from "./services/service-providers.js";
 export * from "./registry/model-registry.js";
 export * from "./registry/anthropic-models.js";
 export * from "./routing/circuit-breaker.js";
