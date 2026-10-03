@@ -17,4 +17,15 @@ describe("the office the canvas opens with", () => {
       expect(people.length, department.name).toBeGreaterThan(0);
     }
   });
+
+  it("has somebody who has been told how to work, so the field is not a mystery", () => {
+    // The first office anybody opens is where a feature is discovered. A panel
+    // of empty fields teaches nobody what belongs in them.
+    const office = loadSampleOffice();
+    if (isErr(office)) throw new Error("the sample office does not parse");
+
+    const taught = office.value.employees.filter((one) => one.instructions !== null);
+    expect(taught.length).toBeGreaterThan(0);
+    expect(office.value.employees.some((one) => one.examples.length > 0)).toBe(true);
+  });
 });

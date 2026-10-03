@@ -35,15 +35,25 @@ employees:
       color: "#3b82f6",
       llm: { provider: anthropic, model: claude-opus-5 },
     }
-  - {
-      id: emp-ada,
-      department: dept-eng,
-      name: Ada,
-      role: Backend engineer,
-      color: "#3b82f6",
-      supervisor: emp-grace,
-      llm: { provider: anthropic, model: claude-sonnet-5 },
-    }
+  - id: emp-ada
+    department: dept-eng
+    name: Ada
+    role: Backend engineer
+    color: "#3b82f6"
+    supervisor: emp-grace
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+    # How Ada works, every time: standing, personal, and nothing a skill would
+    # cover. The first office anybody opens is where this field is discovered.
+    instructions: |
+      Read the failing test before the code it is about.
+      Change one thing at a time, and say in the summary what you changed and why.
+      If something looks wrong beyond the task, say so rather than fixing it quietly.
+    examples:
+      - when: handing work back that is not finished
+        good: |
+          The parser handles the three cases in the brief. Nested quotes are not
+          covered — the brief did not ask for them, and I have left a note rather
+          than guessing at the rule.
   - {
       id: emp-linus,
       department: dept-eng,

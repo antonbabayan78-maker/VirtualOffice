@@ -11,7 +11,14 @@
  * system then rejects on save.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import type { Budget, Employee, TaskPriority, ToolGrant, ValidationError } from "@vo/core";
+import type {
+  Budget,
+  Employee,
+  TaskPriority,
+  ToolGrant,
+  ValidationError,
+  WorkExample,
+} from "@vo/core";
 import { availableModels, supervisorChoices } from "../office/employee-edit.js";
 import type { OfficeStore } from "../office/office-store.js";
 import { Button } from "../ui/button.js";
@@ -21,6 +28,7 @@ import { PriorityField } from "./PriorityField.js";
 import { BudgetField } from "./BudgetField.js";
 import { Produced } from "./Produced.js";
 import { RunSwitch } from "./RunSwitch.js";
+import { Teaching } from "./Teaching.js";
 import { Tray } from "./Tray.js";
 
 interface ModelRef {
@@ -45,6 +53,8 @@ interface Draft {
   readonly model: ModelRef;
   readonly fallbacks: readonly ModelRef[];
   readonly skills: string;
+  readonly instructions: string;
+  readonly examples: readonly WorkExample[];
   readonly supervisorId: string;
   readonly workspace: string;
   readonly priority: TaskPriority;
@@ -78,6 +88,8 @@ function draftOf(employee: Employee): Draft {
     model: { provider: employee.llm.provider, model: employee.llm.model },
     fallbacks: employee.llm.fallbacks,
     skills: employee.skillIds.join(", "),
+    instructions: employee.instructions ?? "",
+    examples: employee.examples,
     supervisorId: employee.supervisorId ?? "",
     workspace: employee.workspaceRef ?? "",
     priority: employee.priority,
@@ -155,6 +167,11 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           .split(",")
           .map((skill) => skill.trim())
           .filter((skill) => skill.length > 0),
+        // Sent as typed: core reads a blank paragraph as nothing written, so
+        // clearing the field is how somebody is untaught. Deciding that again
+        // here would be the same rule in two places.
+        instructions: draft.instructions,
+        examples: draft.examples,
         supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
         workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
         toolGrants: draft.toolGrants,
@@ -304,6 +321,14 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
           }}
         />
       </Field>
+
+      <Teaching
+        instructions={draft.instructions}
+        examples={draft.examples}
+        onChange={(changes) => {
+          edit(changes);
+        }}
+      />
 
       <PriorityField
         value={draft.priority}

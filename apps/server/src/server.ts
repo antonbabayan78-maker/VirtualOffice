@@ -820,6 +820,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(body["schedule"] === undefined ? {} : { schedule: body["schedule"] }),
           ...(body["priority"] === undefined ? {} : { priority: body["priority"] as string }),
           ...(grants === undefined ? {} : { toolGrants: grants }),
+          // What the office tells this person about how to work. Handed over
+          // untyped, as the llm block is: core is where it is judged.
+          ...(body["instructions"] === undefined ? {} : { instructions: body["instructions"] }),
+          ...(body["examples"] === undefined ? {} : { examples: body["examples"] }),
         },
         {
           department: { id: department.id, officeId: department.officeId },
