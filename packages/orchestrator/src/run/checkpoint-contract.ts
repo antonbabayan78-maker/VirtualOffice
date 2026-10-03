@@ -79,7 +79,13 @@ export function runCheckpointStoreContract(name: string, factory: RunCheckpointS
         runId: "run-2",
         pendingApproval: {
           items: [
-            { key: "toolu_1", name: "post_message", gates: ["external_send"], detail: "detail" },
+            {
+              key: "toolu_1",
+              name: "post_message",
+              gates: ["external_send"],
+              detail: "detail",
+              input: { to: "customer@acme.test" },
+            },
           ],
           gates: ["external_send"],
           summary: "approval needed",

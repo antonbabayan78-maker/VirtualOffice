@@ -42,6 +42,7 @@ import {
   type HeldCall,
   type Job,
   acceptanceCriteriaFor,
+  gatesAwaiting,
   officeSnapshot,
   performCreateWork,
   type PeerCandidate,
@@ -444,10 +445,9 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   const waitingOn = (task: Task): readonly GatedAction[] => {
     if (task.status !== "in_review") return [];
     const policy = departments.get(task.departmentId)?.reviewPolicy;
-    if (policy?.kind !== "gate") return [];
-    // Recomputed rather than read back off an effect: an effect says what was
-    // asked once, not what is still outstanding after a rejection and a redo.
-    return policy.gatedActions.filter((gate) => task.gatedActions.includes(gate));
+    // The office's own rule, not a second copy of it: what a department holds
+    // has to mean the same thing here, in the engine, and in the inbox.
+    return policy === undefined ? [] : gatesAwaiting(task, policy);
   };
 
   /**

@@ -60,6 +60,7 @@ describe("pendingApprovalFor", () => {
         name: "drop_table",
         gates: ["deploy", "delete"],
         detail: 'tool "drop_table" (deploy, delete)',
+        input: {},
       },
     ]);
     expect(pending?.gates).toEqual(["deploy", "delete"]);
@@ -91,6 +92,42 @@ describe("pendingApprovalFor", () => {
       approve("toolu_ship"),
     ]);
     expect(pending?.items.map((i) => i.name)).toEqual(["drop_table"]);
+  });
+});
+
+describe("what a held call is actually about", () => {
+  it("keeps the arguments, which are the thing a person is deciding", () => {
+    // Without them an inbox can only offer "may this task send email", which is
+    // approving the tool in advance — the thing this gate exists not to be.
+    const sending: ToolUse = {
+      type: "tool_use",
+      id: "toolu_1",
+      name: "post_message",
+      input: { to: "customer@acme.test", body: "your order shipped" },
+    };
+
+    const pending = pendingApprovalFor(
+      [sending],
+      gate({ gatedActions: ["external_send"] }),
+      { spentUsd: 0, spendApproved: false },
+      [],
+    );
+
+    expect(pending?.items[0]?.input).toEqual({
+      to: "customer@acme.test",
+      body: "your order shipped",
+    });
+  });
+
+  it("has no arguments for the run's own spending, which is not a call", () => {
+    const pending = pendingApprovalFor(
+      [],
+      gate({ gatedActions: ["spend"], spendThresholdUsd: 1 }),
+      { spentUsd: 2, spendApproved: false },
+      [],
+    );
+
+    expect(pending?.items[0]?.input).toEqual({});
   });
 });
 

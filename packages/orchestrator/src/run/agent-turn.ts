@@ -353,6 +353,7 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
         name: item.name,
         gates: item.gates,
         detail: item.detail,
+        input: item.input,
       }));
       return [
         ...(task.status === "assigned" ? [{ type: "start" as const, actorId: actor.id }] : []),

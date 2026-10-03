@@ -20,6 +20,7 @@
  * separate concern from reviewing finished work, and belongs to the run loop.
  */
 import type { GatedAction, Result, Task } from "@vo/core";
+import { gatesAwaiting } from "./awaiting.js";
 import { outstandingFor, rejectPolicyEvent } from "./review-common.js";
 import {
   applyTransition,
@@ -40,16 +41,10 @@ function gatedCategories(context: WorkflowContext): Result<readonly GatedAction[
   return { ok: true, value: context.policy.gatedActions };
 }
 
-/** What this task does that the department gates, in the order the gate declares. */
-function needsApproval(task: Task, gates: readonly GatedAction[]): readonly GatedAction[] {
-  return gates.filter((gate) => task.gatedActions.includes(gate));
-}
-
 function submitThroughGate(
   task: Task,
   event: Extract<PolicyEvent, { type: "submit" }>,
   context: WorkflowContext,
-  gates: readonly GatedAction[],
 ): Result<WorkflowOutcome> {
   // Checked before anybody is asked: there is no point putting work in front of
   // a person when the office can already see it is not finished.
@@ -65,7 +60,9 @@ function submitThroughGate(
     artifacts: [...task.artifacts, ...(event.artifacts ?? [])],
   };
 
-  const pending = needsApproval(task, gates);
+  // The same rule the approvals inbox reads this work by, so a department
+  // cannot hold one thing and show another.
+  const pending = gatesAwaiting(task, context.policy);
   if (pending.length === 0) return applyTransition(staged, "done", event, context);
 
   const listed = pending.join(", ");
@@ -141,7 +138,7 @@ export const GATE_POLICY_HANDLER: PolicyHandler = {
 
     switch (event.type) {
       case "submit":
-        return submitThroughGate(task, event, context, gates.value);
+        return submitThroughGate(task, event, context);
       case "gate_decided":
         return applyDecision(task, event, context);
       case "approve":

@@ -622,6 +622,7 @@ describe("work waiting for a person, which is not a review", () => {
       name: "acme__send_email",
       gates: ["external_send"],
       detail: 'tool "acme__send_email" (external_send)',
+      input: { to: "customer@acme.test" },
     },
   ];
   const held = {
