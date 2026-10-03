@@ -4037,3 +4037,139 @@ describe("what a piece of work will involve", () => {
     expect(made.statusCode).toBe(400);
   });
 });
+
+describe("changing a piece of work, and handing it on", () => {
+  let officeId: string;
+  let departmentId: string;
+  let ada: string;
+  let bob: string;
+  let taskId: string;
+
+  const aTask = async (body: Record<string, unknown> = {}): Promise<string> => {
+    const made = await post(`/offices/${officeId}/tasks`, {
+      departmentId,
+      title: "Write the parser",
+      assigneeId: ada,
+      ...body,
+    });
+    return made.json<{ id: string }>().id;
+  };
+
+  const taskNow = async (id = taskId) =>
+    (await get(`/tasks/${id}`)).json<Record<string, unknown>>();
+
+  beforeEach(async () => {
+    officeId = await anOffice();
+    departmentId = await aDepartment(officeId);
+    ada = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Ada",
+        role: "Engineer",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    bob = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Bob",
+        role: "Engineer",
+        color: "#3366ff",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+    taskId = await aTask();
+  });
+
+  it("changes what the work is for", async () => {
+    const changed = await patch(`/tasks/${taskId}`, {
+      title: "Write the YAML parser",
+      acceptanceCriteria: ["handles malformed input"],
+      priority: "high",
+    });
+
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()).toMatchObject({
+      title: "Write the YAML parser",
+      acceptanceCriteria: ["handles malformed input"],
+      priority: "high",
+    });
+  });
+
+  it("will not move the work, however the body asks", async () => {
+    await patch(`/tasks/${taskId}`, { assigneeId: bob, status: "done" });
+
+    expect(await taskNow()).toMatchObject({ assigneeId: ada, status: "assigned" });
+  });
+
+  it("refuses a title that is not one", async () => {
+    expect((await patch(`/tasks/${taskId}`, { title: "  " })).statusCode).toBe(400);
+  });
+
+  it("says somebody else got there first", async () => {
+    const stale = await server.inject({
+      method: "PATCH",
+      url: `/tasks/${taskId}`,
+      headers: { ...auth, "x-vo-since-offset": "0" },
+      payload: { title: "Mine" },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ current: { title: "Write the parser" } });
+  });
+
+  it("has never heard of a task that is not there", async () => {
+    expect((await patch("/tasks/nope", { title: "Hello" })).statusCode).toBe(404);
+  });
+
+  it("tells the canvas, so a board does not have to be reloaded", async () => {
+    await patch(`/tasks/${taskId}`, { title: "Write the YAML parser" });
+
+    expect(events.since(officeId, 0).map((event) => event.data["kind"])).toContain("task.updated");
+  });
+
+  it("hands work to somebody else", async () => {
+    const moved = await post(`/tasks/${taskId}/events`, {
+      type: "reassign",
+      toEmployeeId: bob,
+      reason: "Ada is away",
+    });
+
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json()).toMatchObject({ assigneeId: bob, status: "assigned" });
+    const history = (await taskNow())["history"] as { to: string }[];
+    expect(history.slice(-2).map((event) => event.to)).toEqual(["transferred", "assigned"]);
+  });
+
+  it("refuses somebody this office does not have", async () => {
+    const refused = await post(`/tasks/${taskId}/events`, {
+      type: "reassign",
+      toEmployeeId: "emp-nobody",
+    });
+
+    expect(refused.statusCode).toBe(400);
+    expect(await taskNow()).toMatchObject({ assigneeId: ada });
+  });
+
+  it("refuses somebody who works for another office", async () => {
+    const elsewhere = await anOffice();
+    const theirRoom = await aDepartment(elsewhere, "Shipping");
+    const stranger = (
+      await post(`/offices/${elsewhere}/employees`, {
+        name: "Iris",
+        role: "Engineer",
+        color: "#ff8800",
+        department: theirRoom,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+
+    const refused = await post(`/tasks/${taskId}/events`, {
+      type: "reassign",
+      toEmployeeId: stranger,
+    });
+
+    expect(refused.statusCode).toBe(400);
+  });
+});
