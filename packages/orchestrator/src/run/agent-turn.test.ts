@@ -488,8 +488,8 @@ describe("an employee producing something", () => {
 });
 
 describe("an employee reading what it was handed", () => {
-  const script = () =>
-    new FakeLlmProvider({ script: [toolCall("submit_work", { summary: "done" })] });
+  const script = (id = "built-in") =>
+    new FakeLlmProvider({ id, script: [toolCall("submit_work", { summary: "done" })] });
 
   it("is given the documents in its in-tray", async () => {
     const provider = script();
@@ -932,5 +932,82 @@ describe("a tool that acts, held before it runs", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual(["submit"]);
+  });
+});
+
+describe("whose model the turn actually calls", () => {
+  /** An employee who names the office's own local service. */
+  const sam = unwrap(
+    createEmployee(
+      {
+        name: "Sam",
+        role: "Engineer",
+        color: "#00aa66",
+        llm: { provider: "workshop", model: "qwen3-coder" },
+      },
+      { department: { id: eng.id, officeId }, supervisor: null },
+      { id: () => "emp-sam" as EmployeeId, now: () => at },
+    ),
+  );
+  const script = (id = "built-in") =>
+    new FakeLlmProvider({ id, script: [toolCall("submit_work", { summary: "done" })] });
+
+  it("asks for the service the employee names, and the model with it", async () => {
+    const asked: { provider: string; model: string }[] = [];
+    const named = script("workshop");
+
+    await llmAgentTurn({
+      provider: script(),
+      providerFor: ({ provider, model }) => {
+        asked.push({ provider, model });
+        return named;
+      },
+    })({ task: assigned, actor: sam, kind: AGENT_RUN_JOB });
+
+    expect(asked).toEqual([{ provider: "workshop", model: "qwen3-coder" }]);
+    expect(named.calls).toHaveLength(1);
+  });
+
+  it("calls the one it was handed when nobody can say which service that is", async () => {
+    // An office with no services runs exactly as it did before there were any.
+    const built = script();
+
+    await llmAgentTurn({ provider: built })({
+      task: assigned,
+      actor: sam,
+      kind: AGENT_RUN_JOB,
+    });
+
+    expect(built.calls).toHaveLength(1);
+  });
+
+  it("falls back to the one it was handed when the office has no such service", async () => {
+    const built = script();
+
+    await llmAgentTurn({ provider: built, providerFor: () => null })({
+      task: assigned,
+      actor: sam,
+      kind: AGENT_RUN_JOB,
+    });
+
+    expect(built.calls).toHaveLength(1);
+  });
+
+  it("meters the service it chose, not the one it was built with", async () => {
+    // Otherwise a call on a service would be priced as a call on another, and
+    // the bench record would quietly show the wrong figure.
+    const wrapped: string[] = [];
+    const named = script("workshop");
+
+    await llmAgentTurn({
+      provider: script(),
+      providerFor: () => named,
+      wrapProvider: (provider) => {
+        wrapped.push(provider.id);
+        return provider;
+      },
+    })({ task: assigned, actor: sam, kind: AGENT_RUN_JOB });
+
+    expect(wrapped).toEqual(["workshop"]);
   });
 });

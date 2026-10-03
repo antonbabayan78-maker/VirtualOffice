@@ -26,6 +26,7 @@ import type { ContestId, DepartmentId, Employee, EmployeeId, OfficeId, TaskId } 
 import type { LlmProvider, ToolDefinition } from "@vo/llm";
 import { runAgent } from "./agent-run-loop.js";
 import type { HandedOver } from "./document-sink.js";
+import type { ProviderLookup } from "./provider-lookup.js";
 
 /** What a judge calls to decide. */
 export const JUDGE_TOOL: ToolDefinition = {
@@ -85,6 +86,8 @@ export interface JudgeAttribution {
 
 export interface JudgeTurnOptions {
   readonly provider: LlmProvider;
+  /** Finds the service the judge names, as the agent turn's does. */
+  readonly providerFor?: ProviderLookup;
   /** Metering, injected as the agent turn's is, so this package needs no telemetry. */
   readonly wrapProvider?: (provider: LlmProvider, attribution: JudgeAttribution) => LlmProvider;
   readonly maxSteps?: number;
@@ -119,7 +122,8 @@ export function llmJudgeTurn(options: JudgeTurnOptions): JudgeTurn {
       employeeId: request.judge.id,
       contestId: request.contestId,
     };
-    const provider = options.wrapProvider?.(options.provider, attribution) ?? options.provider;
+    const named = options.providerFor?.(request.judge.llm) ?? options.provider;
+    const provider = options.wrapProvider?.(named, attribution) ?? named;
 
     const labelled = request.entries.map((entry, index) => ({ label: labelOf(index), entry }));
     const dynamic = [

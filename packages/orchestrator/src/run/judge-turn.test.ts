@@ -194,4 +194,25 @@ describe("what the judging call is charged to", () => {
     const judge = llmJudgeTurn({ provider: decides({ winner: "A", reason: "plainer" }) });
     expect((await judge(request()))?.winnerTaskId).toBe("task-a");
   });
+
+  it("calls the service the judge names, like any other turn", async () => {
+    // A judge is an employee with an `llm` of its own; a shootout judged on a
+    // model nobody chose is a shootout nobody can account for.
+    const named = new FakeLlmProvider({
+      id: "workshop",
+      script: [toolCall(JUDGE_TOOL.name, { winner: "A", reason: "plainer" })],
+    });
+    const asked: string[] = [];
+
+    const judge = llmJudgeTurn({
+      provider: decides({ winner: "B", reason: "never asked" }),
+      providerFor: (ref) => {
+        asked.push(ref.provider);
+        return named;
+      },
+    });
+
+    expect((await judge(request()))?.reason).toBe("plainer");
+    expect(asked).toEqual(["anthropic"]);
+  });
 });
