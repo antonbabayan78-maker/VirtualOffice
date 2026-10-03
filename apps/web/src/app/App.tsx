@@ -16,6 +16,7 @@ import { Placeholder, ROUTES, type RouteDefinition } from "./routes.js";
 import { CanvasScreen } from "../canvas/CanvasScreen.js";
 import { officeStore } from "../office/store.js";
 import { useOffice, type OfficePlan } from "../office/useOffice.js";
+import { ApprovalsScreen } from "../approvals/ApprovalsScreen.js";
 import { UsageScreen } from "../usage/UsageScreen.js";
 import { ChooseOffice } from "./ChooseOffice.js";
 import { SignIn } from "./SignIn.js";
@@ -39,7 +40,28 @@ function ThemeToggle(): ReactNode {
 function screenFor(route: RouteDefinition): ReactNode {
   if (route.path === "/") return <CanvasScreen />;
   if (route.path === "/usage") return <UsageScreen store={officeStore} />;
+  if (route.path === "/approvals") return <ApprovalsScreen store={officeStore} />;
   return <Placeholder route={route} />;
+}
+
+/**
+ * How much is waiting on a person, on the link to where it is answered.
+ *
+ * The only thing in the shell that counts anything, and it earns it: work that
+ * stops for a person stops silently otherwise — the canvas shows somebody
+ * waiting, which looks like somebody working from across the room.
+ */
+function WaitingCount({ path }: { readonly path: string }): ReactNode {
+  const waiting = officeStore((state) => state.waiting.length);
+  if (path !== "/approvals" || waiting === 0) return null;
+  return (
+    <span
+      aria-label={`${String(waiting)} waiting`}
+      className="ml-1.5 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-canvas tabular-nums"
+    >
+      {waiting}
+    </span>
+  );
 }
 
 export function App({
@@ -114,6 +136,7 @@ function Shell({
               }
             >
               {route.label}
+              <WaitingCount path={route.path} />
             </NavLink>
           ))}
         </nav>

@@ -3857,6 +3857,27 @@ describe("what this office is waiting on a person for", () => {
     expect(answer.statusCode).toBe(401);
   });
 
+  it("refuses a decision about a call this run is not holding", async () => {
+    // A key typed wrong would otherwise start the work again, which parks on
+    // the same call a moment later — a task that flaps and a person who thinks
+    // they answered something.
+    const taskId = await working("Tell the customer", postRoom);
+    await parked(taskId);
+
+    const answer = await send("POST", `/tasks/${taskId}/events`, {
+      type: "call_decided",
+      key: "toolu_nonsense",
+      decision: "approved",
+      decidedBy: "owner-1",
+    });
+
+    expect(answer.statusCode).toBe(400);
+    expect((await send("GET", `/tasks/${taskId}`)).json<{ status: string }>().status).toBe(
+      "blocked",
+    );
+    expect(items(await send("GET", `/offices/${officeId}/approvals`))).toHaveLength(1);
+  });
+
   it("stops listing a call once it has been decided", async () => {
     const taskId = await working("Tell the customer", postRoom);
     await parked(taskId);
