@@ -46,6 +46,7 @@ import { runAgent, type ToolUse } from "./agent-run-loop.js";
 import type { ApprovalDecision, RunApprovalGate } from "./approval-gate.js";
 import type { RunCheckpointStore } from "./checkpoint.js";
 import type { ProviderLookup } from "./provider-lookup.js";
+import { standingBlocks } from "./standing.js";
 import { FIND_TOOL_NAME, LazyToolset } from "../tools/lazy-toolset.js";
 import { ToolCatalog, type CatalogTool } from "../tools/tool-catalog.js";
 import type { BrokerOutcome, ToolBroker } from "../tools/tool-broker.js";
@@ -324,7 +325,7 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
       provider,
       model: actor.llm.model,
       system: {
-        stable: [`You are ${actor.name}, ${actor.role}.`],
+        stable: [`You are ${actor.name}, ${actor.role}.`, ...standingBlocks(actor)],
         dynamic,
       },
       messages: [{ role: "user", content: [{ type: "text", text: instruction }] }],

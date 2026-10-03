@@ -9,7 +9,7 @@ import {
   type OfficeId,
   type TaskId,
 } from "@vo/core";
-import { createEmployee } from "@vo/core";
+import { createEmployee, updateEmployee } from "@vo/core";
 import { JUDGE_TOOL, llmJudgeTurn, type JudgeRequest } from "./judge-turn.js";
 
 const officeId = "office-acme" as OfficeId;
@@ -214,5 +214,28 @@ describe("what the judging call is charged to", () => {
 
     expect((await judge(request()))?.reason).toBe("plainer");
     expect(asked).toEqual(["anthropic"]);
+  });
+});
+
+describe("what the office told the judge", () => {
+  it("is in the prompt, since judging is their work too", async () => {
+    const taught = unwrap(
+      updateEmployee(
+        grace,
+        { instructions: "Prefer the plainer of two answers." },
+        {
+          supervisor: null,
+        },
+      ),
+    );
+    const provider = new FakeLlmProvider({
+      script: [toolCall(JUDGE_TOOL.name, { winner: "A", reason: "plainer" })],
+    });
+
+    await llmJudgeTurn({ provider })(request({ judge: taught }));
+
+    expect(JSON.stringify(provider.calls[0]?.system)).toContain(
+      "Prefer the plainer of two answers.",
+    );
   });
 });

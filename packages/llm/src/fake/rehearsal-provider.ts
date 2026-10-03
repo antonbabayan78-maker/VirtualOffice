@@ -32,6 +32,16 @@ import { systemText, type CompletionRequest, type LlmProvider } from "../provide
  */
 const CRITERIA_PREFIX = "This work is done when:";
 
+/**
+ * A line of the catalogue index: `connector__tool (connectorId): description`.
+ *
+ * The id is matched as an id — no spaces — rather than as anything in brackets,
+ * because a person's standing instructions are prose now and a sentence like
+ * "post__send_email (the mail server our team uses): ask first" would otherwise
+ * send a rehearsal looking for a tool nobody granted.
+ */
+const INDEX_LINE = /^([a-z0-9][a-z0-9_-]*__[a-z0-9_-]+) \([A-Za-z0-9_-]+\): /;
+
 /** The office's own tools, which a rehearsal is not trying to prove. */
 const OFFICE_TOOLS: readonly string[] = ["find_tool", "file_document", "submit_work"];
 
@@ -54,7 +64,7 @@ function alreadyCalled(request: CompletionRequest): boolean {
 
 function firstCatalogued(request: CompletionRequest): string | null {
   for (const line of systemText(request.system).split("\n")) {
-    const match = /^([a-z0-9][a-z0-9_-]*__[a-z0-9_-]+) \(/i.exec(line.trim());
+    const match = INDEX_LINE.exec(line.trim());
     if (match?.[1] !== undefined) return match[1];
   }
   return null;
@@ -62,7 +72,10 @@ function firstCatalogued(request: CompletionRequest): string | null {
 
 function criteriaIn(request: CompletionRequest): readonly string[] {
   const said = systemText(request.system);
-  const at = said.indexOf(CRITERIA_PREFIX);
+  // The last one, not the first: the office writes the criteria in the dynamic
+  // half, which is rendered after the stable half, so a person whose standing
+  // instructions happen to contain the phrase cannot shadow the real list.
+  const at = said.lastIndexOf(CRITERIA_PREFIX);
   if (at === -1) return [];
   const listed = said.slice(at + CRITERIA_PREFIX.length).split("\n")[0] ?? "";
   return listed

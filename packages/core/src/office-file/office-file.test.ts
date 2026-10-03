@@ -390,6 +390,15 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
         role: label,
         deptIndex: fc.nat(),
         skills: fc.uniqueArray(word, { maxLength: 3 }),
+        // A paragraph, as somebody would type one: newlines and all.
+        instructions: fc.option(fc.lorem({ maxCount: 12, mode: "sentences" }), { nil: undefined }),
+        examples: fc.array(
+          fc.record({
+            when: fc.option(fc.lorem({ maxCount: 4 }), { nil: undefined }),
+            good: fc.lorem({ maxCount: 20, mode: "sentences" }),
+          }),
+          { maxLength: 3 },
+        ),
         temperature: fc.option(fc.double({ min: 0, max: 2, noNaN: true }), { nil: undefined }),
         fallbacks: fc.array(fc.record({ provider: word, model: word }), { maxLength: 2 }),
         status: fc.constantFrom("active", "paused", "terminated" as const),
@@ -463,6 +472,10 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
               fallbacks: e.fallbacks,
             },
             skillIds: e.skills,
+            ...(e.instructions === undefined ? {} : { instructions: e.instructions }),
+            examples: e.examples.map((one) =>
+              one.when === undefined ? { good: one.good } : { when: one.when, good: one.good },
+            ),
             toolGrants: grant,
           },
           { department: { id: dept.id, officeId }, supervisor: null },
@@ -1122,5 +1135,79 @@ ${services}
 
     expect(yaml).toContain("services:");
     expect(yaml).not.toMatch(/sk-[a-z]/);
+  });
+});
+
+describe("what an office file says about how somebody works", () => {
+  const file = (employee: string): string => `
+version: 1
+office:
+  name: Tiny
+departments:
+  - id: dept-support
+    name: Support
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+employees:
+  - id: emp-sam
+    department: dept-support
+    name: Sam
+    role: Clerk
+    color: "#00aa66"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+${employee}
+connections: []
+`;
+
+  it("reads a paragraph of standing instructions", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        file(`    instructions: |
+      Always check the order number against the shipping system before replying.
+      Never promise a date we have not confirmed.`),
+        deps,
+      ),
+    );
+
+    expect(config.employees[0]?.instructions).toContain("order number");
+    expect(config.employees[0]?.instructions).toContain("Never promise");
+  });
+
+  it("reads the examples somebody wrote down", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        file(`    examples:
+      - when: an angry customer
+        good: Thank you for flagging this.`),
+        deps,
+      ),
+    );
+
+    expect(config.employees[0]?.examples).toEqual([
+      { when: "an angry customer", good: "Thank you for flagging this." },
+    ]);
+  });
+
+  it("gives somebody neither when the file says nothing", () => {
+    const config = unwrap(importOfficeYaml(file(""), deps));
+
+    expect(config.employees[0]?.instructions).toBeNull();
+    expect(config.employees[0]?.examples).toEqual([]);
+  });
+
+  it("says where the trouble is, in the file's own words", () => {
+    const bad = importOfficeYaml(file(`    examples:\n      - when: nothing useful`), deps);
+
+    expect(isErr(bad)).toBe(true);
+    if (isErr(bad)) expect(bad.error[0]?.path).toBe("employees[0].examples[0].good");
+  });
+
+  it("writes nothing about somebody who was told nothing", () => {
+    // A file that gains two empty keys per person for a feature nobody used is
+    // a file nobody wants to read.
+    const yaml = exportOfficeYaml(unwrap(importOfficeYaml(file(""), deps)));
+
+    expect(yaml).not.toContain("instructions");
+    expect(yaml).not.toContain("examples");
   });
 });

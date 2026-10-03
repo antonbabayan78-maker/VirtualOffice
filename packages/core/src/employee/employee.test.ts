@@ -47,6 +47,8 @@ describe("createEmployee", () => {
       role: "Backend Engineer",
       avatar: null,
       color: "#10b981",
+      instructions: null,
+      examples: [],
       llm: { provider: "anthropic", model: "claude-sonnet-5", params: {}, fallbacks: [] },
       skillIds: [],
       toolGrants: [],
@@ -416,5 +418,142 @@ describe("the statuses a person can be in", () => {
     expect(isEmployeeStatus("paused")).toBe(true);
     expect(isEmployeeStatus("napping")).toBe(false);
     expect(isEmployeeStatus(undefined)).toBe(false);
+  });
+});
+
+describe("telling a person how to work", () => {
+  it("holds a paragraph of standing instructions", () => {
+    const e = make({ instructions: "Always check the order number before replying." });
+
+    expect(e.instructions).toBe("Always check the order number before replying.");
+  });
+
+  it("has none by default, which is every office that ran before this", () => {
+    expect(make().instructions).toBeNull();
+    expect(make().examples).toEqual([]);
+  });
+
+  it("treats nothing written as nothing at all", () => {
+    // One representation for "unwritten", so an empty block can never reach a
+    // prompt and two people with nothing to say are identical.
+    expect(make({ instructions: "" }).instructions).toBeNull();
+    expect(make({ instructions: "   \n  " }).instructions).toBeNull();
+  });
+
+  it("refuses a paragraph longer than anybody would read", () => {
+    expect(isErr(createEmployee({ ...base, instructions: "x".repeat(20_001) }, ctx, deps))).toBe(
+      true,
+    );
+  });
+
+  it("refuses instructions that are not text", () => {
+    expect(isErr(createEmployee({ ...base, instructions: 42 }, ctx, deps))).toBe(true);
+  });
+
+  it("keeps what somebody typed, newlines and all", () => {
+    // It is a paragraph somebody wrote, not a name: the shape of it is part of
+    // what it says.
+    const typed = "Write in short paragraphs.\n\nNever promise a date we have not confirmed.";
+
+    expect(make({ instructions: typed }).instructions).toBe(typed);
+  });
+});
+
+describe("showing a person what good looks like", () => {
+  const example = { when: "an angry customer", good: "Thank you for flagging this…" };
+
+  it("holds the examples somebody wrote down", () => {
+    expect(make({ examples: [example] }).examples).toEqual([example]);
+  });
+
+  it("takes one with no situation attached, which is still worth showing", () => {
+    expect(make({ examples: [{ good: "Short. Specific. No promises." }] }).examples).toEqual([
+      { when: null, good: "Short. Specific. No promises." },
+    ]);
+  });
+
+  it("refuses an example with nothing in it, since it teaches nothing", () => {
+    expect(isErr(createEmployee({ ...base, examples: [{ good: "  " }] }, ctx, deps))).toBe(true);
+  });
+
+  it("refuses more than a handful, because every one is paid for on every call", () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ good: `example ${String(i)}` }));
+
+    expect(isErr(createEmployee({ ...base, examples: many }, ctx, deps))).toBe(true);
+  });
+
+  it("refuses one longer than an example should be", () => {
+    expect(
+      isErr(createEmployee({ ...base, examples: [{ good: "x".repeat(4_001) }] }, ctx, deps)),
+    ).toBe(true);
+    expect(
+      isErr(
+        createEmployee({ ...base, examples: [{ when: "x".repeat(201), good: "ok" }] }, ctx, deps),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a list that is not a list of examples", () => {
+    expect(isErr(createEmployee({ ...base, examples: "a good one" }, ctx, deps))).toBe(true);
+    expect(isErr(createEmployee({ ...base, examples: ["a good one"] }, ctx, deps))).toBe(true);
+  });
+
+  it("says which example was wrong, since a list of ten is hard to search", () => {
+    const refused = createEmployee(
+      { ...base, examples: [{ good: "fine" }, { good: "" }] },
+      ctx,
+      deps,
+    );
+
+    expect(isErr(refused)).toBe(true);
+    if (isErr(refused)) expect(refused.error[0]?.path).toBe("examples[1].good");
+  });
+});
+
+describe("changing how a person works", () => {
+  it("writes new instructions over the old ones", () => {
+    const changed = unwrap(
+      updateEmployee(
+        make({ instructions: "Old." }),
+        { instructions: "New." },
+        { supervisor: null },
+      ),
+    );
+
+    expect(changed.instructions).toBe("New.");
+  });
+
+  it("takes them away again, which is how somebody is untaught", () => {
+    const changed = unwrap(
+      updateEmployee(make({ instructions: "Old." }), { instructions: null }, { supervisor: null }),
+    );
+
+    expect(changed.instructions).toBeNull();
+  });
+
+  it("leaves them alone when the change says nothing about them", () => {
+    const changed = unwrap(
+      updateEmployee(make({ instructions: "Keep me." }), { role: "Lead" }, { supervisor: null }),
+    );
+
+    expect(changed.instructions).toBe("Keep me.");
+  });
+
+  it("refuses a change core would have refused at hiring", () => {
+    expect(
+      isErr(updateEmployee(make(), { instructions: "x".repeat(20_001) }, { supervisor: null })),
+    ).toBe(true);
+  });
+
+  it("replaces the examples rather than adding to them", () => {
+    const changed = unwrap(
+      updateEmployee(
+        make({ examples: [{ good: "one" }] }),
+        { examples: [{ good: "two" }] },
+        { supervisor: null },
+      ),
+    );
+
+    expect(changed.examples).toEqual([{ when: null, good: "two" }]);
   });
 });
