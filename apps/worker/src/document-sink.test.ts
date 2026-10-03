@@ -48,6 +48,8 @@ function api(answer: ApiResult<Document>, sent: { value?: UploadDocument } = {})
     clearServiceCredential: unused,
     serviceCredential: unused,
     discoverServiceModels: unused,
+    studyVoice: unused,
+    recordCorrection: unused,
     loadRunState: unused,
     listApprovals: unused,
     patchTask: unused,

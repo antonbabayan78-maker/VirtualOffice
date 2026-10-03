@@ -192,6 +192,17 @@ export interface ApiClient {
   /** Asks a service which models it has and gets back the service with them written down. */
   discoverServiceModels(id: string): Promise<ApiResult<LlmService>>;
   /**
+   * Asks the office to read the writing in somebody's in-tray and write down
+   * how the person they stand in for writes. Answers with the employee, card
+   * and all; the samples stay where they were put.
+   */
+  studyVoice(employeeId: string): Promise<ApiResult<Employee>>;
+  /** Keeps what the real person changed about a draft this employee wrote. */
+  recordCorrection(
+    employeeId: string,
+    correction: { readonly before: string; readonly after: string; readonly taskId?: string },
+  ): Promise<ApiResult<Employee>>;
+  /**
    * What the office is holding for a run in flight: where it got to, and what a
    * person has decided about the calls it is waiting on.
    *
@@ -424,10 +435,35 @@ function reviveConnection(raw: Record<string, unknown>): Connection {
   } as unknown as Connection;
 }
 
+/**
+ * The voice an employee stands in for, with its dates made real again.
+ *
+ * Absent for every office that predates this, and for everybody who writes as
+ * themselves — which is most people.
+ */
+function reviveUnderstudy(raw: unknown): Employee["understudy"] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const said = raw as Record<string, unknown>;
+  const corrections = Array.isArray(said["corrections"]) ? said["corrections"] : [];
+  return {
+    ...said,
+    recordedAt: asDate(said["recordedAt"]),
+    cardMadeAt:
+      said["cardMadeAt"] === null || said["cardMadeAt"] === undefined
+        ? null
+        : asDate(said["cardMadeAt"]),
+    corrections: (corrections as Record<string, unknown>[]).map((one) => ({
+      ...one,
+      at: asDate(one["at"]),
+    })),
+  } as unknown as Employee["understudy"];
+}
+
 function reviveEmployee(raw: Record<string, unknown>): Employee {
   return {
     ...raw,
     toolGrants: grantsOr(raw["toolGrants"]),
+    understudy: reviveUnderstudy(raw["understudy"]),
     // An office that predates a field says nothing about it, and a person who
     // was never taught anything has no instructions and no examples — not
     // undefined ones, which a turn would then try to read.
@@ -741,6 +777,21 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     discoverServiceModels: async (id) =>
       interpret(await call(`/services/${id}/discover`, { method: "POST" }), reviveService),
+
+    studyVoice: async (employeeId) =>
+      interpret(
+        await call(`/employees/${employeeId}/study`, { method: "POST", body: "{}" }),
+        reviveEmployee,
+      ),
+
+    recordCorrection: async (employeeId, correction) =>
+      interpret(
+        await call(`/employees/${employeeId}/corrections`, {
+          method: "POST",
+          body: JSON.stringify(correction),
+        }),
+        reviveEmployee,
+      ),
 
     listApprovals: async (officeId) =>
       interpret(await call(`/offices/${officeId}/approvals`), (raw) =>

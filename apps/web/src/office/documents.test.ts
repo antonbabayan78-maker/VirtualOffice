@@ -68,6 +68,8 @@ function scriptedApi(): Scripted {
     clearServiceCredential: unused,
     serviceCredential: unused,
     discoverServiceModels: unused,
+    studyVoice: unused,
+    recordCorrection: unused,
     patchTask: unused,
     loadRunState: unused,
     saveRunCheckpoint: unused,
