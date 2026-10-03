@@ -611,3 +611,119 @@ describe("a department with no review of its own, checked by one that has", () =
     ).toBe(true);
   });
 });
+
+describe("work waiting for a person, which is not a review", () => {
+  const held = {
+    type: "await_decision" as const,
+    actorId: ada,
+    summary: 'tool "acme__send_email" (external_send)',
+    items: [
+      {
+        key: "call-1",
+        name: "acme__send_email",
+        gates: ["external_send"] as const,
+        detail: 'tool "acme__send_email" (external_send)',
+      },
+    ],
+  };
+
+  it("parks the work rather than reviewing it", () => {
+    const outcome = unwrap(engine.handle(task("in_progress"), held, context()));
+
+    // Blocked, not in_review: nobody is judging this work, and a reviewer
+    // picking it up would be answering a question nobody asked.
+    expect(outcome.task.status).toBe("blocked");
+    expect(outcome.task.history.at(-1)?.reason).toContain("send_email");
+  });
+
+  it("puts it in the same inbox a review gate uses, and tells the owner", () => {
+    const outcome = unwrap(engine.handle(task("in_progress"), held, context()));
+
+    expect(outcome.effects[0]).toEqual({
+      type: "request_approval",
+      gates: ["external_send"],
+      summary: 'tool "acme__send_email" (external_send)',
+    });
+    expect(outcome.effects[1]).toMatchObject({ type: "notify", audience: "owner" });
+    expect(JSON.stringify(outcome.effects[1])).toContain("send_email");
+  });
+
+  it("does it whatever the department's review policy is", () => {
+    // A room with a manager still must not send mail unasked, so this is not
+    // a policy's decision to make.
+    for (const policy of [
+      { kind: "manager" } as ReviewPolicy,
+      { kind: "quorum", approvals: 2 } as unknown as ReviewPolicy,
+      { kind: "gate", gatedActions: ["deploy"] } as ReviewPolicy,
+    ]) {
+      const outcome = engine.handle(task("in_progress"), held, context(policy));
+      expect(isOk(outcome) && outcome.value.task.status).toBe("blocked");
+    }
+  });
+
+  it("will not park work nobody is doing", () => {
+    expect(isErr(engine.handle(task("in_review"), held, context()))).toBe(true);
+  });
+
+  it("needs something to say it is waiting for", () => {
+    expect(isErr(engine.handle(task("in_progress"), { ...held, items: [] }, context()))).toBe(true);
+  });
+});
+
+describe("a decision on a held call", () => {
+  const parked = (): Task => task("blocked");
+  const decided = (
+    decision: "approved" | "declined",
+    overrides: {
+      readonly reason?: string;
+      readonly key?: string;
+      readonly decidedBy?: string;
+    } = {},
+  ): Extract<WorkflowEvent, { type: "call_decided" }> => ({
+    type: "call_decided",
+    key: overrides.key ?? "call-1",
+    decision,
+    decidedBy: overrides.decidedBy ?? "owner-1",
+    ...(overrides.reason === undefined ? {} : { reason: overrides.reason }),
+  });
+
+  it("starts the work again, so the run can pick up where it stopped", () => {
+    const outcome = unwrap(engine.handle(parked(), decided("approved"), context()));
+
+    expect(outcome.task.status).toBe("in_progress");
+    expect(outcome.task.history.at(-1)?.reason).toContain("owner-1");
+  });
+
+  it("starts it again on a refusal too, because the model is told and carries on", () => {
+    // Declining one call is not cancelling the work: the run hears "no" as the
+    // answer to that call and decides what to do next.
+    const outcome = unwrap(
+      engine.handle(parked(), decided("declined", { reason: "not to that address" }), context()),
+    );
+
+    expect(outcome.task.status).toBe("in_progress");
+    expect(outcome.task.history.at(-1)?.reason).toContain("not to that address");
+  });
+
+  it("says who decided, since no agent may decide in the owner's place", () => {
+    expect(
+      isErr(engine.handle(parked(), decided("approved", { decidedBy: "  " }), context())),
+    ).toBe(true);
+  });
+
+  it("names the call it is about", () => {
+    expect(isErr(engine.handle(parked(), decided("approved", { key: "" }), context()))).toBe(true);
+  });
+
+  it("is not a decision about work that is not waiting", () => {
+    expect(isErr(engine.handle(task("in_progress"), decided("approved"), context()))).toBe(true);
+  });
+
+  it("tells the assignee what was decided", () => {
+    const outcome = unwrap(engine.handle(parked(), decided("approved"), context()));
+
+    expect(outcome.effects).toHaveLength(1);
+    expect(outcome.effects[0]).toMatchObject({ type: "notify", audience: "assignee" });
+    expect(JSON.stringify(outcome.effects[0])).toContain("owner-1");
+  });
+});

@@ -16,6 +16,14 @@
  * an approval is changes requested; a run that ended without calling the submit
  * tool submits nothing. Reading a vague answer generously is how work gets
  * approved that nobody approved.
+ *
+ * **The gate is not optional here.** A tool that acts is held before it runs,
+ * and the categories come off the catalogue, which the connector layer filled
+ * in. It is built rather than passed because a gate a caller has to remember to
+ * switch on is a gate that goes years without a caller — which is exactly what
+ * happened to `approval-gate.ts`. A catalogue whose tools declare nothing
+ * produces no gate at all, so every office that ran before this runs
+ * identically.
  */
 import {
   canCallTool,
@@ -31,9 +39,12 @@ import {
   type ToolGrant,
 } from "@vo/core";
 import type { LlmProvider, ToolDefinition } from "@vo/llm";
+import { GATED_ACTIONS, type GatedAction } from "@vo/core";
 import { AGENT_REVIEW_JOB, type AGENT_RUN_JOB } from "../schedule/scheduler.js";
-import type { WorkflowEvent } from "../workflow/workflow-types.js";
+import type { HeldCall, WorkflowEvent } from "../workflow/workflow-types.js";
 import { runAgent, type ToolUse } from "./agent-run-loop.js";
+import type { ApprovalDecision, RunApprovalGate } from "./approval-gate.js";
+import type { RunCheckpointStore } from "./checkpoint.js";
 import { FIND_TOOL_NAME, LazyToolset } from "../tools/lazy-toolset.js";
 import { ToolCatalog, type CatalogTool } from "../tools/tool-catalog.js";
 import type { BrokerOutcome, ToolBroker } from "../tools/tool-broker.js";
@@ -143,6 +154,12 @@ export interface AgentTurnRequest {
   /** Whose turn it is: the assignee for a run, the reviewer for a review. */
   readonly actor: Employee;
   readonly kind: TurnKind;
+  /**
+   * What a person decided about calls this run was holding, read from wherever
+   * the office keeps them. Answered from the checkpoint rather than by asking
+   * the model again.
+   */
+  readonly approvals?: readonly ApprovalDecision[];
 }
 
 /** Who a call is on behalf of, for metering. */
@@ -168,6 +185,13 @@ export interface AgentTurnOptions {
   readonly documents?: DocumentSink;
   /** Who actually performs a tool call. Without one, no tool is offered. */
   readonly tools?: ToolBroker;
+  /**
+   * Where a run's progress is kept, so a run held at the gate can be resumed —
+   * by this process after a decision, or by another one after a crash. Without
+   * it the gate still holds a call, but answering it means starting the turn
+   * again and paying the model twice.
+   */
+  readonly checkpoints?: RunCheckpointStore;
 }
 
 export type AgentTurn = (request: AgentTurnRequest) => Promise<readonly WorkflowEvent[]>;
@@ -214,6 +238,27 @@ async function fileOne(
   } catch {
     return "That document could not be filed just now.";
   }
+}
+
+/**
+ * The gate for this turn, or null when nothing in the catalogue acts.
+ *
+ * Every category the office understands is held: which tools fall into them is
+ * the connector's declaration, and a department's review policy has no say —
+ * a room with a manager still must not send mail unasked.
+ */
+export function gateForCatalog(catalog: ToolCatalog | undefined): RunApprovalGate | null {
+  if (catalog === undefined) return null;
+  const byName = new Map<string, readonly GatedAction[]>();
+  for (const tool of catalog.all()) {
+    const gates = tool.gates ?? [];
+    if (gates.length > 0) byName.set(tool.name, gates);
+  }
+  if (byName.size === 0) return null;
+  return {
+    gatedActions: GATED_ACTIONS,
+    classify: (call) => byName.get(call.name) ?? [],
+  };
 }
 
 export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
@@ -263,6 +308,8 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
             alwaysLoaded: sink === undefined ? [] : [FILE_DOCUMENT_TOOL.name],
           });
 
+    const gate = reviewing ? null : gateForCatalog(catalog);
+
     const result = await runAgent({
       provider,
       model: actor.llm.model,
@@ -287,7 +334,40 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
         }),
       }),
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
+      ...(gate === null ? {} : { approvalGate: gate }),
+      ...(request.approvals === undefined ? {} : { approvals: request.approvals }),
+      // Keyed by the task: one attempt at a time, and the office clears it when
+      // the work moves on, so a later attempt never reads an older answer.
+      ...(options.checkpoints === undefined
+        ? {}
+        : { checkpoint: { store: options.checkpoints, runId: task.id } }),
     });
+
+    // Held before it ran, which is work waiting for a person rather than work
+    // under review. The run is already written down; this is what tells the
+    // office, and the decision comes back as an event.
+    const pending = result.pendingApproval;
+    if (result.stopReason === "awaiting_approval" && pending !== undefined) {
+      const items: HeldCall[] = pending.items.map((item) => ({
+        key: item.key,
+        name: item.name,
+        gates: item.gates,
+        detail: item.detail,
+      }));
+      return [
+        ...(task.status === "assigned" ? [{ type: "start" as const, actorId: actor.id }] : []),
+        { type: "await_decision", actorId: actor.id, summary: pending.summary, items },
+      ];
+    }
+    if (result.stopReason === "spend_declined") {
+      return [
+        {
+          type: "block",
+          actorId: actor.id,
+          reason: result.error?.message ?? "further spending was declined",
+        },
+      ];
+    }
 
     const verdict = result.structuredResult;
 

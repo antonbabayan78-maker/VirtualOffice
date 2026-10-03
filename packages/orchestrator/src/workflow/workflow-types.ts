@@ -66,6 +66,22 @@ export interface WorkflowContext {
   readonly escalationGraph?: EscalationGraph;
 }
 
+/**
+ * One call a run is holding, named so a person can answer it.
+ *
+ * The same shape the pre-execution gate computes, repeated here rather than
+ * imported because an event travels over HTTP between a worker and an office
+ * and this is its wire form.
+ */
+export interface HeldCall {
+  /** The tool_use id, or `run:spend` for the run's own spending. */
+  readonly key: string;
+  readonly name: string;
+  readonly gates: readonly GatedAction[];
+  /** One line for whoever is deciding. */
+  readonly detail: string;
+}
+
 export type WorkflowEvent =
   | { readonly type: "start"; readonly actorId?: EmployeeId }
   | {
@@ -94,6 +110,40 @@ export type WorkflowEvent =
       readonly type: "check_reported";
       readonly report: CheckReport;
       readonly actorId?: EmployeeId;
+    }
+  | {
+      /**
+       * A run that stopped before a consequential call, waiting for a person.
+       *
+       * Distinct from `block`, which means a dependency and tells the
+       * supervisor, and from the review gate, which holds finished work: this
+       * is work in flight, stopped between the model asking for a tool and the
+       * tool running. The items are the calls being held, each with its own
+       * key, so a person approves one call with its arguments rather than
+       * granting the task a category in advance.
+       */
+      readonly type: "await_decision";
+      readonly actorId: EmployeeId;
+      readonly summary: string;
+      readonly items: readonly HeldCall[];
+    }
+  | {
+      /**
+       * A person's answer about one held call, dispatched by the application on
+       * behalf of the authenticated human — never by an employee, which is the
+       * whole point of holding it.
+       *
+       * Either answer starts the work again: a refusal is the answer to that
+       * call, which the run hears and carries on from, not a cancellation of
+       * the work.
+       */
+      readonly type: "call_decided";
+      /** The tool call this is about, as the run named it. */
+      readonly key: string;
+      readonly decision: "approved" | "declined";
+      readonly decidedBy: string;
+      readonly reason?: string;
+      readonly actorId?: never;
     }
   | {
       /**

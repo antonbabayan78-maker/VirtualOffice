@@ -23,6 +23,7 @@ import {
   SUBMIT_TOOL,
 } from "./agent-turn.js";
 import { recordingDocumentSink, type DocumentSink } from "./document-sink.js";
+import { InMemoryRunCheckpointStore } from "./checkpoint.js";
 import { catalogFor, describedTool, recordingToolBroker } from "../tools/tool-broker.js";
 
 const officeId = "office-acme" as OfficeId;
@@ -762,5 +763,174 @@ describe("an employee calling a tool", () => {
 
     expect(events.at(-1)).toMatchObject({ type: "submit" });
     expect(provider.calls[0]?.tools ?? []).toHaveLength(1);
+  });
+});
+
+describe("a tool that acts, held before it runs", () => {
+  const acme = unwrap(
+    createConnector({ officeId, kind: "mcp", name: "acme", tools: ["send_email"] }, [], {
+      id: () => "conn-acme" as never,
+      now: () => at,
+    }),
+  );
+
+  /** A catalogue whose one tool declares that it leaves the building. */
+  const sending = (gates: readonly string[] = ["external_send"]) =>
+    catalogFor(
+      {
+        connectors: [acme],
+        departmentGrants: [{ connectorId: acme.id, tool: "send_email" }],
+        employeeGrants: [],
+      },
+      [{ ...describedTool(acme.id, "send_email", "Send an email."), gates: gates as never }],
+    );
+
+  const asking = () =>
+    new FakeLlmProvider({
+      script: [
+        toolCall("acme__send_email", { to: "ada@acme.test" }),
+        toolCall("submit_work", { summary: "sent it" }),
+      ],
+    });
+
+  const run = (
+    provider: LlmProvider,
+    broker: ReturnType<typeof recordingToolBroker>["broker"],
+    request: Partial<Parameters<ReturnType<typeof llmAgentTurn>>[0]> = {},
+    catalog = sending(),
+  ) =>
+    llmAgentTurn({ provider, tools: broker })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: catalog,
+      ...request,
+    });
+
+  it("does not run it, and says the work is waiting for a person", async () => {
+    const { broker, calls } = recordingToolBroker({ acme__send_email: { summary: "sent" } });
+
+    const events = await run(asking(), broker);
+
+    expect(calls).toEqual([]);
+    expect(events).toHaveLength(1);
+    const held = events[0];
+    if (held?.type !== "await_decision") throw new Error("expected the work to be held");
+    expect(held.actorId).toBe(ada.id);
+    expect(held.summary).toContain("send_email");
+    expect(held.items).toHaveLength(1);
+    const call = held.items[0];
+    expect(call?.name).toBe("acme__send_email");
+    expect(call?.gates).toEqual(["external_send"]);
+    expect(call?.detail).toContain("external_send");
+    // The key is the model's own call id, which is what makes a decision about
+    // one call rather than about the tool in general.
+    expect(call?.key.length).toBeGreaterThan(0);
+  });
+
+  it("runs a tool that declares nothing, exactly as every office did before", async () => {
+    const { broker, calls } = recordingToolBroker({ acme__send_email: { summary: "sent" } });
+
+    const events = await run(asking(), broker, {}, sending([]));
+
+    expect(calls).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual(["submit"]);
+  });
+
+  it("runs it once a person has said yes, without asking the model again", async () => {
+    // The whole point of the checkpoint: resuming answers the call that was
+    // held, rather than starting the turn over and paying for it twice.
+    const { broker, calls } = recordingToolBroker({ acme__send_email: { summary: "sent" } });
+    const store = new InMemoryRunCheckpointStore();
+    const provider = asking();
+    const held = await llmAgentTurn({ provider, tools: broker, checkpoints: store })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: sending(),
+    });
+    const key = held[0]?.type === "await_decision" ? held[0].items[0]?.key : undefined;
+    expect(key).toBeTruthy();
+    const plansBefore = provider.calls.length;
+
+    const after = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "sent it" })],
+    });
+    const events = await llmAgentTurn({ provider: after, tools: broker, checkpoints: store })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: sending(),
+      approvals: [{ key: key ?? "", decision: "approved", decidedBy: "owner-1" }],
+    });
+
+    expect(calls).toEqual([{ name: "acme__send_email", input: { to: "ada@acme.test" } }]);
+    expect(events.map((event) => event.type)).toEqual(["submit"]);
+    // The held call was answered from the checkpoint, so the resumed run asked
+    // the model only for what came next.
+    expect(plansBefore).toBe(1);
+  });
+
+  it("tells the model when a person said no, and the work carries on", async () => {
+    const { broker, calls } = recordingToolBroker({ acme__send_email: { summary: "sent" } });
+    const store = new InMemoryRunCheckpointStore();
+    const held = await llmAgentTurn({ provider: asking(), tools: broker, checkpoints: store })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: sending(),
+    });
+    const key = held[0]?.type === "await_decision" ? (held[0].items[0]?.key ?? "") : "";
+
+    const after = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "could not send it" })],
+    });
+    const events = await llmAgentTurn({ provider: after, tools: broker, checkpoints: store })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: sending(),
+      approvals: [
+        { key, decision: "declined", decidedBy: "owner-1", reason: "not to that address" },
+      ],
+    });
+
+    expect(calls).toEqual([]);
+    expect(events.map((event) => event.type)).toEqual(["submit"]);
+    const told = JSON.stringify(after.calls[0]?.messages ?? []);
+    expect(told).toContain("declined");
+    expect(told).toContain("not to that address");
+  });
+
+  it("survives the process, which is what makes a parked run worth parking", async () => {
+    const { broker } = recordingToolBroker({ acme__send_email: { summary: "sent" } });
+    const store = new InMemoryRunCheckpointStore();
+
+    await llmAgentTurn({ provider: asking(), tools: broker, checkpoints: store })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+      toolCatalog: sending(),
+    });
+
+    const kept = await store.load(assigned.id);
+    expect(kept?.pendingApproval?.items[0]?.name).toBe("acme__send_email");
+    // The conversation is kept ending on the unanswered call, which is where
+    // the resumed run picks up.
+    expect(kept?.messages.at(-1)?.role).toBe("assistant");
+  });
+
+  it("holds nothing when there is no catalogue at all", async () => {
+    const provider = new FakeLlmProvider({
+      script: [toolCall("submit_work", { summary: "nothing to call" })],
+    });
+
+    const events = await llmAgentTurn({ provider })({
+      task: { ...assigned, status: "in_progress" },
+      actor: ada,
+      kind: AGENT_RUN_JOB,
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["submit"]);
   });
 });

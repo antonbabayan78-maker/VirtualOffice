@@ -9,7 +9,7 @@
  * approve and request_changes are delegated to the handler registered for the
  * department's review policy, so each policy can be added on its own.
  */
-import type { Result, Task } from "@vo/core";
+import type { GatedAction, Result, Task } from "@vo/core";
 import { AUTOMATED_POLICY_HANDLER } from "./automated-policy.js";
 import { handoffEffects } from "./handoff.js";
 import { watchEffects } from "./watch.js";
@@ -171,6 +171,62 @@ export class WorkflowEngine {
       }
       case "cancel":
         return applyTransition(task, "cancelled", event, context, [], event.reason);
+      case "await_decision": {
+        if (event.items.length === 0) {
+          return workflowError("items", "work cannot wait for a decision about nothing");
+        }
+        // The same inbox the review gate feeds, so there is one place a person
+        // looks, and the owner is told because nobody else may answer this.
+        const gates: GatedAction[] = [];
+        for (const item of event.items) {
+          for (const gate of item.gates) if (!gates.includes(gate)) gates.push(gate);
+        }
+        return applyTransition(
+          task,
+          "blocked",
+          event,
+          context,
+          [
+            { type: "request_approval", gates, summary: event.summary },
+            {
+              type: "notify",
+              audience: "owner",
+              message: `task "${task.title}" is waiting for your decision: ${event.summary}`,
+            },
+          ],
+          event.summary,
+        );
+      }
+      case "call_decided": {
+        const decidedBy = event.decidedBy.trim();
+        if (decidedBy.length === 0) {
+          return workflowError("decidedBy", "a decision has to say who made it");
+        }
+        if (event.key.trim().length === 0) {
+          return workflowError("key", "a decision has to say which call it is about");
+        }
+        if (task.status !== "blocked") {
+          return workflowError(
+            "status",
+            `only work that is waiting has a held call to decide; this task is "${task.status}"`,
+          );
+        }
+        const reason = (event.reason ?? "").trim();
+        const said =
+          event.decision === "approved"
+            ? `${decidedBy} approved ${event.key}`
+            : `${decidedBy} declined ${event.key}${reason.length === 0 ? "" : `: ${reason}`}`;
+        // Back to work either way. A declined call is answered, not cancelled:
+        // the run is told and decides what to do about it.
+        return applyTransition(
+          task,
+          "in_progress",
+          event,
+          context,
+          [{ type: "notify", audience: "assignee", message: `${said} on "${task.title}"` }],
+          said,
+        );
+      }
       case "submit":
       case "approve":
       case "request_changes":
