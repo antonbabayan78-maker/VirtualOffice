@@ -1402,6 +1402,19 @@ export function buildServer(options: ServerOptions): FastifyInstance {
       },
     };
 
+    // A decision names one call, and the run has to be holding it. A key typed
+    // wrong would otherwise start the work again, which parks on the same call
+    // a moment later: a task that flaps, and a person who believes they
+    // answered something.
+    if (runState !== null && type === "call_decided") {
+      const checkpoint = await runState.checkpoints.load(id);
+      const holding = checkpoint?.pendingApproval?.items ?? [];
+      const key = typeof body["key"] === "string" ? body["key"] : "";
+      if (holding.length > 0 && !holding.some((item) => item.key === key)) {
+        return fail(reply, [{ path: "key", message: `this run is not holding a call "${key}"` }]);
+      }
+    }
+
     // A decision only a person may make records who made it. A canvas has no
     // name to send — it was let in with a token — so the office fills in whose
     // it was. A body that says is believed: one person may act for another.

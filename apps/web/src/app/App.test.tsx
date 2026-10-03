@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { ThemeProvider } from "../ui/theme.js";
@@ -146,6 +146,80 @@ describe("the usage section", () => {
     // has existed since telemetry reached the server.
     const view = await mount("/usage");
     expect(screen.getByRole("group", { name: /what this office has spent/i })).toBeTruthy();
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    view.unmount();
+  });
+});
+
+describe("how much is waiting on a person", () => {
+  const held = {
+    kind: "call" as const,
+    taskId: "task-1",
+    title: "Tell the customer",
+    departmentId: "dept-post",
+    assigneeId: "emp-ada",
+    since: new Date("2026-10-03T09:00:00Z"),
+    key: "toolu_1",
+    name: "post__send_email",
+    input: { to: "customer@acme.test" },
+    gates: ["external_send"],
+    detail: 'tool "post__send_email" (external_send)',
+  };
+
+  beforeEach(() => {
+    for (const name of ["VITE_VO_API_URL", "VITE_VO_API_TOKEN", "VITE_VO_OFFICE_ID"]) {
+      vi.stubEnv(name, "");
+    }
+    officeStore.setState({ waiting: [] });
+  });
+  afterEach(() => {
+    officeStore.setState({ waiting: [] });
+    vi.unstubAllEnvs();
+  });
+
+  const approvals = () =>
+    within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", {
+      name: /approvals/i,
+    });
+
+  it("says nothing on the link when nothing is waiting", async () => {
+    const view = await mount("/");
+
+    expect(approvals()).toHaveTextContent(/^Approvals$/);
+    view.unmount();
+  });
+
+  it("counts it on the link, which is how anybody finds out", async () => {
+    const view = await mount("/");
+
+    act(() => {
+      officeStore.setState({ waiting: [held, { ...held, key: "toolu_2" }] });
+    });
+
+    expect(approvals()).toHaveTextContent("2");
+    view.unmount();
+  });
+
+  it("counts down again as things are answered, without a reload", async () => {
+    const view = await mount("/");
+    act(() => {
+      officeStore.setState({ waiting: [held] });
+    });
+    expect(approvals()).toHaveTextContent("1");
+
+    act(() => {
+      officeStore.setState({ waiting: [] });
+    });
+
+    expect(approvals()).toHaveTextContent(/^Approvals$/);
+    view.unmount();
+  });
+
+  it("shows the inbox at its own address, rather than a page about it", async () => {
+    officeStore.setState({ waiting: [held] });
+    const view = await mount("/approvals");
+
+    expect(screen.getByRole("region", { name: "Approvals" })).toHaveTextContent("post__send_email");
     expect(screen.queryByText(/not built yet/i)).toBeNull();
     view.unmount();
   });
