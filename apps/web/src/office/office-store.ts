@@ -36,6 +36,8 @@ import {
   type ConnectorKind,
   type EmployeeStatus,
   type RunState,
+  type Proposal,
+  type ProposalId,
   type UsageRecord,
   type UpdateConnectorInput,
   type Department,
@@ -328,6 +330,35 @@ export interface OfficeStoreState {
    * notice, because somebody pressed a button and is waiting for this answer.
    */
   studyVoice(id: EmployeeId): Promise<SaveOutcome>;
+  /**
+   * What the office has proposed about its own people, and nobody has yet
+   * agreed to.
+   *
+   * Kept apart from `waiting` on purpose: everything in that inbox is a piece
+   * of work stopped for a person, and a proposal is not a piece of work. It is
+   * the office asking to change how somebody is told to work.
+   */
+  readonly proposals: readonly Proposal[];
+  loadProposals(proposals: readonly Proposal[]): void;
+  putProposal(proposal: Proposal): void;
+  /**
+   * Asks the office to look back over one person's finished work.
+   *
+   * `proposed: false` is the office having read the record and found nothing
+   * worth changing — a good answer, which is why it is not a problem. Nothing
+   * optimistic: only the office can read the record and only a model can write
+   * the proposal.
+   */
+  lookBack(id: EmployeeId): Promise<LookBackOutcome>;
+  /**
+   * A person's answer to a proposal.
+   *
+   * Not optimistic, and this is the one screen where that matters most: the
+   * office is what refuses a put-back over text somebody has since edited, and
+   * a row reading "accepted" over an office that refused it would be the canvas
+   * telling somebody their person had changed when they had not.
+   */
+  decideProposal(id: ProposalId, decision: ProposalDecision): Promise<SaveOutcome>;
   /** Keeps what the real person changed about a draft this employee wrote. */
   recordCorrection(id: EmployeeId, correction: CorrectionDraft): Promise<SaveOutcome>;
   /**
@@ -358,6 +389,20 @@ export const DEFAULT_GRID_SIZE = 20;
 /** What a save came to in the end, for the drawer that asked for it. */
 export type SaveOutcome =
   { readonly ok: true } | { readonly ok: false; readonly problems: readonly ValidationError[] };
+
+/** What a person may say about a proposal. */
+export type ProposalDecision = "accept" | "decline" | "revert";
+
+/**
+ * What a look back came to.
+ *
+ * `proposed` distinguishes "it found nothing" from "it proposed something",
+ * because the button needs to say which — a press that silently does nothing
+ * reads as a press that failed.
+ */
+export type LookBackOutcome =
+  | { readonly ok: true; readonly proposed: boolean }
+  | { readonly ok: false; readonly problems: readonly ValidationError[] };
 
 export interface AddConnectorInput {
   readonly kind: ConnectorKind;
@@ -616,6 +661,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       office: null,
       officeOpen: false,
       waiting: [],
+      proposals: [],
       selectedConnectionId: null,
       connections: [],
       links: [],
@@ -1387,6 +1433,63 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         const answer = await connected.studyVoice(id);
         if (answer.ok) {
           replaceEmployee(set, get, answer.value);
+          return { ok: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      loadProposals: (proposals) => {
+        set({ proposals });
+      },
+
+      putProposal: (proposal) => {
+        const held = get().proposals;
+        set({
+          proposals: held.some((candidate) => candidate.id === proposal.id)
+            ? held.map((candidate) => (candidate.id === proposal.id ? proposal : candidate))
+            : [...held, proposal],
+        });
+      },
+
+      lookBack: async (id) => {
+        if (!get().employees.some((candidate) => candidate.id === id)) {
+          return { ok: false, problems: [{ path: "id", message: "no such employee" }] };
+        }
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to ask" }],
+          };
+        }
+
+        const answer = await connected.lookBack(id);
+        if (answer.ok) {
+          // Null is the office saying it read the record and found nothing.
+          if (answer.value === null) return { ok: true, proposed: false };
+          get().putProposal(answer.value);
+          return { ok: true, proposed: true };
+        }
+        if (answer.kind === "transport") {
+          return { ok: false, problems: [{ path: "", message: answer.message }] };
+        }
+        return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+      },
+
+      decideProposal: async (id, decision) => {
+        if (connected === undefined) {
+          return {
+            ok: false,
+            problems: [{ path: "", message: "this canvas has no office to tell" }],
+          };
+        }
+
+        const answer = await connected.decideProposal(id, decision);
+        if (answer.ok) {
+          // What the office now holds, which is the only thing that settles it.
+          get().putProposal(answer.value);
           return { ok: true };
         }
         if (answer.kind === "transport") {

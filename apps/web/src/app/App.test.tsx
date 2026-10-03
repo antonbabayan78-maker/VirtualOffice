@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
+import type { Proposal } from "@vo/core";
 import { ThemeProvider } from "../ui/theme.js";
 import { App } from "./App.js";
 import { ROUTES } from "./routes.js";
@@ -166,20 +167,38 @@ describe("how much is waiting on a person", () => {
     detail: 'tool "post__send_email" (external_send)',
   };
 
+  const waitingProposal: Proposal = {
+    id: "prop-1",
+    officeId: "office-acme",
+    employeeId: "emp-ada",
+    status: "waiting",
+    changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+    because: "Two pieces of work went back: no order number.",
+    evidence: [{ taskId: "task-1", what: "went back twice: no order number" }],
+    madeAt: new Date("2026-10-04T09:00:00Z"),
+    decidedBy: null,
+    decidedAt: null,
+  } as unknown as Proposal;
+
   beforeEach(() => {
     for (const name of ["VITE_VO_API_URL", "VITE_VO_API_TOKEN", "VITE_VO_OFFICE_ID"]) {
       vi.stubEnv(name, "");
     }
-    officeStore.setState({ waiting: [] });
+    officeStore.setState({ waiting: [], proposals: [] });
   });
   afterEach(() => {
-    officeStore.setState({ waiting: [] });
+    officeStore.setState({ waiting: [], proposals: [] });
     vi.unstubAllEnvs();
   });
 
   const approvals = () =>
     within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", {
       name: /approvals/i,
+    });
+
+  const proposals = () =>
+    within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", {
+      name: /proposals/i,
     });
 
   it("says nothing on the link when nothing is waiting", async () => {
@@ -220,6 +239,42 @@ describe("how much is waiting on a person", () => {
     const view = await mount("/approvals");
 
     expect(screen.getByRole("region", { name: "Approvals" })).toHaveTextContent("post__send_email");
+    expect(screen.queryByText(/not built yet/i)).toBeNull();
+    view.unmount();
+  });
+
+  it("counts what the office has proposed on its own link, not on approvals", async () => {
+    // Two different questions: one is work stopped for a person, the other is a
+    // change to a person. A single count would hide whichever is rarer.
+    const view = await mount("/");
+
+    act(() => {
+      officeStore.setState({ proposals: [waitingProposal] });
+    });
+
+    expect(proposals()).toHaveTextContent("1");
+    expect(approvals()).toHaveTextContent(/^Approvals$/);
+    view.unmount();
+  });
+
+  it("counts only the ones still waiting for somebody", async () => {
+    const view = await mount("/");
+
+    act(() => {
+      officeStore.setState({
+        proposals: [{ ...waitingProposal, id: "prop-2", status: "accepted" } as never],
+      });
+    });
+
+    expect(proposals()).toHaveTextContent(/^Proposals$/);
+    view.unmount();
+  });
+
+  it("shows the proposals at their own address", async () => {
+    officeStore.setState({ proposals: [waitingProposal] });
+    const view = await mount("/proposals");
+
+    expect(screen.getByRole("region", { name: "Proposals" })).toHaveTextContent("no order number");
     expect(screen.queryByText(/not built yet/i)).toBeNull();
     view.unmount();
   });

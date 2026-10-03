@@ -673,3 +673,32 @@ describe("standing in for a real person, on their panel", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(/never sent again|only the card/i);
   });
 });
+
+describe("whether the office may improve somebody", () => {
+  const saved = () => store.getState().employees.find((one) => one.id === ada.id);
+
+  it("is off, and says so", () => {
+    expect(screen.getByLabelText("Look back over their work")).not.toBeChecked();
+  });
+
+  it("switches on and off from the panel", async () => {
+    const user = userEvent.setup();
+
+    await user.click(screen.getByLabelText("Look back over their work"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(saved()?.selfImprovement).toBe(true);
+  });
+
+  it("says what it will do, and what it will never touch", async () => {
+    // The guardrail is the reason this is safe to leave on, so the panel says
+    // it rather than leaving somebody to guess.
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Look back over their work"));
+
+    const drawer = screen.getByRole("dialog");
+    expect(drawer).toHaveTextContent(/propose/i);
+    expect(drawer).toHaveTextContent(/you decide|waits for you/i);
+    expect(drawer).toHaveTextContent(/never|cannot/i);
+  });
+});
