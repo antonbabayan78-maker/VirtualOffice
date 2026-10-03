@@ -13,6 +13,7 @@ import type {
 import { InProcessJobQueue } from "../queue/in-process-queue.js";
 import {
   AGENT_JUDGE_JOB,
+  AGENT_RETROSPECTIVE_JOB,
   AGENT_REVIEW_JOB,
   computeDueWork,
   enqueueDueWork,
@@ -860,5 +861,111 @@ describe("computeDueWork: a contest waiting to be judged", () => {
     const { contests, ...old } = snapshot({ tasks: [task()] });
     expect(contests).toBeUndefined();
     expect(computeDueWork(old, duringHours).jobs).toHaveLength(1);
+  });
+});
+
+describe("computeDueWork: looking back over somebody's work", () => {
+  const improving = (overrides: Partial<SchedulerSnapshot> = {}): SchedulerSnapshot =>
+    snapshot({
+      employees: [
+        {
+          id: ada,
+          officeId: office,
+          departmentId: dept,
+          status: "active",
+          schedule: ALWAYS,
+          selfImprovement: true,
+        },
+      ],
+      ...overrides,
+    });
+
+  it("asks for one, for somebody whose switch is on", () => {
+    const due = computeDueWork(improving(), duringHours);
+
+    expect(due.jobs).toHaveLength(1);
+    expect(due.jobs[0]?.kind).toBe(AGENT_RETROSPECTIVE_JOB);
+    expect(due.jobs[0]?.employeeId).toBe(ada);
+  });
+
+  it("asks for none at all when nobody switched it on", () => {
+    // Off is the default, so an office that has never heard of this gets
+    // exactly the jobs it always did.
+    expect(computeDueWork(snapshot(), duringHours).jobs).toEqual([]);
+  });
+
+  it("asks for none for somebody switched off again", () => {
+    const due = computeDueWork(
+      improving({
+        employees: [
+          {
+            id: ada,
+            officeId: office,
+            departmentId: dept,
+            status: "active",
+            schedule: ALWAYS,
+            selfImprovement: false,
+          },
+        ],
+      }),
+      duringHours,
+    );
+
+    expect(due.jobs).toEqual([]);
+  });
+
+  it("asks for one a day, however many ticks see the same person", async () => {
+    const queue = new InProcessJobQueue();
+    await enqueueDueWork(queue, improving(), duringHours);
+
+    const second = await enqueueDueWork(queue, improving(), new Date("2026-09-28T07:30:00.000Z"));
+
+    expect(second.enqueued).toBe(0);
+    expect(second.deduplicated).toBe(1);
+  });
+
+  it("asks again the next day, because there is new work to read", async () => {
+    const queue = new InProcessJobQueue();
+    await enqueueDueWork(queue, improving(), duringHours);
+
+    const tomorrow = await enqueueDueWork(queue, improving(), new Date("2026-09-29T07:00:00.000Z"));
+
+    expect(tomorrow.enqueued).toBe(1);
+  });
+
+  it("waits while this person's own hours are shut, rather than at 3am", () => {
+    // Looking back is their turn, taken on their model and charged to them, so
+    // their day says whether it happens.
+    const shut = improving({
+      employees: [
+        {
+          id: ada,
+          officeId: office,
+          departmentId: dept,
+          status: "active",
+          schedule: OFFICE_HOURS,
+          selfImprovement: true,
+        },
+      ],
+    });
+
+    expect(computeDueWork(shut, afterHours).jobs).toEqual([]);
+  });
+
+  it("asks for none for somebody who has been paused", () => {
+    const paused = improving({
+      employees: [
+        {
+          id: ada,
+          officeId: office,
+          departmentId: dept,
+          status: "paused",
+          schedule: ALWAYS,
+          selfImprovement: true,
+        },
+      ],
+    });
+
+    expect(computeDueWork(paused, duringHours).jobs).toEqual([]);
   });
 });
