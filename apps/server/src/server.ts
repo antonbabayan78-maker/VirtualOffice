@@ -40,8 +40,13 @@ import {
   redactChannel,
   updateNotificationChannel,
   usageRecordOf,
+  acceptProposal,
+  applyProposal,
   createLlmService,
+  createProposal,
+  declineProposal,
   recordCorrection,
+  revertProposal,
   updateConnection,
   updateConnector,
   updateLlmService,
@@ -58,6 +63,7 @@ import {
   type ConnectorId,
   type Correction,
   type LlmService,
+  type ProposalId,
   type LlmServiceId,
   type UpdateLlmServiceInput,
   type NotificationChannelId,
@@ -80,9 +86,12 @@ import {
   BlobRunCheckpointStore,
   defaultWorkflowEngine,
   performCreateWork,
+  lookBackOver,
   whatIsWaiting,
   type HeldCall,
+  type ProposalDraft,
   type VoiceSample,
+  type WorkLookedAt,
   type RunCheckpoint,
   type WorkflowContext,
   type WorkflowEvent,
@@ -199,6 +208,14 @@ export interface ServerOptions {
    * can still write a card by hand.
    */
   readonly studyVoice?: (request: StudyRequest) => Promise<string>;
+  /**
+   * Reads one person's finished work and answers with a change worth proposing,
+   * or null when the record shows nothing worth changing.
+   *
+   * Injected like the other two, so this process opens no socket a test did not
+   * ask for. An office without it answers 501 and nothing proposes anything.
+   */
+  readonly reflectOnWork?: (looked: WorkLookedAt) => Promise<ProposalDraft | null>;
 }
 
 /** What a study is asked about: whose voice, what to read, and on whose model. */
@@ -280,6 +297,7 @@ export const OFFICE_PATHS: readonly string[] = [
   "/connections",
   "/connectors",
   "/services",
+  "/proposals",
   "/channels",
   "/documents",
 ];
@@ -849,6 +867,9 @@ export function buildServer(options: ServerOptions): FastifyInstance {
           ...(body["understudy"] === undefined
             ? {}
             : { understudy: recordedHere(body["understudy"], request) }),
+          ...(body["selfImprovement"] === undefined
+            ? {}
+            : { selfImprovement: body["selfImprovement"] }),
         },
         {
           department: { id: department.id, officeId: department.officeId },
@@ -1051,6 +1072,146 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     await store.employees.put(corrected.value);
     events.publish(employee.officeId, { kind: "employee.updated", id });
     return corrected.value;
+  });
+
+  /**
+   * Looking back over one person's finished work.
+   *
+   * The office reads what it already recorded — how often work went back, why,
+   * what it cost — and asks a model whether a change to how this person works
+   * would have prevented it. Nothing changes here: what comes back is written
+   * down as a proposal, and a person decides it.
+   *
+   * The same shape as studying a voice: an injected capability, 501 without
+   * one, 502 when the model refuses. Switched off is a refusal rather than an
+   * empty answer, because pressing the button on somebody who was never
+   * switched on should say so.
+   */
+  app.post("/employees/:id/retrospective", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const employee = await store.employees.get(id);
+    if (employee === null) return missing(reply, "employee");
+
+    if (!employee.selfImprovement) {
+      return fail(reply, [
+        {
+          path: "selfImprovement",
+          message: "this person is not switched on for self-improvement, so nothing looks at them",
+        },
+      ]);
+    }
+
+    const reflect = options.reflectOnWork;
+    if (reflect === undefined) {
+      return reply
+        .code(501)
+        .send({ error: "this office has no way to look back over somebody's work" });
+    }
+
+    const [tasks, usage, department] = await Promise.all([
+      store.tasks.list({ where: { officeId: employee.officeId }, limit: 200 }),
+      store.usage.list({ where: { officeId: employee.officeId }, limit: 500 }),
+      store.departments.get(employee.departmentId),
+    ]);
+
+    let draft: unknown;
+    try {
+      draft = await reflect(
+        lookBackOver(employee, tasks.items, usage.items, department?.definitionOfDone ?? []),
+      );
+    } catch (error) {
+      return reply
+        .code(502)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    // Nothing worth changing is a good answer, and the office says so rather
+    // than writing an empty proposal nobody can act on.
+    if (draft === null || draft === undefined) return { proposed: false };
+
+    const said = draft as Record<string, unknown>;
+    const proposal = createProposal(
+      {
+        officeId: employee.officeId,
+        employeeId: employee.id,
+        because: typeof said["because"] === "string" ? said["because"] : "",
+        changes: said["changes"],
+        evidence: said["evidence"],
+      },
+      { id: () => newId() as ProposalId, now },
+    );
+    if (isErr(proposal)) return fail(reply, proposal.error);
+
+    await store.proposals.put(proposal.value);
+    events.publish(employee.officeId, { kind: "proposal.made", id: proposal.value.id });
+    return reply.code(200).send(proposal.value);
+  });
+
+  app.get("/offices/:officeId/proposals", async (request, reply) => {
+    const { officeId } = request.params as { officeId: string };
+    if ((await store.offices.get(officeId)) === null) return missing(reply, "office");
+    const page = await store.proposals.list({
+      where: { officeId: officeId as OfficeId },
+      orderBy: { field: "madeAt", direction: "desc" },
+    });
+    return { items: page.items };
+  });
+
+  /**
+   * A person's answer: accept it, decline it, or put an accepted one back.
+   *
+   * Accepting is the only thing in this feature that changes anybody, and it
+   * happens here, in one place, through the same `updateEmployee` a person
+   * typing in the drawer goes through. Who decided is stamped from the token,
+   * as every other decision in this office is.
+   */
+  app.post("/proposals/:id/decision", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const proposal = await store.proposals.get(id);
+    if (proposal === null) return missing(reply, "proposal");
+
+    const body = request.body as Record<string, unknown>;
+    const decision = typeof body["decision"] === "string" ? body["decision"] : "";
+    const by = personOf(request);
+    const at = now();
+
+    const employee = await store.employees.get(proposal.employeeId);
+    if (employee === null) return missing(reply, "employee");
+
+    if (decision === "decline") {
+      const declined = declineProposal(proposal, by, at);
+      if (isErr(declined)) return fail(reply, declined.error);
+      await store.proposals.put(declined.value);
+      events.publish(proposal.officeId, { kind: "proposal.decided", id });
+      return declined.value;
+    }
+
+    if (decision === "accept") {
+      // The person first: a proposal marked accepted over an employee the
+      // office refused to change would be a record of something that did not
+      // happen.
+      const changed = applyProposal(employee, proposal);
+      if (isErr(changed)) return fail(reply, changed.error);
+      const accepted = acceptProposal(proposal, by, at);
+      if (isErr(accepted)) return fail(reply, accepted.error);
+
+      await store.employees.put(changed.value);
+      await store.proposals.put(accepted.value);
+      events.publish(proposal.officeId, { kind: "employee.updated", id: employee.id });
+      events.publish(proposal.officeId, { kind: "proposal.decided", id });
+      return accepted.value;
+    }
+
+    if (decision === "revert") {
+      const back = revertProposal(employee, proposal);
+      if (isErr(back)) return fail(reply, back.error);
+      await store.employees.put(back.value.employee);
+      await store.proposals.put(back.value.proposal);
+      events.publish(proposal.officeId, { kind: "employee.updated", id: employee.id });
+      events.publish(proposal.officeId, { kind: "proposal.decided", id });
+      return back.value.proposal;
+    }
+
+    return fail(reply, [{ path: "decision", message: "must be accept, decline or revert" }]);
   });
 
   /**

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { InMemoryBlobStore, InMemoryRelationalStore } from "@vo/storage";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import { OfficeEventLog } from "./events.js";
-import { buildServer, OFFICE_PATHS } from "./server.js";
+import type { ProposalDraft } from "@vo/orchestrator";
+import { buildServer, OFFICE_PATHS, type ServerOptions } from "./server.js";
 import { tokenVerifier } from "./auth.js";
 
 const TOKEN = "sk-owner";
@@ -4894,5 +4895,246 @@ describe("studying how a real person writes", () => {
     expect(
       (await post("/employees/nope/corrections", { before: "a", after: "b" })).statusCode,
     ).toBe(404);
+  });
+});
+
+describe("looking back over somebody's work, over the wire", () => {
+  const office = async (reflect?: ServerOptions["reflectOnWork"]) => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-10-04T09:00:00.000Z"),
+      ...(reflect === undefined ? {} : { reflectOnWork: reflect }),
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const hired = await post(`/offices/${officeId}/employees`, {
+      name: "Sam",
+      role: "Clerk",
+      color: "#00aa66",
+      department: departmentId,
+      llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      selfImprovement: true,
+    });
+    return { officeId, departmentId, id: hired.json<{ id: string }>().id };
+  };
+
+  const proposed = (employeeId: string): ProposalDraft => ({
+    employeeId,
+    because: "It went back twice for want of an order number.",
+    changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+    evidence: [{ taskId: "task-1", what: "went back twice" }],
+  });
+
+  it("writes down what the office proposed", async () => {
+    const { officeId, id } = await office((looked) =>
+      Promise.resolve(proposed(looked.employee.id)),
+    );
+
+    const answer = await post(`/employees/${id}/retrospective`, {});
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).toMatchObject({
+      employeeId: id,
+      status: "waiting",
+      because: "It went back twice for want of an order number.",
+    });
+    const listed = await get(`/offices/${officeId}/proposals`);
+    expect(listed.json<{ items: unknown[] }>().items).toHaveLength(1);
+  });
+
+  it("changes nobody by itself", async () => {
+    // The whole point of a proposal: it waits.
+    const { id } = await office((looked) => Promise.resolve(proposed(looked.employee.id)));
+
+    await post(`/employees/${id}/retrospective`, {});
+
+    expect(
+      (await get(`/employees/${id}`)).json<{ instructions: string | null }>().instructions,
+    ).toBeNull();
+  });
+
+  it("refuses to look at somebody who was never switched on", async () => {
+    const { officeId, departmentId } = await office(() => Promise.resolve(null));
+    const other = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Mal",
+        role: "Clerk",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+      })
+    ).json<{ id: string }>().id;
+
+    const refused = await post(`/employees/${other}/retrospective`, {});
+
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json<{ errors: { message: string }[] }>().errors[0]?.message).toMatch(
+      /switched on|self-improvement/i,
+    );
+  });
+
+  it("says nothing was proposed when the record is good", async () => {
+    const { officeId, id } = await office(() => Promise.resolve(null));
+
+    const answer = await post(`/employees/${id}/retrospective`, {});
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).toEqual({ proposed: false });
+    expect(
+      (await get(`/offices/${officeId}/proposals`)).json<{ items: unknown[] }>().items,
+    ).toEqual([]);
+  });
+
+  it("refuses a proposal that reaches past how somebody works", async () => {
+    // The office's own guardrail, applied to whatever came back from a model.
+    const { id } = await office((looked) =>
+      Promise.resolve({
+        ...proposed(looked.employee.id),
+        changes: [{ field: "toolGrants", before: [], after: [{ tool: "*" }] }],
+      } as never),
+    );
+
+    const refused = await post(`/employees/${id}/retrospective`, {});
+
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("says so when this office has no way to look back", async () => {
+    const { id } = await office();
+
+    expect((await post(`/employees/${id}/retrospective`, {})).statusCode).toBe(501);
+  });
+
+  it("says what went wrong, because somebody pressed a button", async () => {
+    const { id } = await office(() => Promise.reject(new Error("the model refused")));
+
+    const answer = await post(`/employees/${id}/retrospective`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(answer.json<{ error: string }>().error).toContain("the model refused");
+  });
+});
+
+describe("deciding a proposal", () => {
+  const office = async () => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-10-04T09:00:00.000Z"),
+      reflectOnWork: (looked) =>
+        Promise.resolve<ProposalDraft>({
+          employeeId: looked.employee.id,
+          because: "It went back twice.",
+          changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+          evidence: [{ taskId: "task-1", what: "went back twice" }],
+        }),
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const departmentId = await aDepartment(officeId);
+    const employeeId = (
+      await post(`/offices/${officeId}/employees`, {
+        name: "Sam",
+        role: "Clerk",
+        color: "#00aa66",
+        department: departmentId,
+        llm: { provider: "anthropic", model: "claude-sonnet-5" },
+        selfImprovement: true,
+      })
+    ).json<{ id: string }>().id;
+    const proposalId = (await post(`/employees/${employeeId}/retrospective`, {})).json<{
+      id: string;
+    }>().id;
+    return { officeId, employeeId, proposalId };
+  };
+
+  it("accepts it, and that is when the person changes", async () => {
+    const { employeeId, proposalId } = await office();
+
+    const accepted = await post(`/proposals/${proposalId}/decision`, { decision: "accept" });
+
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ status: "accepted", decidedBy: "owner-1" });
+    expect(
+      (await get(`/employees/${employeeId}`)).json<{ instructions: string }>().instructions,
+    ).toBe("Check the order number.");
+  });
+
+  it("stamps who decided from the token, never from the body", async () => {
+    const { proposalId } = await office();
+
+    const accepted = await post(`/proposals/${proposalId}/decision`, {
+      decision: "accept",
+      decidedBy: "somebody-else",
+    });
+
+    expect(accepted.json<{ decidedBy: string }>().decidedBy).toBe("owner-1");
+  });
+
+  it("declines it, and changes nobody", async () => {
+    const { employeeId, proposalId } = await office();
+
+    const declined = await post(`/proposals/${proposalId}/decision`, { decision: "decline" });
+
+    expect(declined.json()).toMatchObject({ status: "declined" });
+    expect(
+      (await get(`/employees/${employeeId}`)).json<{ instructions: string | null }>().instructions,
+    ).toBeNull();
+  });
+
+  it("puts an accepted one back in one press", async () => {
+    const { employeeId, proposalId } = await office();
+    await post(`/proposals/${proposalId}/decision`, { decision: "accept" });
+
+    const back = await post(`/proposals/${proposalId}/decision`, { decision: "revert" });
+
+    expect(back.json()).toMatchObject({ status: "reverted" });
+    expect(
+      (await get(`/employees/${employeeId}`)).json<{ instructions: string | null }>().instructions,
+    ).toBeNull();
+  });
+
+  it("refuses to put one back over something somebody has since written", async () => {
+    const { employeeId, proposalId } = await office();
+    await post(`/proposals/${proposalId}/decision`, { decision: "accept" });
+    await patch(`/employees/${employeeId}`, { instructions: "I rewrote this myself." });
+
+    const refused = await post(`/proposals/${proposalId}/decision`, { decision: "revert" });
+
+    expect(refused.statusCode).toBe(400);
+    expect(
+      (await get(`/employees/${employeeId}`)).json<{ instructions: string }>().instructions,
+    ).toBe("I rewrote this myself.");
+  });
+
+  it("refuses a second decision about the same one", async () => {
+    const { proposalId } = await office();
+    await post(`/proposals/${proposalId}/decision`, { decision: "decline" });
+
+    expect(
+      (await post(`/proposals/${proposalId}/decision`, { decision: "accept" })).statusCode,
+    ).toBe(400);
+  });
+
+  it("refuses a decision nobody could act on", async () => {
+    const { proposalId } = await office();
+
+    expect(
+      (await post(`/proposals/${proposalId}/decision`, { decision: "maybe" })).statusCode,
+    ).toBe(400);
+  });
+
+  it("has nothing to say about a proposal it does not have", async () => {
+    await office();
+
+    expect((await post("/proposals/nope/decision", { decision: "accept" })).statusCode).toBe(404);
   });
 });

@@ -17,8 +17,13 @@
  */
 import { BlobSecretRecordStore, envKeySource, officeBroker, Vault } from "@vo/connectors";
 import type { OfficeId } from "@vo/core";
-import { createAnthropicProvider, openAiCompatibleProvider, providersFor } from "@vo/llm";
-import { studyPrompt } from "@vo/orchestrator";
+import {
+  createAnthropicProvider,
+  openAiCompatibleProvider,
+  providersFor,
+  type LlmProvider,
+} from "@vo/llm";
+import { llmRetrospectiveTurn, studyPrompt } from "@vo/orchestrator";
 import { openStorage, type Storage } from "@vo/storage";
 import type { ServerConfig } from "./config.js";
 import { buildServer } from "./server.js";
@@ -26,12 +31,14 @@ import { officeNotifier } from "./office-notifier.js";
 import { tokenVerifier } from "./auth.js";
 
 /**
- * What a study is asked of, when the office's own service does not name one.
+ * What the office's own questions are asked of, when a service does not name
+ * one.
  *
- * A study is one call over a handful of documents, so the cheaper model is the
- * right default; an office that wants another points a service at it.
+ * These are one call over a handful of documents or a short record, so the
+ * cheaper model is the right default; an office that wants another points a
+ * service at it.
  */
-const STUDY_MODEL = "claude-sonnet-5";
+const FALLBACK_MODEL = "claude-sonnet-5";
 
 export interface StartedServer {
   /** Where it is actually listening; the port may have been chosen for it. */
@@ -102,6 +109,47 @@ export async function startServer(
     };
   })();
 
+  /**
+   * The model to ask, for the office's own one-off questions.
+   *
+   * The employee's own service where the office has one, so a question about
+   * somebody runs where their work runs — an office pointed at a model in its
+   * own network keeps it there. Otherwise `ANTHROPIC_API_KEY`, which is what
+   * most deployments run on; with neither there is nothing to ask and the route
+   * says so rather than inventing an answer.
+   */
+  const modelFor = async (
+    officeId: string,
+    llm: { readonly provider: string; readonly model: string },
+  ): Promise<{ provider: LlmProvider; model: string }> => {
+    const services = await storage.relational.services.list({
+      where: { officeId: officeId as OfficeId },
+    });
+    const providers = await providersFor(services.items, {
+      env: process.env,
+      ...(keeper === undefined
+        ? {}
+        : {
+            secret: async (ref) => {
+              try {
+                return await keeper.get(ref);
+              } catch {
+                return null;
+              }
+            },
+          }),
+    });
+    const named = providers.get(llm.provider) ?? null;
+    const key = process.env["ANTHROPIC_API_KEY"];
+    const provider = named ?? (key === undefined ? null : createAnthropicProvider({ apiKey: key }));
+    if (provider === null) {
+      throw new Error("this office has no model for that: add a service, or set ANTHROPIC_API_KEY");
+    }
+    // Their own model where it is their own service; the fallback knows nothing
+    // of a model named for somebody else's.
+    return { provider, model: named === null ? FALLBACK_MODEL : llm.model };
+  };
+
   const app = buildServer({
     store: storage.relational,
     blobs: storage.blobs,
@@ -159,40 +207,10 @@ export async function startServer(
      */
     studyVoice: async ({ officeId, person, samples, corrections, llm }) => {
       const { system, message } = studyPrompt(person, samples, corrections);
-      const services = await storage.relational.services.list({
-        where: { officeId: officeId as OfficeId },
-      });
-      const providers = await providersFor(services.items, {
-        env: process.env,
-        ...(keeper === undefined
-          ? {}
-          : {
-              secret: async (ref) => {
-                try {
-                  return await keeper.get(ref);
-                } catch {
-                  return null;
-                }
-              },
-            }),
-      });
-      // The employee's own service, so a study runs where their work runs — an
-      // office pointed at a model in its own network studies on that model and
-      // the writing never leaves the building.
-      const named = providers.get(llm.provider) ?? null;
-      const key = process.env["ANTHROPIC_API_KEY"];
-      const provider =
-        named ?? (key === undefined ? null : createAnthropicProvider({ apiKey: key }));
-      if (provider === null) {
-        throw new Error(
-          "this office has no model to study with: add a service, or set ANTHROPIC_API_KEY",
-        );
-      }
+      const { provider, model } = await modelFor(officeId, llm);
 
       const answer = await provider.complete({
-        // Their own model where it is their own service; the fallback knows
-        // nothing of a model named for somebody else's.
-        model: named === null ? STUDY_MODEL : llm.model,
+        model,
         system,
         messages: [{ role: "user", content: [{ type: "text", text: message }] }],
         maxOutputTokens: 1_500,
@@ -202,6 +220,16 @@ export async function startServer(
         .map((block) => block.text)
         .join("\n")
         .trim();
+    },
+    /**
+     * Looking back over one person's work, on the model that does that work.
+     *
+     * The words and the reading of the record are the orchestrator's; this is
+     * the provider and the wire, exactly as studying a voice is.
+     */
+    reflectOnWork: async (looked) => {
+      const { provider } = await modelFor(looked.officeId, looked.employee.llm);
+      return llmRetrospectiveTurn({ provider })(looked);
     },
     allowedOrigins: config.allowedOrigins,
     // Served from the office's own origin when a deployment has one, which is
