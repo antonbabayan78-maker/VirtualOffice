@@ -20,6 +20,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { Task, TaskId, TaskStatus } from "@vo/core";
 import type { OfficeStore } from "../office/office-store.js";
 import { Field, inputClass } from "../ui/field.js";
+import { voiceOf } from "../office/voice.js";
 import { SAID, TaskDetail } from "./TaskDetail.js";
 
 /** The lanes, in the order work moves along them. */
@@ -85,7 +86,12 @@ function Card({
     >
       <span className="truncate text-[11px] text-ink">{task.title}</span>
       <span className="flex items-baseline gap-1.5 text-[10px] text-ink-muted">
-        <span className="min-w-0 truncate">{holder?.name ?? "nobody"}</span>
+        <span className="min-w-0 truncate">
+          {holder?.name ?? "nobody"}
+          {/* Said on the card as well as in the drawer: an office where you
+              cannot tell at a glance is an office nobody can trust. */}
+          {voiceOf(holder) !== null && ` as ${voiceOf(holder) ?? ""}`}
+        </span>
         {task.priority !== "normal" && (
           <span className="shrink-0 rounded bg-surface-muted px-1">{task.priority}</span>
         )}

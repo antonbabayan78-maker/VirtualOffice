@@ -489,3 +489,119 @@ describe("handing work to somebody else", () => {
     expect(within(detail()).queryByLabelText(/hand it to/i)).toBeNull();
   });
 });
+
+describe("work done in somebody else's voice", () => {
+  const standingIn = (employee: Employee): Employee => ({
+    ...employee,
+    understudy: {
+      person: "Anna Petrova",
+      recordedBy: "owner-1",
+      recordedAt: at,
+      enabled: true,
+      card: "Opens with the first name.",
+      cardMadeAt: at,
+      cardFromSamples: 3,
+      corrections: [],
+    },
+  });
+
+  const openWithVoice = (
+    tasks: readonly Task[],
+    documents: readonly Document[] = [],
+    answers: Record<string, unknown> = {},
+  ) => {
+    cleanup();
+    asked = [];
+    store = createOfficeStore({
+      storage: { readLayout: () => null, writeLayout: () => undefined },
+      id: () => "new",
+      now: () => later,
+    });
+    store.getState().load([post, design], [standingIn(ada), grace, iris], tasks);
+    store.getState().loadDocuments(documents);
+    store.getState().connect({
+      recordCorrection: (id: string, correction: Record<string, unknown>) => {
+        asked.push({ what: "correction", body: { id, correction } });
+        return Promise.resolve(answers["correction"] ?? { ok: true, value: standingIn(ada) });
+      },
+      downloadDocument: () =>
+        Promise.resolve({
+          ok: true,
+          value: new TextEncoder().encode("Dear Sir or Madam, your parcel is delayed."),
+        }),
+    } as never);
+    return render(<TasksScreen store={store} />);
+  };
+
+  const draft = (): Document =>
+    ({
+      id: "doc-1" as never,
+      officeId,
+      ownerKind: "task",
+      ownerId: "task-1",
+      tray: "out",
+      name: "reply.txt",
+      mediaType: "text/plain",
+      size: 40,
+      blobRef: "blob-1",
+      addedBy: ada.id,
+      addedAt: later,
+    }) as unknown as Document;
+
+  it("says whose voice it is in, on the card", () => {
+    // An office where you cannot tell is an office nobody can trust.
+    openWithVoice([work({ id: "task-1", status: "in_progress", assigneeId: ada.id })]);
+
+    expect(board()).toHaveTextContent(/Anna Petrova/);
+  });
+
+  it("says it again where the work is read", async () => {
+    openWithVoice([work({ id: "task-1", status: "in_progress", assigneeId: ada.id })]);
+
+    await openCard(/tell the customer/i);
+
+    expect(detail()).toHaveTextContent(/in Anna Petrova's voice/i);
+  });
+
+  it("says nothing about a voice for somebody who writes as themselves", async () => {
+    open([work({ id: "task-1", status: "in_progress", assigneeId: grace.id })]);
+
+    await openCard(/tell the customer/i);
+
+    expect(detail()).not.toHaveTextContent(/voice/i);
+  });
+
+  it("offers the real person a way to say what it should have said", async () => {
+    openWithVoice([work({ id: "task-1", status: "in_review", assigneeId: ada.id })], [draft()]);
+
+    const user = await openCard(/tell the customer/i);
+    await user.click(within(detail()).getByRole("button", { name: /correct reply.txt/i }));
+    const field = within(detail()).getByLabelText("What it should have said");
+    await user.clear(field);
+    await user.type(field, "Hi Tom, sorted.");
+    await user.click(within(detail()).getByRole("button", { name: "Keep the correction" }));
+
+    expect(asked[0]).toMatchObject({
+      what: "correction",
+      body: {
+        id: ada.id,
+        correction: {
+          // Both halves: what the office wrote, and what the person made it say.
+          before: "Dear Sir or Madam, your parcel is delayed.",
+          after: "Hi Tom, sorted.",
+          taskId: "task-1",
+        },
+      },
+    });
+  });
+
+  it("offers nothing to correct on work nobody wrote in a voice", async () => {
+    open([work({ id: "task-1", status: "in_review", assigneeId: grace.id })], {
+      documents: [draft()],
+    });
+
+    await openCard(/tell the customer/i);
+
+    expect(within(detail()).queryByRole("button", { name: /correct/i })).toBeNull();
+  });
+});

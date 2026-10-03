@@ -29,6 +29,7 @@ import { BudgetField } from "./BudgetField.js";
 import { Produced } from "./Produced.js";
 import { RunSwitch } from "./RunSwitch.js";
 import { Teaching } from "./Teaching.js";
+import { Understudy, voiceChangeOf, voiceDraftOf, type VoiceDraft } from "./Understudy.js";
 import { Tray } from "./Tray.js";
 
 interface ModelRef {
@@ -55,6 +56,7 @@ interface Draft {
   readonly skills: string;
   readonly instructions: string;
   readonly examples: readonly WorkExample[];
+  readonly voice: VoiceDraft;
   readonly supervisorId: string;
   readonly workspace: string;
   readonly priority: TaskPriority;
@@ -90,6 +92,7 @@ function draftOf(employee: Employee): Draft {
     skills: employee.skillIds.join(", "),
     instructions: employee.instructions ?? "",
     examples: employee.examples,
+    voice: voiceDraftOf(employee),
     supervisorId: employee.supervisorId ?? "",
     workspace: employee.workspaceRef ?? "",
     priority: employee.priority,
@@ -172,6 +175,7 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         // here would be the same rule in two places.
         instructions: draft.instructions,
         examples: draft.examples,
+        ...voiceChangeOf(draft.voice, employee),
         supervisorId: draft.supervisorId.length === 0 ? null : draft.supervisorId,
         workspaceRef: draft.workspace.trim().length === 0 ? null : draft.workspace.trim(),
         toolGrants: draft.toolGrants,
@@ -327,6 +331,15 @@ export function EmployeeDrawer({ store }: { readonly store: OfficeStore }): Reac
         examples={draft.examples}
         onChange={(changes) => {
           edit(changes);
+        }}
+      />
+
+      <Understudy
+        store={store}
+        employee={employee}
+        draft={draft.voice}
+        onChange={(changes) => {
+          edit({ voice: { ...draft.voice, ...changes } });
         }}
       />
 

@@ -29,6 +29,7 @@ import { readableSpend, readableTime, readableTokens, spendOf, tokensOf } from "
 import { Button } from "../ui/button.js";
 import { Field, Problems, inputClass } from "../ui/field.js";
 import { readableSize } from "../canvas/Tray.js";
+import { inTheirVoice, voiceOf } from "../office/voice.js";
 
 /** A status as somebody says it out loud. */
 export const SAID: Readonly<Record<string, string>> = {
@@ -83,27 +84,135 @@ function History({
   );
 }
 
+/**
+ * What the real person says it should have said.
+ *
+ * Offered only on work written in somebody's voice, and only to whoever is at
+ * the canvas — which is the person themselves or the owner acting for them. The
+ * before and after are worth more to the next study than another twenty
+ * samples, and this is the one moment both halves exist in the same place.
+ */
+function Correct({
+  store,
+  employee,
+  document,
+  task,
+}: {
+  readonly store: OfficeStore;
+  readonly employee: Employee;
+  readonly document: Document;
+  readonly task: Task;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const [said, setSaid] = useState("");
+  const [problems, setProblems] = useState<readonly ValidationError[]>([]);
+
+  const start = (): void => {
+    setOpen(true);
+    // The draft itself, so the correction is an edit of what was written rather
+    // than a rewrite from memory.
+    void store
+      .getState()
+      .fetchBody(document.id)
+      .then((body) => {
+        if (body !== null) setSaid(new TextDecoder().decode(body));
+      });
+  };
+
+  const keep = (): void => {
+    void store
+      .getState()
+      .fetchBody(document.id)
+      .then(async (body) => {
+        const before = body === null ? "" : new TextDecoder().decode(body);
+        const result = await store
+          .getState()
+          .recordCorrection(employee.id, { before, after: said, taskId: task.id });
+        setProblems(result.ok ? [] : result.problems);
+        if (result.ok) setOpen(false);
+      });
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        aria-label={`Correct ${document.name}`}
+        className="shrink-0 text-[10px] text-ink-muted hover:text-ink"
+        onClick={start}
+      >
+        Correct
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <Field label="What it should have said">
+        <textarea
+          className={`${inputClass} min-h-24 resize-y`}
+          value={said}
+          onChange={(event) => {
+            setSaid(event.target.value);
+          }}
+        />
+      </Field>
+      <div className="flex items-center gap-2">
+        <Button aria-label="Keep the correction" disabled={said.trim().length === 0} onClick={keep}>
+          Keep the correction
+        </Button>
+        <button
+          type="button"
+          className="text-[10px] text-ink-muted hover:text-ink"
+          onClick={() => {
+            setOpen(false);
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      <p className="text-[10px] text-ink-muted">
+        Kept with what the office wrote, and read the next time it studies this voice.
+      </p>
+      <Problems problems={problems} />
+    </div>
+  );
+}
+
 function Produced({
+  store,
   task,
   documents,
+  holder,
 }: {
+  readonly store: OfficeStore;
   readonly task: Task;
   readonly documents: readonly Document[];
+  readonly holder: Employee | undefined;
 }): ReactNode {
   const produced = documents.filter(
     (document) =>
       document.ownerKind === "task" && document.ownerId === task.id && document.tray === "out",
   );
   if (produced.length === 0 && task.artifacts.length === 0) return null;
+  const voice = voiceOf(holder);
 
   return (
     <section className="flex flex-col gap-1">
-      <h3 className="text-[11px] font-medium text-ink">What it produced</h3>
+      <h3 className="text-[11px] font-medium text-ink">
+        What it produced{voice === null ? "" : `, ${inTheirVoice(holder) ?? ""}`}
+      </h3>
       <ul className="flex flex-col gap-0.5">
         {produced.map((document) => (
-          <li key={document.id} className="flex items-baseline gap-2 text-[11px] text-ink">
+          <li
+            key={document.id}
+            className="flex flex-wrap items-baseline gap-2 text-[11px] text-ink"
+          >
             <span className="min-w-0 truncate">{document.name}</span>
             <span className="ml-auto shrink-0 text-ink-muted">{readableSize(document.size)}</span>
+            {voice !== null && holder !== undefined && (
+              <Correct store={store} employee={holder} document={document} task={task} />
+            )}
           </li>
         ))}
         {task.artifacts.map((artifact) => (
@@ -340,6 +449,9 @@ export function TaskDetail({
             {SAID[task.status] ?? task.status} · {holder?.name ?? "nobody"} ·{" "}
             {department?.name ?? task.departmentId}
           </span>
+          {inTheirVoice(holder) !== null && (
+            <span className="text-[11px] text-ink">{inTheirVoice(holder)}</span>
+          )}
         </div>
         <button
           type="button"
@@ -355,7 +467,7 @@ export function TaskDetail({
 
       <Criteria store={store} task={task} department={department} onProblem={setProblems} />
       <Cost task={task} usage={usage} />
-      <Produced task={task} documents={documents} />
+      <Produced store={store} task={task} documents={documents} holder={holder} />
       <History task={task} people={people} />
       <HandOver store={store} task={task} people={people} onProblem={setProblems} />
 

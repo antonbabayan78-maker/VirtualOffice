@@ -1741,3 +1741,107 @@ describe("the AI services an office can reach, on the canvas", () => {
     expect((await store.getState().discoverServiceModels("nope" as never)).ok).toBe(false);
   });
 });
+
+describe("standing in for a real person, from the canvas", () => {
+  const acmeOffice = {
+    id: officeId,
+    name: "Acme",
+    schedule: { kind: "always" as const },
+    priority: "normal" as const,
+    runState: "running" as const,
+    budget: null,
+    configVersion: 1,
+    createdAt: new Date("2026-09-28T09:00:00Z"),
+  };
+
+  const taught = (employee: Employee): Employee => ({
+    ...employee,
+    understudy: {
+      person: "Anna Petrova",
+      recordedBy: "owner-1",
+      recordedAt: new Date("2026-09-28T09:00:00Z"),
+      enabled: true,
+      card: "Opens with the first name.",
+      cardMadeAt: new Date("2026-09-28T09:00:00Z"),
+      cardFromSamples: 3,
+      corrections: [],
+    },
+  });
+
+  function spyApi(answers: Record<string, unknown> = {}) {
+    const sent: { what: string; body: unknown }[] = [];
+    return {
+      sent,
+      api: {
+        studyVoice: (id: string) => {
+          sent.push({ what: "study", body: id });
+          return Promise.resolve(answers["study"] ?? { ok: true, value: taught(ada) });
+        },
+        recordCorrection: (id: string, correction: Record<string, unknown>) => {
+          sent.push({ what: "correction", body: { id, correction } });
+          return Promise.resolve(answers["correction"] ?? { ok: true, value: taught(ada) });
+        },
+        patchEmployee: (id: string, changes: Record<string, unknown>) => {
+          sent.push({ what: "patch", body: { id, changes } });
+          return Promise.resolve(answers["patch"] ?? { ok: true, value: { ...ada, ...changes } });
+        },
+      } as never,
+    };
+  }
+
+  const connected = (answers: Record<string, unknown> = {}) => {
+    open([eng], [ada]);
+    store.getState().loadOffice(acmeOffice);
+    const spy = spyApi(answers);
+    store.getState().connect(spy.api);
+    return spy;
+  };
+
+  it("asks the office to study them and keeps what it answered", async () => {
+    const spy = connected();
+
+    const result = await store.getState().studyVoice(ada.id);
+
+    expect(result.ok).toBe(true);
+    expect(spy.sent[0]).toEqual({ what: "study", body: ada.id });
+    expect(store.getState().employees.find((one) => one.id === ada.id)?.understudy?.card).toBe(
+      "Opens with the first name.",
+    );
+  });
+
+  it("says why a study could not happen, because somebody pressed a button", async () => {
+    const spy = connected({
+      study: { ok: false, kind: "transport", message: "this office has no model to study with" },
+    });
+
+    const result = await store.getState().studyVoice(ada.id);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.problems[0]?.message).toMatch(/no model to study with/);
+    expect(spy.sent).toHaveLength(1);
+  });
+
+  it("records what the real person changed", async () => {
+    const spy = connected();
+
+    await store.getState().recordCorrection(ada.id, {
+      before: "Dear Sir,",
+      after: "Hi Tom,",
+      taskId: "task-1",
+    });
+
+    expect(spy.sent[0]).toEqual({
+      what: "correction",
+      body: { id: ada.id, correction: { before: "Dear Sir,", after: "Hi Tom,", taskId: "task-1" } },
+    });
+  });
+
+  it("does nothing for somebody it does not have", async () => {
+    connected();
+
+    expect((await store.getState().studyVoice("nope" as never)).ok).toBe(false);
+    expect(
+      (await store.getState().recordCorrection("nope" as never, { before: "a", after: "b" })).ok,
+    ).toBe(false);
+  });
+});
