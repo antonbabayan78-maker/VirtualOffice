@@ -40,7 +40,6 @@ describe("telling a worker which office to work for", () => {
         "VO_API_URL",
         "VO_API_TOKEN",
         "VO_OFFICE_ID",
-        "ANTHROPIC_API_KEY",
       ]);
     } else {
       throw new Error("expected an empty environment to be refused");
@@ -61,10 +60,14 @@ describe("telling a worker which office to work for", () => {
     expect(unwrap(readWorkerConfig(complete)).dryRun).toBe(false);
   });
 
-  it("refuses to run for real with no key, rather than failing on the first job", () => {
-    const result = readWorkerConfig({ ...complete, ANTHROPIC_API_KEY: undefined });
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) expect(result.error[0]?.message).toMatch(/ANTHROPIC_API_KEY|VO_DRY_RUN/);
+  it("starts with no key, because the office may have services of its own", () => {
+    // An office whose people are all on a model in its own network needs
+    // nothing from Anthropic, and a worker that refused to start for the want
+    // of a key it would never use could not serve that office at all.
+    const config = unwrap(readWorkerConfig({ ...complete, ANTHROPIC_API_KEY: undefined }));
+
+    expect(config.apiKey).toBeUndefined();
+    expect(config.dryRun).toBe(false);
   });
 
   it("accepts a real run when it has a key", () => {

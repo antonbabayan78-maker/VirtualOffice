@@ -131,3 +131,26 @@ export class FakeLlmProvider implements LlmProvider {
     yield* streamFromResponse(response, this.chunkSize);
   }
 }
+
+/**
+ * Stands in for a provider this process could not build, and says so when asked.
+ *
+ * Refusing at the start would stop an office whose people are all on services
+ * of its own: a model in its own network needs no key from anybody, and a
+ * process that would never call the missing one should not be held up for it.
+ * This is the honest middle — the office runs, and the one turn that actually
+ * needs the missing key fails with the reason rather than with a shrug.
+ *
+ * Not the rehearsal provider, which answers plausibly without calling anything:
+ * that would make an office look like it was working when it was not.
+ */
+export function unavailableProvider(id: string, reason: string): LlmProvider {
+  const refuse = (): never => {
+    throw new LlmProviderError("auth", reason);
+  };
+  return {
+    id,
+    complete: () => Promise.reject(new LlmProviderError("auth", reason)),
+    stream: refuse,
+  };
+}

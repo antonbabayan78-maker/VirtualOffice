@@ -1,3 +1,4 @@
+set -e
 pnpm lint-staged
 pnpm tdd-guard
 pnpm typecheck
