@@ -539,6 +539,10 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     if (quiet && !(await answerGates())) break;
   }
 
+  // A connector can be a process, and a run that leaves one behind leaves one
+  // behind per run — which is how somebody running `vo run` in a loop finds out.
+  await broker.close();
+
   const finished = [...tasks.values()];
   const rows = await store.documents.list({ orderBy: { field: "id", direction: "asc" } });
   const produced = await Promise.all(rows.items.map((row) => readDocument(trays, row.id)));

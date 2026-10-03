@@ -54,10 +54,21 @@ function brokerFor(connector: Connector, options: OfficeBrokerOptions): ToolBrok
   return null;
 }
 
+/**
+ * An office's broker, which can be put away.
+ *
+ * `close` matters because a connector can be a process. Whoever builds one of
+ * these is responsible for closing it when the office it was built from has
+ * changed — otherwise every rebuild leaves a server running.
+ */
+export interface OfficeToolBroker extends ToolBroker {
+  close(): Promise<void>;
+}
+
 export function officeBroker(
   connectors: readonly Connector[],
   options: OfficeBrokerOptions = {},
-): ToolBroker {
+): OfficeToolBroker {
   const byName = new Map<string, ToolBroker>();
   for (const connector of connectors) {
     if (!connector.enabled) continue;
@@ -78,6 +89,15 @@ export function officeBroker(
         return Promise.reject(new Error(`this office has no connector for "${call.name}"`));
       }
       return broker.call(call);
+    },
+
+    async close(): Promise<void> {
+      await Promise.all(
+        [...byName.values()].map(async (broker) => {
+          const closable = broker as Partial<OfficeToolBroker>;
+          await closable.close?.();
+        }),
+      );
     },
   };
 }
