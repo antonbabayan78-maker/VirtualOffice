@@ -49,6 +49,7 @@ import {
   updateDepartment,
   updateEmployee,
   type ConnectionId,
+  type Connector,
   type ConnectorId,
   type NotificationChannelId,
   type Office,
@@ -137,6 +138,17 @@ export interface ServerOptions {
     readonly subject: string;
     readonly body: string;
   }) => Promise<void>;
+  /**
+   * Asks one connector what tools it offers, so the office can write the names
+   * down and the canvas can grant them.
+   *
+   * Injected for the same two reasons the notifier is: this process has no idea
+   * what an MCP server is, and no test may spawn one or open a socket by
+   * accident. The deployment's entry point supplies the real one, which is the
+   * same broker the worker calls tools through. An office without it answers
+   * 501 rather than pretending a connector offers nothing.
+   */
+  readonly discoverTools?: (connector: Connector) => Promise<readonly string[]>;
 }
 
 /** The events a task may be given; anything else is a client mistake, not a 500. */
@@ -1541,6 +1553,53 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
     const siblings = await connectorsIn(connector.officeId);
     const updated = updateConnector(connector, request.body as Record<string, never>, siblings);
+    if (isErr(updated)) return fail(reply, updated.error);
+    await store.connectors.put(updated.value);
+    events.publish(connector.officeId, { kind: "connector.updated", id });
+    return updated.value;
+  });
+
+  /**
+   * What this connector actually offers, asked of the connector itself.
+   *
+   * An MCP server reports its own tools, so `TOOLS_BY_KIND` cannot know them
+   * and the office would otherwise have to be told by hand — a tool name typed
+   * wrong is a grant that silently grants nothing. The names are written onto
+   * the connector, which is what the grant checkboxes on the drawers read.
+   *
+   * An empty answer is refused rather than saved. A server that is up but
+   * confused would otherwise empty the list and with it every grant that names
+   * a tool, which is a lot of damage for one button.
+   */
+  app.post("/connectors/:id/discover", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const connector = await store.connectors.get(id);
+    if (connector === null) return missing(reply, "connector");
+
+    const discover = options.discoverTools;
+    if (discover === undefined) {
+      return reply
+        .code(501)
+        .send({ error: "this office has no way to ask a connector what it offers" });
+    }
+
+    let offered: readonly string[];
+    try {
+      offered = await discover(connector);
+    } catch (error) {
+      return reply
+        .code(502)
+        .send({ error: error instanceof Error ? error.message : String(error) });
+    }
+    if (offered.length === 0) {
+      return reply.code(502).send({
+        error: `${connector.name} offered no tools, so nothing was changed`,
+        current: connector,
+      });
+    }
+
+    const siblings = await connectorsIn(connector.officeId);
+    const updated = updateConnector(connector, { tools: offered }, siblings);
     if (isErr(updated)) return fail(reply, updated.error);
     await store.connectors.put(updated.value);
     events.publish(connector.officeId, { kind: "connector.updated", id });

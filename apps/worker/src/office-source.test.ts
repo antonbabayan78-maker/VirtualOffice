@@ -61,6 +61,7 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     createConnector: () => Promise.reject(new Error("not used here")),
     patchConnector: () => Promise.reject(new Error("not used here")),
     deleteConnector: () => Promise.reject(new Error("not used here")),
+    discoverConnectorTools: () => Promise.reject(new Error("not used here")),
     setOfficeRunState: () => Promise.reject(new Error("not used here")),
     setDepartmentRunState: () => Promise.reject(new Error("not used here")),
     setEmployeeStatus: () => Promise.reject(new Error("not used here")),

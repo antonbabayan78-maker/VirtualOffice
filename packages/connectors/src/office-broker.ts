@@ -27,6 +27,8 @@ export interface OfficeBrokerOptions {
   readonly connect?: McpConnect;
   /** Where a credential named by a connector is read from. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Told why a connector is offering nothing, rather than it being silent. */
+  readonly onProblem?: (message: string) => void;
 }
 
 function brokerFor(connector: Connector, options: OfficeBrokerOptions): ToolBroker | null {
@@ -46,6 +48,7 @@ function brokerFor(connector: Connector, options: OfficeBrokerOptions): ToolBrok
       ...(options.connect === undefined ? {} : { connect: options.connect }),
       ...(options.env === undefined ? {} : { env: options.env }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.onProblem === undefined ? {} : { onProblem: options.onProblem }),
     });
   }
   return null;

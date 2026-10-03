@@ -59,6 +59,7 @@ function scriptedApi(): Scripted {
     createConnector: unused,
     patchConnector: unused,
     deleteConnector: unused,
+    discoverConnectorTools: unused,
     setOfficeRunState: unused,
     setDepartmentRunState: unused,
     setEmployeeStatus: unused,

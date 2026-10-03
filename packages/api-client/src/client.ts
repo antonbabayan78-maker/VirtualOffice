@@ -106,6 +106,12 @@ export interface ApiClient {
   ): Promise<ApiResult<Connector>>;
   deleteConnector(id: string): Promise<ApiResult<true>>;
   /**
+   * Asks a connector what tools it offers and gets back the connector with the
+   * names written down. An MCP server reports its own tools, so this is how
+   * they become grantable without anybody typing them.
+   */
+  discoverConnectorTools(id: string): Promise<ApiResult<Connector>>;
+  /**
    * The switch: stopping work, and starting it again. Separate from `patch*`
    * because stopping an office is not editing one, and because an instruction
    * that states a destination has nothing to conflict with — so these carry no
@@ -426,10 +432,17 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     }
     if (response.status === 401) return { ok: false, kind: "unauthorized" };
     if (response.status >= 300 || body === null) {
+      // The office says what went wrong in `error`; a status on its own tells
+      // whoever asked nothing they can act on, which matters most for the
+      // routes a person triggers by hand.
+      const said = body?.["error"];
       return {
         ok: false,
         kind: "transport",
-        message: `the office answered ${String(response.status)}`,
+        message:
+          typeof said === "string" && said.length > 0
+            ? said
+            : `the office answered ${String(response.status)}`,
       };
     }
     return { ok: true, value: revive(body) };
@@ -559,6 +572,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       patch(`/connectors/${id}`, changes, sinceOffset, reviveConnector),
 
     deleteConnector: async (id) => nothing(await call(`/connectors/${id}`, { method: "DELETE" })),
+
+    discoverConnectorTools: async (id) =>
+      interpret(await call(`/connectors/${id}/discover`, { method: "POST" }), reviveConnector),
 
     setOfficeRunState: async (id, runState) =>
       interpret(await put(`/offices/${id}/run-state`, { runState }), reviveOffice),

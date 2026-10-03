@@ -1880,6 +1880,105 @@ describe("work crossing a department taking its documents with it", () => {
   });
 });
 
+describe("asking a connector what it offers", () => {
+  /** What the office holds for one connector, read the way the canvas reads it. */
+  const toolsOf = async (officeId: string, id: string): Promise<readonly string[]> => {
+    const listed = await get(`/offices/${officeId}/connectors`);
+    const items = listed.json<{ items: { id: string; tools: string[] }[] }>().items;
+    return items.find((one) => one.id === id)?.tools ?? [];
+  };
+
+  /**
+   * A server built with a scripted discoverer, so no test opens a socket or
+   * spawns anything — the same arrangement as the notifier.
+   */
+  const office = async (
+    discover?: (connector: { readonly name: string }) => Promise<readonly string[]>,
+  ) => {
+    events = new OfficeEventLog({ now: () => 1_700_000_000_000 });
+    server = buildServer({
+      store: new InMemoryRelationalStore(),
+      events,
+      verifyToken: tokenVerifier({ [TOKEN]: { ownerId: "owner-1" } }),
+      id: () => `id-${String(++ids)}`,
+      now: () => new Date("2026-09-28T09:00:00.000Z"),
+      ...(discover === undefined ? {} : { discoverTools: discover }),
+    });
+    await server.ready();
+    const officeId = await anOffice();
+    const connector = await post(`/offices/${officeId}/connectors`, {
+      kind: "mcp",
+      name: "acme",
+      tools: [],
+      config: { command: "acme-mcp" },
+    });
+    return { officeId, id: connector.json<{ id: string }>().id };
+  };
+
+  it("writes down the names, so they can be granted on the canvas", async () => {
+    const { officeId, id } = await office(() => Promise.resolve(["read_notes", "send_email"]));
+
+    const answer = await post(`/connectors/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(200);
+    expect(answer.json()).toMatchObject({ tools: ["read_notes", "send_email"] });
+    expect(await toolsOf(officeId, id)).toEqual(["read_notes", "send_email"]);
+  });
+
+  it("tells the canvas, which is what makes the new tools appear", async () => {
+    const { officeId, id } = await office(() => Promise.resolve(["read_notes"]));
+
+    await post(`/connectors/${id}/discover`, {});
+
+    expect(events.since(officeId, 0).map((event) => event.data["kind"])).toContain(
+      "connector.updated",
+    );
+  });
+
+  it("says what went wrong, because somebody pressed a button and is waiting", async () => {
+    const { id } = await office(() => Promise.reject(new Error("acme-mcp could not be run")));
+
+    const answer = await post(`/connectors/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(answer.json<{ error: string }>().error).toContain("could not be run");
+  });
+
+  it("changes nothing when the server offered nothing, rather than emptying the grants", async () => {
+    const { officeId, id } = await office(() => Promise.resolve([]));
+    await patch(`/connectors/${id}`, { tools: ["send_email"] });
+
+    const answer = await post(`/connectors/${id}/discover`, {});
+
+    expect(answer.statusCode).toBe(502);
+    expect(await toolsOf(officeId, id)).toEqual(["send_email"]);
+  });
+
+  it("says so in an office that has no way to ask anything", async () => {
+    const { id } = await office();
+
+    expect((await post(`/connectors/${id}/discover`, {})).statusCode).toBe(501);
+  });
+
+  it("has never heard of a connector that is not there", async () => {
+    await office(() => Promise.resolve(["read_notes"]));
+
+    expect((await post("/connectors/nope/discover", {})).statusCode).toBe(404);
+  });
+
+  it("is not something a stranger may ask", async () => {
+    const { id } = await office(() => Promise.resolve(["read_notes"]));
+
+    const answer = await server.inject({
+      method: "POST",
+      url: `/connectors/${id}/discover`,
+      payload: {},
+    });
+
+    expect(answer.statusCode).toBe(401);
+  });
+});
+
 describe("what an office can reach, over the wire", () => {
   let officeId: string;
 

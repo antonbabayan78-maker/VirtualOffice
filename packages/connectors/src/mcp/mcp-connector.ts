@@ -57,6 +57,13 @@ export interface McpConnectorOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly fetch?: HttpFetch;
   readonly now?: () => number;
+  /**
+   * Told why this connector is offering nothing. `describe` stays forgiving —
+   * one unreachable server must not empty the catalogue of the others — but
+   * silence is how a broken connector goes unnoticed, so the reason goes to
+   * whoever asked: a worker's log, or the answer to somebody pressing Discover.
+   */
+  readonly onProblem?: (message: string) => void;
 }
 
 export type McpTarget =
@@ -248,11 +255,17 @@ export function mcpBroker(options: McpConnectorOptions): ToolBroker & {
       let current: readonly McpTool[];
       try {
         current = await listed();
-      } catch {
+      } catch (error) {
         // One unreachable server must not empty the catalogue of the others,
-        // and a model cannot do anything about a connection refused. The office
-        // finds out when somebody asks this connector what it offers.
+        // and a model cannot do anything about a connection refused. Whoever
+        // asked is told why, which is what turns this into an answer rather
+        // than a connector that quietly does nothing.
         drop();
+        options.onProblem?.(
+          `${options.name} offered nothing: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
         return [];
       }
       return current.map((tool) => ({

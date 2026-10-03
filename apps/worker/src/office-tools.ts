@@ -16,12 +16,30 @@ import type { ApiClient } from "@vo/api-client";
 import { officeBroker, type WebFetch } from "@vo/connectors";
 import type { BrokerCall, BrokerOutcome, DescribedTool, ToolBroker } from "@vo/orchestrator";
 
-export function officeTools(api: ApiClient, officeId: string, fetch?: WebFetch): ToolBroker {
+export interface OfficeToolsOptions {
+  readonly fetch?: WebFetch;
+  /**
+   * Told why a connector is offering nothing. Without this a server that will
+   * not start means a turn with an empty catalogue and nothing anywhere to
+   * explain it.
+   */
+  readonly onProblem?: (message: string) => void;
+}
+
+export function officeTools(
+  api: ApiClient,
+  officeId: string,
+  options: OfficeToolsOptions = {},
+): ToolBroker {
   const current = async (): Promise<ToolBroker> => {
     const listed = await api.listConnectors(officeId);
+    if (!listed.ok) options.onProblem?.(`the office did not say what it can reach`);
     // An office that cannot say what it has reaches nothing, rather than a job
     // that fails: the work is still doable, just without tools.
-    return officeBroker(listed.ok ? listed.value : [], fetch === undefined ? {} : { fetch });
+    return officeBroker(listed.ok ? listed.value : [], {
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.onProblem === undefined ? {} : { onProblem: options.onProblem }),
+    });
   };
 
   return {

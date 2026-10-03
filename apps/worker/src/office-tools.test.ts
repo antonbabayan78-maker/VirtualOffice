@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createConnector, unwrap, type ConnectorId, type OfficeId } from "@vo/core";
 import type { ApiClient } from "@vo/api-client";
 import { officeTools } from "./office-tools.js";
 
@@ -36,6 +37,7 @@ const api = (overrides: Partial<ApiClient> = {}): ApiClient => {
     createConnector: unused,
     patchConnector: unused,
     deleteConnector: unused,
+    discoverConnectorTools: unused,
     ...overrides,
   } as ApiClient;
 };
@@ -50,9 +52,10 @@ describe("a worker's reach", () => {
     // The trap: the catalogue is built from the office's connectors while the
     // broker is built once at startup, before any office has been read. A
     // broker with no connectors offers tools it then refuses to perform.
-    const tools = officeTools(api(), "office-1", () =>
-      Promise.resolve(new Response("<p>Hello</p>", { headers: { "content-type": "text/html" } })),
-    );
+    const tools = officeTools(api(), "office-1", {
+      fetch: () =>
+        Promise.resolve(new Response("<p>Hello</p>", { headers: { "content-type": "text/html" } })),
+    });
 
     const outcome = await tools.call({
       name: "design-web__fetch_url",
@@ -91,5 +94,35 @@ describe("a worker's reach", () => {
 
     expect(await tools.describe()).toHaveLength(1);
     expect(await tools.describe()).toEqual([]);
+  });
+});
+
+describe("a connector the worker cannot reach", () => {
+  it("says so, instead of a run quietly having no tools", async () => {
+    // Until this, an MCP server that would not start meant a turn with an
+    // empty catalogue and nothing in any log to explain it.
+    const problems: string[] = [];
+    const broken = unwrap(
+      createConnector(
+        {
+          officeId: "office-1" as OfficeId,
+          kind: "mcp",
+          name: "acme",
+          tools: ["send_email"],
+          config: { command: "/definitely/not/a/program" },
+        },
+        [],
+        { id: () => "conn-mcp" as ConnectorId, now: () => new Date("2026-10-03T09:00:00Z") },
+      ),
+    );
+
+    const described = await officeTools(
+      api({ listConnectors: () => Promise.resolve({ ok: true, value: [broken] }) }),
+      "office-1",
+      { onProblem: (message) => problems.push(message) },
+    ).describe();
+
+    expect(described).toEqual([]);
+    expect(problems.join()).toContain("acme");
   });
 });

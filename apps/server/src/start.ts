@@ -9,7 +9,13 @@
  * the channels, the adapters, the crossing detection — was written and tested
  * while no process existed to hand them to each other, so a budget warning was
  * delivered precisely nowhere. That is what an entry point is for.
+ *
+ * It is where the connectors live too, for the same reason: this process can
+ * ask a connector what it offers, and the code that spawns a command or posts
+ * to a url is handed in here rather than imported by the routes — so no test
+ * of the routes can reach outside the machine it runs on.
  */
+import { officeBroker } from "@vo/connectors";
 import { openStorage, type Storage } from "@vo/storage";
 import type { ServerConfig } from "./config.js";
 import { buildServer } from "./server.js";
@@ -50,6 +56,24 @@ export async function startServer(
     blobs: storage.blobs,
     verifyToken: tokenVerifier({ [config.token]: { ownerId: config.ownerId } }),
     notify: officeNotifier(storage.relational, undefined, options.onProblem),
+    // Asked of the connector itself, with the same broker the worker performs
+    // calls through — so what the office writes down is what a run can use.
+    // For a command, this spawns it; the owner configured it, this route is
+    // authenticated, and the alternative is tool names typed by hand.
+    discoverTools: async (connector) => {
+      // A broker is deliberately forgiving about a connector it cannot reach,
+      // because one dead server must not empty a catalogue mid-run. Here the
+      // opposite is wanted: somebody pressed a button and the reason is the
+      // answer, so the problem is caught and raised.
+      const problems: string[] = [];
+      const broker = officeBroker([connector], {
+        onProblem: (message) => problems.push(message),
+      });
+      const described = await broker.describe();
+      const first = problems[0];
+      if (described.length === 0 && first !== undefined) throw new Error(first);
+      return described.map((tool) => tool.name);
+    },
     allowedOrigins: config.allowedOrigins,
     // Served from the office's own origin when a deployment has one, which is
     // what lets the browser hold no credential at all.

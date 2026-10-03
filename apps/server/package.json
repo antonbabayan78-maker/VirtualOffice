@@ -30,6 +30,7 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/static": "^10.1.5",
     "@fastify/websocket": "^11.3.1",
+    "@vo/connectors": "workspace:*",
     "@vo/core": "workspace:*",
     "@vo/notifications": "workspace:*",
     "@vo/orchestrator": "workspace:*",

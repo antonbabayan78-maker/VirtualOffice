@@ -32,6 +32,16 @@ const web = (overrides: Partial<Connector> = {}): Connector => ({
   ...overrides,
 });
 
+const mcp = (overrides: Partial<Connector> = {}): Connector =>
+  web({
+    id: "conn-mcp" as ConnectorId,
+    kind: "mcp",
+    name: "acme-notes",
+    config: { command: "npx", args: ["-y", "@acme/mcp"] },
+    tools: [],
+    ...overrides,
+  });
+
 let store: OfficeStore;
 /** What the office was asked to do, so a click is checked by its effect. */
 let asked: { what: string; body: unknown }[];
@@ -67,6 +77,18 @@ function open(connectors: readonly Connector[] = [], answers: Record<string, unk
     deleteConnector: (id: string) => {
       asked.push({ what: "delete", body: id });
       return Promise.resolve(answers["delete"] ?? { ok: true, value: true });
+    },
+    discoverConnectorTools: (id: string) => {
+      asked.push({ what: "discover", body: id });
+      return Promise.resolve(
+        answers["discover"] ?? {
+          ok: true,
+          value: {
+            ...(connectors.find((one) => one.id === id) ?? web()),
+            tools: ["read_notes", "send_email"],
+          },
+        },
+      );
     },
   } as never);
   return render(<Connectors store={store} />);
@@ -251,9 +273,16 @@ describe("adding a connector", () => {
   });
 
   it("offers only kinds this office can actually perform", () => {
-    // An MCP connector added here would be granted and then perform nothing.
+    // Two of them now. A kind nothing can perform would be granted and then
+    // do nothing, which is why this list is the offered kinds and not every
+    // kind the model knows about.
     open();
-    expect(within(panel()).queryByText(/\bmcp\b/i)).toBeNull();
+    const kinds = within(screen.getByLabelText(/kind/i))
+      .getAllByRole("option")
+      .map((one) => one.getAttribute("value"));
+
+    expect(kinds).toEqual(["web", "mcp"]);
+    expect(kinds).not.toContain("webhook");
   });
 });
 
@@ -307,5 +336,159 @@ describe("keeping the panel honest", () => {
   it("does not ask the office anything on first render", () => {
     open([web()]);
     expect(asked).toEqual([]);
+  });
+});
+
+describe("adding an MCP server, which is the second kind that can do anything", () => {
+  const addOne = async (kind: string, where: string, name = "acme-notes") => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/new connector/i), name);
+    await user.selectOptions(screen.getByLabelText(/kind/i), kind);
+    if (where.length > 0) await user.type(screen.getByLabelText(/command or address/i), where);
+    await user.click(screen.getByRole("button", { name: /add connector/i }));
+    return user;
+  };
+
+  it("offers both kinds now that both can be performed", () => {
+    const kinds = within(screen.getByLabelText(/kind/i))
+      .getAllByRole("option")
+      .map((one) => one.textContent.toLowerCase());
+
+    expect(kinds).toEqual(["web", "mcp"]);
+  });
+
+  it("asks for nothing but a name for a web connector, as before", async () => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/new connector/i), "design-web");
+    await user.click(screen.getByRole("button", { name: /add connector/i }));
+
+    expect(asked).toEqual([
+      {
+        what: "create",
+        body: { kind: "web", name: "design-web", tools: ["fetch_url"], config: { hosts: [] } },
+      },
+    ]);
+  });
+
+  it("takes a command to run, arguments and all", async () => {
+    await addOne("mcp", "npx -y @acme/mcp");
+
+    expect(asked[0]?.body).toMatchObject({
+      kind: "mcp",
+      name: "acme-notes",
+      config: { command: "npx", args: ["-y", "@acme/mcp"] },
+    });
+  });
+
+  it("takes an address instead, when that is what was typed", async () => {
+    await addOne("mcp", "https://mcp.acme.test/mcp");
+
+    expect(asked[0]?.body).toMatchObject({
+      kind: "mcp",
+      config: { url: "https://mcp.acme.test/mcp" },
+    });
+  });
+
+  it("starts an MCP connector with no tools, because only the server knows them", async () => {
+    await addOne("mcp", "npx acme-mcp");
+
+    expect(asked[0]?.body).toMatchObject({ tools: [] });
+  });
+
+  it("will not add one with nowhere to reach", async () => {
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/new connector/i), "acme-notes");
+    await user.selectOptions(screen.getByLabelText(/kind/i), "mcp");
+
+    expect(screen.getByRole("button", { name: /add connector/i })).toBeDisabled();
+    expect(user).toBeTruthy();
+  });
+});
+
+describe("finding out what an MCP server offers", () => {
+  it("says there is nothing to grant until somebody asks", () => {
+    open([mcp()]);
+    expect(row("acme-notes")).toHaveTextContent(/nothing to grant yet|no tools yet/i);
+  });
+
+  it("asks, and the tools appear so they can be granted", async () => {
+    open([mcp()]);
+    const user = userEvent.setup();
+
+    await user.click(within(row("acme-notes")).getByRole("button", { name: /find its tools/i }));
+
+    expect(asked).toEqual([{ what: "discover", body: "conn-mcp" }]);
+    expect(row("acme-notes")).toHaveTextContent("send_email");
+  });
+
+  it("says why it could not, because somebody pressed a button and is waiting", async () => {
+    open([mcp()], {
+      discover: { ok: false, kind: "transport", message: "npx could not be run" },
+    });
+    const user = userEvent.setup();
+
+    await user.click(within(row("acme-notes")).getByRole("button", { name: /find its tools/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be run/i);
+  });
+
+  it("is not offered for a web connector, whose tools are known in advance", () => {
+    open([web()]);
+    expect(within(row("design-web")).queryByRole("button", { name: /find its tools/i })).toBeNull();
+  });
+
+  it("shows where the server is, and lets it be changed", async () => {
+    open([mcp()]);
+    const user = userEvent.setup();
+    const field = within(row("acme-notes")).getByLabelText(/command or address/i);
+    expect(field).toHaveValue("npx -y @acme/mcp");
+
+    await user.clear(field);
+    await user.type(field, "https://mcp.acme.test");
+    await user.tab();
+
+    expect(asked.at(-1)).toMatchObject({
+      what: "patch",
+      body: { changes: { config: { url: "https://mcp.acme.test" } } },
+    });
+  });
+});
+
+describe("which of a server's tools stop for a person", () => {
+  const notes = (overrides: Partial<Connector> = {}) =>
+    mcp({ tools: ["read_notes", "send_email"], ...overrides });
+
+  it("says every tool needs a decision until the office says otherwise", () => {
+    open([notes()]);
+    expect(
+      within(row("acme-notes")).getByRole("checkbox", { name: /read_notes needs a person/i }),
+    ).toBeChecked();
+  });
+
+  it("quiets one, which is how a read-only tool stops asking", async () => {
+    open([notes()]);
+    const user = userEvent.setup();
+
+    await user.click(
+      within(row("acme-notes")).getByRole("checkbox", { name: /read_notes needs a person/i }),
+    );
+
+    expect(asked.at(-1)).toMatchObject({
+      what: "patch",
+      body: { changes: { config: { gates: { read_notes: [] } } } },
+    });
+  });
+
+  it("asks again for one that was quieted", async () => {
+    open([notes({ config: { command: "npx", gates: { read_notes: [] } } })]);
+    const user = userEvent.setup();
+    const box = within(row("acme-notes")).getByRole("checkbox", {
+      name: /read_notes needs a person/i,
+    });
+    expect(box).not.toBeChecked();
+
+    await user.click(box);
+
+    expect(JSON.stringify(asked.at(-1))).not.toContain("read_notes");
   });
 });

@@ -74,7 +74,7 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
         // Asks the office what it can reach each time: this is built before any
         // office has been read, and a connector switched off on the canvas
         // should stop working without restarting the worker.
-        tools: officeTools(api, options.config.officeId),
+        tools: officeTools(api, options.config.officeId, { onProblem: problem }),
       }),
       // The third kind of turn. Metered the same way, and with no document sink
       // or tools at all: a judge reads the answers and says which won.
