@@ -4,6 +4,7 @@ import type { OfficeId } from "../office/office.js";
 import { isErr, isOk, unwrap } from "../shared/result.js";
 import {
   createEmployee,
+  recordCorrection,
   EMPLOYEE_STATUSES,
   isEmployeeStatus,
   updateEmployee,
@@ -49,6 +50,7 @@ describe("createEmployee", () => {
       color: "#10b981",
       instructions: null,
       examples: [],
+      understudy: null,
       llm: { provider: "anthropic", model: "claude-sonnet-5", params: {}, fallbacks: [] },
       skillIds: [],
       toolGrants: [],
@@ -555,5 +557,220 @@ describe("changing how a person works", () => {
     );
 
     expect(changed.examples).toEqual([{ when: null, good: "two" }]);
+  });
+});
+
+describe("standing in for a real person", () => {
+  const standing = {
+    person: "Anna Petrova",
+    recordedBy: "anton@acme.test",
+  };
+
+  it("records who they stand in for, who said so and when", () => {
+    const e = make({ understudy: standing });
+
+    expect(e.understudy).toEqual({
+      person: "Anna Petrova",
+      recordedBy: "anton@acme.test",
+      recordedAt: now,
+      enabled: true,
+      card: null,
+      cardMadeAt: null,
+      cardFromSamples: 0,
+      corrections: [],
+    });
+  });
+
+  it("stands in for nobody by default, which is every office before this", () => {
+    expect(make().understudy).toBeNull();
+  });
+
+  it("refuses to stand in for somebody without saying who recorded it", () => {
+    // A voice is personal. An office that cannot say who agreed to this cannot
+    // answer for it later.
+    expect(isErr(createEmployee({ ...base, understudy: { person: "Anna" } }, ctx, deps))).toBe(
+      true,
+    );
+    expect(isErr(createEmployee({ ...base, understudy: { recordedBy: "anton" } }, ctx, deps))).toBe(
+      true,
+    );
+  });
+
+  it("refuses a name that is not a name", () => {
+    expect(
+      isErr(createEmployee({ ...base, understudy: { ...standing, person: "  " } }, ctx, deps)),
+    ).toBe(true);
+    expect(
+      isErr(
+        createEmployee(
+          { ...base, understudy: { ...standing, person: "x".repeat(201) } },
+          ctx,
+          deps,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("holds the card the office wrote, and when it wrote it", () => {
+    const e = make({
+      understudy: { ...standing, card: "Opens with the first name.", cardFromSamples: 7 },
+    });
+
+    expect(e.understudy?.card).toBe("Opens with the first name.");
+    expect(e.understudy?.cardFromSamples).toBe(7);
+  });
+
+  it("refuses a card longer than a page", () => {
+    expect(
+      isErr(
+        createEmployee(
+          { ...base, understudy: { ...standing, card: "x".repeat(8_001) } },
+          ctx,
+          deps,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("can be switched off without being forgotten", () => {
+    // The card took samples and somebody's consent to make. Turning the voice
+    // off is not a reason to throw either away.
+    const e = make({ understudy: { ...standing, card: "Keep me.", enabled: false } });
+
+    expect(e.understudy?.enabled).toBe(false);
+    expect(e.understudy?.card).toBe("Keep me.");
+  });
+
+  it("stops standing in for anybody at all, which takes the card with it", () => {
+    const taught = make({ understudy: { ...standing, card: "Goes with it." } });
+
+    const changed = unwrap(updateEmployee(taught, { understudy: null }, { supervisor: null }));
+
+    expect(changed.understudy).toBeNull();
+  });
+
+  it("keeps who recorded it when the card is written later", () => {
+    const standingIn = make({ understudy: standing });
+
+    const studied = unwrap(
+      updateEmployee(
+        standingIn,
+        { understudy: { ...standing, card: "Short sentences.", cardFromSamples: 5 } },
+        { supervisor: null },
+      ),
+    );
+
+    expect(studied.understudy).toMatchObject({
+      recordedBy: "anton@acme.test",
+      recordedAt: now,
+      card: "Short sentences.",
+    });
+  });
+});
+
+describe("what the real person changed", () => {
+  const standing = { person: "Anna Petrova", recordedBy: "anton@acme.test" };
+  const pair = { before: "Dear Sir or Madam,", after: "Hi Tom," };
+
+  it("keeps the before and the after, and when", () => {
+    const e = unwrap(recordCorrection(make({ understudy: standing }), pair, { now: () => now }));
+
+    expect(e.understudy?.corrections).toEqual([{ ...pair, taskId: null, at: now }]);
+  });
+
+  it("remembers which piece of work it came from", () => {
+    const e = unwrap(
+      recordCorrection(
+        make({ understudy: standing }),
+        { ...pair, taskId: "task-1" },
+        {
+          now: () => now,
+        },
+      ),
+    );
+
+    expect(e.understudy?.corrections[0]?.taskId).toBe("task-1");
+  });
+
+  it("puts the newest first, since that is what a study should weigh most", () => {
+    const first = unwrap(
+      recordCorrection(
+        make({ understudy: standing }),
+        { before: "a", after: "one" },
+        {
+          now: () => now,
+        },
+      ),
+    );
+
+    const second = unwrap(
+      recordCorrection(first, { before: "b", after: "two" }, { now: () => now }),
+    );
+
+    expect(second.understudy?.corrections.map((one) => one.after)).toEqual(["two", "one"]);
+  });
+
+  it("keeps ten and drops the oldest, because a stale card is worse than a thin one", () => {
+    let e = make({ understudy: standing });
+    for (let i = 0; i < 12; i++) {
+      e = unwrap(
+        recordCorrection(
+          e,
+          { before: `b${String(i)}`, after: `a${String(i)}` },
+          {
+            now: () => now,
+          },
+        ),
+      );
+    }
+
+    expect(e.understudy?.corrections).toHaveLength(10);
+    expect(e.understudy?.corrections[0]?.after).toBe("a11");
+    expect(e.understudy?.corrections.at(-1)?.after).toBe("a2");
+  });
+
+  it("refuses a correction that changes nothing", () => {
+    expect(
+      isErr(
+        recordCorrection(
+          make({ understudy: standing }),
+          { before: "same", after: "same" },
+          {
+            now: () => now,
+          },
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses an empty half, since a pair is the whole point", () => {
+    expect(
+      isErr(
+        recordCorrection(
+          make({ understudy: standing }),
+          { before: "", after: "Hi Tom," },
+          {
+            now: () => now,
+          },
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses one longer than a draft anybody would correct by hand", () => {
+    expect(
+      isErr(
+        recordCorrection(
+          make({ understudy: standing }),
+          { before: "x".repeat(4_001), after: "short" },
+          { now: () => now },
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses to correct somebody who stands in for nobody", () => {
+    // There is no voice to correct, and nowhere honest to keep it.
+    expect(isErr(recordCorrection(make(), pair, { now: () => now }))).toBe(true);
   });
 });

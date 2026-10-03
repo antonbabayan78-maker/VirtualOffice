@@ -5,6 +5,7 @@ import { createConnector, type Connector, type ConnectorId } from "../connector/
 import { createDepartment, type Department, type DepartmentId } from "../department/department.js";
 import {
   createEmployee,
+  recordCorrection,
   transitionEmployee,
   type Employee,
   type EmployeeId,
@@ -392,6 +393,15 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
         skills: fc.uniqueArray(word, { maxLength: 3 }),
         // A paragraph, as somebody would type one: newlines and all.
         instructions: fc.option(fc.lorem({ maxCount: 12, mode: "sentences" }), { nil: undefined }),
+        understudy: fc.option(
+          fc.record({
+            person: fc.lorem({ maxCount: 2 }),
+            recordedBy: fc.lorem({ maxCount: 2 }),
+            card: fc.option(fc.lorem({ maxCount: 30, mode: "sentences" }), { nil: undefined }),
+            enabled: fc.boolean(),
+          }),
+          { nil: undefined },
+        ),
         examples: fc.array(
           fc.record({
             when: fc.option(fc.lorem({ maxCount: 4 }), { nil: undefined }),
@@ -473,6 +483,16 @@ const configArb: fc.Arbitrary<OfficeConfig> = fc
             },
             skillIds: e.skills,
             ...(e.instructions === undefined ? {} : { instructions: e.instructions }),
+            ...(e.understudy === undefined
+              ? {}
+              : {
+                  understudy: {
+                    person: e.understudy.person,
+                    recordedBy: e.understudy.recordedBy,
+                    enabled: e.understudy.enabled,
+                    ...(e.understudy.card === undefined ? {} : { card: e.understudy.card }),
+                  },
+                }),
             examples: e.examples.map((one) =>
               one.when === undefined ? { good: one.good } : { when: one.when, good: one.good },
             ),
@@ -1209,5 +1229,92 @@ connections: []
 
     expect(yaml).not.toContain("instructions");
     expect(yaml).not.toContain("examples");
+  });
+});
+
+describe("what an office file says about standing in for somebody", () => {
+  const file = (employee: string): string => `
+version: 1
+office:
+  name: Tiny
+departments:
+  - id: dept-support
+    name: Support
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+employees:
+  - id: emp-sam
+    department: dept-support
+    name: Sam
+    role: Clerk
+    color: "#00aa66"
+    llm: { provider: anthropic, model: claude-sonnet-5 }
+${employee}
+connections: []
+`;
+
+  it("reads who somebody stands in for, and who said so", () => {
+    const config = unwrap(
+      importOfficeYaml(
+        file(`    understudy:
+      person: Anna Petrova
+      recordedBy: anton@acme.test
+      card: Opens with the first name. Never uses bullets.`),
+        deps,
+      ),
+    );
+
+    expect(config.employees[0]?.understudy).toMatchObject({
+      person: "Anna Petrova",
+      recordedBy: "anton@acme.test",
+      enabled: true,
+      card: "Opens with the first name. Never uses bullets.",
+    });
+  });
+
+  it("refuses a voice nobody recorded, in the file's own words", () => {
+    const bad = importOfficeYaml(file(`    understudy:\n      person: Anna Petrova`), deps);
+
+    expect(isErr(bad)).toBe(true);
+    if (isErr(bad)) expect(bad.error[0]?.path).toBe("employees[0].understudy.recordedBy");
+  });
+
+  it("gives somebody no voice when the file says nothing", () => {
+    expect(unwrap(importOfficeYaml(file(""), deps)).employees[0]?.understudy).toBeNull();
+  });
+
+  it("writes nothing about an employee who stands in for nobody", () => {
+    const yaml = exportOfficeYaml(unwrap(importOfficeYaml(file(""), deps)));
+
+    expect(yaml).not.toContain("understudy");
+  });
+
+  it("never writes a correction out, because a file is a thing people paste", () => {
+    // What the real person changed is theirs, and an office file is passed
+    // around. The card is the office's own words about a voice; the drafts
+    // behind it are not.
+    const config = unwrap(
+      importOfficeYaml(
+        file(`    understudy:
+      person: Anna Petrova
+      recordedBy: anton@acme.test`),
+        deps,
+      ),
+    );
+    const employee = config.employees[0];
+    if (employee === undefined) throw new Error("expected somebody");
+    const corrected = unwrap(
+      recordCorrection(
+        employee,
+        { before: "Dear Sir or Madam,", after: "Hi Tom," },
+        { now: () => t0 },
+      ),
+    );
+
+    const yaml = exportOfficeYaml({ ...config, employees: [corrected] });
+
+    expect(yaml).toContain("understudy");
+    expect(yaml).not.toContain("Dear Sir or Madam");
+    expect(yaml).not.toContain("corrections");
   });
 });

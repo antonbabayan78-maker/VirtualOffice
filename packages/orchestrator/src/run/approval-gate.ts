@@ -26,6 +26,14 @@ export interface RunApprovalGate {
   /** Ask once the run has cost this much, in USD. Needs "spend" to be gated. */
   readonly spendThresholdUsd?: number;
   readonly classify: ToolClassifier;
+  /**
+   * The real person this run acts in the name of, where there is one.
+   *
+   * Named in what the inbox reads, because "may this task call read_notes" and
+   * "may this task call read_notes as Anna Petrova" are different questions and
+   * only the second one is the decision somebody is being asked to make.
+   */
+  readonly asPerson?: string;
 }
 
 /** The common case: the connector layer declares categories per tool name. */
@@ -122,11 +130,13 @@ export function pendingApprovalFor(
     if (decisionFor(decisions, call.id) !== undefined) continue;
     const gates = gatesForCall(call, gate);
     if (gates.length === 0) continue;
+    const inSomebodysName =
+      gate.asPerson !== undefined && gates.includes("as_person") ? `, as ${gate.asPerson}` : "";
     items.push({
       key: call.id,
       name: call.name,
       gates,
-      detail: `tool "${call.name}" (${gates.join(", ")})`,
+      detail: `tool "${call.name}" (${gates.join(", ")}${inSomebodysName})`,
       input: call.input,
     });
   }

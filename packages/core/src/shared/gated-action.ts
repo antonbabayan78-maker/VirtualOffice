@@ -7,7 +7,16 @@
  * which connectors count as an external send — is decided by whoever records it
  * on the task, not here. This module only fixes the vocabulary both sides use.
  */
-export const GATED_ACTIONS = ["spend", "external_send", "deploy", "delete"] as const;
+export const GATED_ACTIONS = [
+  "spend",
+  "external_send",
+  "deploy",
+  "delete",
+  // Acting in a real person's name, which an understudy does. Its own category
+  // rather than a kind of send: reaching an outside system as somebody is worth
+  // their say-so whether or not anything leaves the building.
+  "as_person",
+] as const;
 export type GatedAction = (typeof GATED_ACTIONS)[number];
 
 export function isGatedAction(value: unknown): value is GatedAction {

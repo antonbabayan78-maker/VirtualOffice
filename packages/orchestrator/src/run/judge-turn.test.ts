@@ -239,3 +239,31 @@ describe("what the office told the judge", () => {
     );
   });
 });
+
+describe("a judge who stands in for somebody", () => {
+  it("judges in its own voice, never in theirs", async () => {
+    // Judging is not writing to anybody: a judge reading in the voice it is
+    // comparing is a judge agreeing with itself.
+    const understudy = unwrap(
+      updateEmployee(
+        grace,
+        {
+          understudy: {
+            person: "Anna Petrova",
+            recordedBy: "anton@acme.test",
+            card: "Opens with the first name.",
+          },
+        },
+        { supervisor: null },
+      ),
+    );
+    const provider = new FakeLlmProvider({
+      script: [toolCall(JUDGE_TOOL.name, { winner: "A", reason: "plainer" })],
+    });
+
+    await llmJudgeTurn({ provider })(request({ judge: understudy }));
+
+    expect(JSON.stringify(provider.calls[0]?.system)).not.toContain("Opens with the first name.");
+    expect(JSON.stringify(provider.calls[0]?.system)).not.toContain("Anna Petrova");
+  });
+});

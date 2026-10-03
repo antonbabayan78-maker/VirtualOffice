@@ -15,6 +15,7 @@ export * from "./run/agent-turn.js";
 export * from "./run/judge-turn.js";
 export * from "./run/provider-lookup.js";
 export * from "./run/standing.js";
+export * from "./run/study.js";
 export * from "./run/document-sink.js";
 export * from "./run/approval-gate.js";
 export * from "./run/checkpoint.js";
