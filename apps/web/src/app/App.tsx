@@ -17,6 +17,7 @@ import { CanvasScreen } from "../canvas/CanvasScreen.js";
 import { officeStore } from "../office/store.js";
 import { useOffice, type OfficePlan } from "../office/useOffice.js";
 import { ApprovalsScreen } from "../approvals/ApprovalsScreen.js";
+import { TasksScreen } from "../tasks/TasksScreen.js";
 import { UsageScreen } from "../usage/UsageScreen.js";
 import { ChooseOffice } from "./ChooseOffice.js";
 import { SignIn } from "./SignIn.js";
@@ -41,6 +42,7 @@ function screenFor(route: RouteDefinition): ReactNode {
   if (route.path === "/") return <CanvasScreen />;
   if (route.path === "/usage") return <UsageScreen store={officeStore} />;
   if (route.path === "/approvals") return <ApprovalsScreen store={officeStore} />;
+  if (route.path === "/tasks") return <TasksScreen store={officeStore} />;
   return <Placeholder route={route} />;
 }
 
