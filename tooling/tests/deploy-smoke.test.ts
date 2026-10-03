@@ -112,6 +112,37 @@ async function until(
   throw new Error(`gave up waiting for ${what}${last === "" ? "" : `: ${last}`}`);
 }
 
+/**
+ * An MCP server as one argument to node, so the kit's own images can run it
+ * without anything being mounted or built in. The README tells a deployment to
+ * put the server in the image; this proves the image can run one at all, which
+ * is the part no unit test can.
+ */
+const POST_ROOM = `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let at = buffer.indexOf("\\n");
+  while (at >= 0) {
+    const line = buffer.slice(0, at).trim();
+    buffer = buffer.slice(at + 1);
+    at = buffer.indexOf("\\n");
+    if (!line) continue;
+    const message = JSON.parse(line);
+    const answer = (result) =>
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");
+    if (message.method === "initialize")
+      answer({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "post", version: "1" } });
+    else if (message.method === "tools/list")
+      answer({ tools: [{ name: "send_email", description: "Send an email.", inputSchema: { type: "object", properties: { to: { type: "string" } } } }] });
+    else if (message.method === "tools/call")
+      answer({ content: [{ type: "text", text: "sent" }] });
+    else if (message.id !== undefined) answer({});
+  }
+});
+`;
+
 describe("docker, before anything else", () => {
   it("is here when this test was asked for", () => {
     if (!asked) {
@@ -217,6 +248,92 @@ describe.skipIf(!asked || dockerVersion() === null)("an office, deployed", () =>
         headers: { cookie: cookie.split(";")[0] ?? "" },
       });
       expect(asBrowser.status).toBe(200);
+    },
+    BOOT,
+  );
+
+  it(
+    "holds a tool that acts until a person answers, and then runs it",
+    async () => {
+      const listed = (await (await call("/offices")).json()) as { items: { id: string }[] };
+      const officeId = listed.items[0]?.id ?? "";
+      const rooms = (await (await call(`/offices/${officeId}/departments`)).json()) as {
+        items: { id: string }[];
+      };
+      const departmentId = rooms.items[0]?.id ?? "";
+      const people = (await (await call(`/offices/${officeId}/employees`)).json()) as {
+        items: { id: string }[];
+      };
+      const employeeId = people.items[0]?.id ?? "";
+
+      // An MCP connector whose server is a command these images can run.
+      const connector = await post(`/offices/${officeId}/connectors`, {
+        kind: "mcp",
+        name: "post",
+        tools: [],
+        config: { command: "node", args: ["-e", POST_ROOM] },
+      });
+
+      // The office asks the server what it offers, which means spawning it.
+      const discovered = await call(`/connectors/${connector["id"] ?? ""}/discover`, {
+        method: "POST",
+        // An empty body with a JSON content-type is a 400 from Fastify itself,
+        // which is a confusing way to fail a test about something else.
+        body: "{}",
+      });
+      expect(discovered.status).toBe(200);
+      expect(((await discovered.json()) as { tools: string[] }).tools).toEqual(["send_email"]);
+
+      await call(`/departments/${departmentId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          toolGrants: [{ connectorId: connector["id"] ?? "", tool: "send_email" }],
+        }),
+      });
+
+      const task = await post(`/offices/${officeId}/tasks`, {
+        departmentId,
+        title: "Tell the customer their order shipped",
+        assigneeId: employeeId,
+      });
+      const taskId = task["id"] ?? "";
+
+      // The worker reaches the tool and stops before it.
+      await until(
+        "the work to be waiting for a person",
+        async () => {
+          const current = (await (await call(`/tasks/${taskId}`)).json()) as { status: string };
+          return current.status === "blocked";
+        },
+        { tries: 90 },
+      );
+
+      const state = (await (await call(`/tasks/${taskId}/run-checkpoint`)).json()) as {
+        checkpoint: { pendingApproval?: { items: { key: string; gates: string[] }[] } } | null;
+      };
+      const held = state.checkpoint?.pendingApproval?.items[0];
+      expect(held?.gates).toEqual(["external_send"]);
+
+      // Answered the way the README says to answer one.
+      const decided = await call(`/tasks/${taskId}/events`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "call_decided",
+          key: held?.key ?? "",
+          decision: "approved",
+          decidedBy: "the owner",
+        }),
+      });
+      expect(decided.status).toBe(200);
+
+      await until(
+        "the work to finish once it was allowed to",
+        async () => {
+          const current = (await (await call(`/tasks/${taskId}`)).json()) as { status: string };
+          return current.status === "done";
+        },
+        { tries: 90 },
+      );
     },
     BOOT,
   );
