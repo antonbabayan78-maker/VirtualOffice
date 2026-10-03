@@ -1390,3 +1390,76 @@ describe("a run the office is holding", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe("what the office is waiting on a person for", () => {
+  const waiting = [
+    {
+      kind: "call",
+      taskId: "task-1",
+      title: "Tell the customer",
+      departmentId: "dept-post",
+      assigneeId: "emp-ada",
+      since: "2026-10-03T09:00:00.000Z",
+      key: "toolu_1",
+      name: "post__send_email",
+      input: { to: "customer@acme.test" },
+      gates: ["external_send"],
+      detail: 'tool "post__send_email" (external_send)',
+    },
+    {
+      kind: "review",
+      taskId: "task-2",
+      title: "Ship 4.2",
+      departmentId: "dept-ship",
+      assigneeId: null,
+      since: "2026-10-03T08:00:00.000Z",
+      gates: ["deploy"],
+    },
+  ];
+
+  it("lists it, with the arguments and a real date", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/approvals`, () => HttpResponse.json({ items: waiting })),
+    );
+
+    const result = await client().listApprovals("office-1");
+
+    if (!result.ok) throw new Error("expected the list to load");
+    expect(result.value).toHaveLength(2);
+    const first = result.value[0];
+    expect(first?.kind).toBe("call");
+    if (first?.kind === "call") expect(first.input).toEqual({ to: "customer@acme.test" });
+    // A date that stayed a string is what put a white canvas on a screen once.
+    expect(first?.since).toBeInstanceOf(Date);
+  });
+
+  it("says nothing for an office with nothing waiting", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/approvals`, () => HttpResponse.json({ items: [] })),
+    );
+
+    const result = await client().listApprovals("office-1");
+
+    expect(result.ok && result.value).toEqual([]);
+  });
+
+  it("passes over a kind it does not know, rather than showing a row nobody can read", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/approvals`, () =>
+        HttpResponse.json({ items: [...waiting, { kind: "something-later", taskId: "task-3" }] }),
+      ),
+    );
+
+    const result = await client().listApprovals("office-1");
+
+    expect(result.ok && result.value.map((one) => one.kind)).toEqual(["call", "review"]);
+  });
+
+  it("promises the list its type promises, for an office that predates it", async () => {
+    server.use(http.get(`${BASE}/offices/office-1/approvals`, () => HttpResponse.json({})));
+
+    const result = await client().listApprovals("office-1");
+
+    expect(result.ok && result.value).toEqual([]);
+  });
+});

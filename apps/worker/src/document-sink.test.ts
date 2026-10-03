@@ -41,6 +41,7 @@ function api(answer: ApiResult<Document>, sent: { value?: UploadDocument } = {})
     deleteConnector: unused,
     discoverConnectorTools: unused,
     loadRunState: unused,
+    listApprovals: unused,
     saveRunCheckpoint: unused,
     setOfficeRunState: unused,
     setDepartmentRunState: unused,

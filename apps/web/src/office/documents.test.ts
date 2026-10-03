@@ -67,6 +67,7 @@ function scriptedApi(): Scripted {
     setEmployeeStatus: unused,
     recordUsage: unused,
     listUsage: unused,
+    listApprovals: () => Promise.resolve({ ok: true, value: [] }),
     officeSpend: unused,
     listDocuments: unused,
     uploadDocument: (_officeId, input) => {

@@ -53,7 +53,7 @@ import {
   type UpdateEmployeeInput,
   type ValidationError,
 } from "@vo/core";
-import type { ApiClient, SpendSummary } from "@vo/api-client";
+import type { ApiClient, SpendSummary, Waiting } from "@vo/api-client";
 import type { ActivityState } from "../canvas/EmployeeAvatar.js";
 import { activityFromTasks } from "./activity.js";
 import type { LayoutStorage, StoredLayout } from "./layout-storage.js";
@@ -178,6 +178,34 @@ export interface OfficeStoreState {
    */
   recordContestWin(taskId: TaskId, reason: string): Promise<SaveOutcome>;
   removeTask(id: TaskId): void;
+  /**
+   * What the office is waiting on a person for, as the office works it out.
+   *
+   * Held here rather than derived: half of it lives in the run checkpoints,
+   * which only the office can read, and a canvas deriving the other half would
+   * be two answers to one question.
+   */
+  readonly waiting: readonly Waiting[];
+  loadWaiting(waiting: readonly Waiting[]): void;
+  /**
+   * Answers one held call — the call, not the tool, which is the whole point of
+   * holding it. Not optimistic: the office decides whether the work is still
+   * waiting, and a canvas that moved it on its own would be guessing.
+   */
+  decideCall(
+    taskId: TaskId,
+    key: string,
+    decision: "approved" | "declined",
+    reason?: string,
+  ): Promise<SaveOutcome>;
+  /** Answers for finished work a department held. A refusal needs a reason. */
+  decideGate(
+    taskId: TaskId,
+    decision: "approved" | "rejected",
+    reason?: string,
+  ): Promise<SaveOutcome>;
+  /** Starts stopped work again, which is the one thing to do with it from here. */
+  putBackToWork(taskId: TaskId): Promise<SaveOutcome>;
   loadUsage(usage: readonly UsageRecord[]): void;
   loadSpend(spend: SpendSummary | null): void;
   loadConnectors(connectors: readonly Connector[]): void;
@@ -393,6 +421,45 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
   const gridSize = deps.gridSize ?? DEFAULT_GRID_SIZE;
 
   return create<OfficeStoreState>((set, get) => {
+    /**
+     * Hands one decision to the office and keeps what it answers.
+     *
+     * Deliberately not optimistic: whether work is still waiting is the
+     * office's to say, and a canvas that moved it on its own would be a second
+     * opinion about a decision only a person may make. What it does do at once
+     * is take the answered item off the list, so the badge is right before the
+     * stream comes round.
+     */
+    const tellTheOffice = async (
+      taskId: TaskId,
+      event: Readonly<Record<string, unknown>>,
+    ): Promise<SaveOutcome> => {
+      if (connected === undefined) {
+        return {
+          ok: false,
+          problems: [{ path: "", message: "this canvas has no office to tell" }],
+        };
+      }
+
+      const answer = await connected.postTaskEvent(taskId, event);
+      if (answer.ok) {
+        get().putTask(answer.value);
+        const key = typeof event["key"] === "string" ? event["key"] : null;
+        set({
+          waiting: get().waiting.filter((item) =>
+            item.taskId !== taskId
+              ? true
+              : // One call of several may be answered on its own; anything else
+                // about this task is settled by the same decision.
+                key !== null && item.kind === "call" && item.key !== key,
+          ),
+        });
+        return { ok: true };
+      }
+      if (answer.kind === "transport") set({ notice: answer.message });
+      return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
+    };
+
     const persist = (departments: readonly Department[], settings: CanvasSettings): void => {
       const layout: Record<string, { position: Position; size: Size }> = {};
       for (const department of departments) {
@@ -431,6 +498,7 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
       notice: null,
       office: null,
       officeOpen: false,
+      waiting: [],
       selectedConnectionId: null,
       connections: [],
       links: [],
@@ -664,6 +732,27 @@ export function createOfficeStore(deps: OfficeStoreDeps): OfficeStore {
         if (answer.kind === "transport") set({ notice: answer.message });
         return { ok: false, problems: answer.kind === "validation" ? answer.errors : [] };
       },
+
+      loadWaiting: (waiting) => {
+        set({ waiting });
+      },
+
+      decideCall: async (taskId, key, decision, reason) =>
+        tellTheOffice(taskId, {
+          type: "call_decided",
+          key,
+          decision,
+          ...(reason === undefined || reason.trim().length === 0 ? {} : { reason: reason.trim() }),
+        }),
+
+      decideGate: async (taskId, decision, reason) =>
+        tellTheOffice(taskId, {
+          type: "gate_decided",
+          decision,
+          ...(reason === undefined || reason.trim().length === 0 ? {} : { reason: reason.trim() }),
+        }),
+
+      putBackToWork: async (taskId) => tellTheOffice(taskId, { type: "unblock" }),
 
       removeTask: (id) => {
         const tasks = get().tasks.filter((candidate) => candidate.id !== id);
