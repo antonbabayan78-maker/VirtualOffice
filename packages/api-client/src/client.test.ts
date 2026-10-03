@@ -1887,3 +1887,125 @@ describe("an employee that stands in for a real person", () => {
     expect(sent).toEqual({ before: "Dear Sir,", after: "Hi Tom,", taskId: "task-1" });
   });
 });
+
+describe("proposals the office has made", () => {
+  const proposalRow = {
+    id: "prop-1",
+    officeId: "office-1",
+    employeeId: "emp-sam",
+    status: "waiting",
+    because: "It went back twice.",
+    changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+    evidence: [{ taskId: "task-1", what: "went back twice" }],
+    madeAt: "2026-10-04T09:00:00.000Z",
+    decidedBy: null,
+    decidedAt: null,
+  };
+
+  it("lists them, with real dates", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/proposals`, () =>
+        HttpResponse.json({ items: [proposalRow] }),
+      ),
+    );
+
+    const result = await client().listProposals("office-1");
+
+    if (!result.ok) throw new Error("expected these to load");
+    expect(result.value[0]?.madeAt).toBeInstanceOf(Date);
+    expect(result.value[0]?.decidedAt).toBeNull();
+  });
+
+  it("turns the moment a decision was made back into a date", async () => {
+    server.use(
+      http.get(`${BASE}/offices/office-1/proposals`, () =>
+        HttpResponse.json({
+          items: [{ ...proposalRow, status: "accepted", decidedAt: "2026-10-04T11:00:00.000Z" }],
+        }),
+      ),
+    );
+
+    const result = await client().listProposals("office-1");
+
+    if (!result.ok) throw new Error("expected these to load");
+    expect(result.value[0]?.decidedAt).toBeInstanceOf(Date);
+  });
+
+  it("asks the office to look back over somebody", async () => {
+    server.use(
+      http.post(`${BASE}/employees/emp-sam/retrospective`, () => HttpResponse.json(proposalRow)),
+    );
+
+    const result = await client().lookBack("emp-sam");
+
+    if (!result.ok) throw new Error("expected an answer");
+    expect(result.value?.because).toBe("It went back twice.");
+  });
+
+  it("says nothing was proposed, which is not a failure", async () => {
+    server.use(
+      http.post(`${BASE}/employees/emp-sam/retrospective`, () =>
+        HttpResponse.json({ proposed: false }),
+      ),
+    );
+
+    const result = await client().lookBack("emp-sam");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBeNull();
+  });
+
+  it("writes down a proposal a worker made", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/employees/emp-sam/proposals`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(proposalRow, { status: 201 });
+      }),
+    );
+
+    await client().proposeChange("emp-sam", {
+      because: "It went back twice.",
+      changes: [{ field: "instructions", before: null, after: "Check the order number." }],
+      evidence: [{ taskId: "task-1", what: "went back twice" }],
+    });
+
+    expect(sent).toMatchObject({ because: "It went back twice." });
+  });
+
+  it("carries a decision, and gets the proposal back", async () => {
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/proposals/prop-1/decision`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...proposalRow, status: "accepted" });
+      }),
+    );
+
+    const result = await client().decideProposal("prop-1", "accept");
+
+    expect(sent).toEqual({ decision: "accept" });
+    if (!result.ok) throw new Error("expected the decision to land");
+    expect(result.value.status).toBe("accepted");
+  });
+
+  it("carries back why a decision was refused, since somebody is waiting", async () => {
+    server.use(
+      http.post(`${BASE}/proposals/prop-1/decision`, () =>
+        HttpResponse.json(
+          { errors: [{ path: "instructions", message: "has been changed since" }] },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    const result = await client().decideProposal("prop-1", "revert");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.kind === "validation") {
+      expect(result.errors[0]?.message).toContain("changed since");
+    } else {
+      throw new Error("expected to be told why not");
+    }
+  });
+});

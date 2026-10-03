@@ -24,12 +24,15 @@ import {
   acceptanceCriteriaFor,
   catalogFor,
   AGENT_JUDGE_JOB,
+  AGENT_RETROSPECTIVE_JOB,
+  lookBackOver,
   AGENT_RUN_JOB,
   AGENT_REVIEW_JOB,
   type AgentTurn,
   type ContestEntry,
   type HandedOver,
   type JudgeTurn,
+  type RetrospectiveTurn,
   type ToolCatalog,
   type Job,
 } from "@vo/orchestrator";
@@ -42,6 +45,11 @@ export interface JobHandlerOptions {
    * left alone and said out loud, rather than failing on every attempt.
    */
   readonly judge?: JudgeTurn;
+  /**
+   * Looks back over one person's work. Absent means this worker does not: those
+   * jobs are left alone and said out loud, as a shootout is.
+   */
+  readonly retrospective?: RetrospectiveTurn;
   /** Told about work that was dropped on purpose, so nothing vanishes quietly. */
   readonly onProblem?: (message: string) => void;
 }
@@ -182,10 +190,79 @@ async function judgeContest(options: JobHandlerOptions, job: Job): Promise<void>
   );
 }
 
+/**
+ * Looking back over one person's finished work, and telling the office what it
+ * would change.
+ *
+ * The record is read out of the office at the moment of doing it rather than
+ * carried in the job, for the reason a contest's entries are: the office is
+ * where it lives, and a payload would be a copy that went stale between being
+ * queued and being read. The switch is read then too — somebody switched off
+ * between the two has changed their mind, and this is the last chance to notice.
+ */
+async function lookBack(options: JobHandlerOptions, job: Job): Promise<void> {
+  const retrospective = options.retrospective;
+  if (retrospective === undefined) {
+    options.onProblem?.(
+      `this worker cannot look back over anybody, so ${job.id} is left for one that can`,
+    );
+    return;
+  }
+  if (job.employeeId === null) {
+    throw new Error(`job ${job.id} of kind ${job.kind} names nobody to look back over`);
+  }
+
+  const actor = await options.api.getEmployee(job.employeeId);
+  if (!actor.ok) throw new Error(`could not read employee ${job.employeeId}: ${describe(actor)}`);
+  if (!actor.value.selfImprovement) {
+    options.onProblem?.(
+      `${actor.value.name} was switched off for self-improvement, so nothing was looked at`,
+    );
+    return;
+  }
+
+  const office = await options.api.loadOffice(job.officeId);
+  if (!office.ok) throw new Error(`could not read office ${job.officeId}: ${describe(office)}`);
+  // An office that cannot say what anything cost is an office with no costs in
+  // the record, not a reason to skip the whole look back.
+  const usage = await options.api.listUsage(job.officeId);
+  const department = await options.api.getDepartment(actor.value.departmentId);
+
+  const draft = await retrospective(
+    lookBackOver(
+      actor.value,
+      office.value.tasks,
+      usage.ok ? usage.value : [],
+      department.ok ? department.value.definitionOfDone : [],
+    ),
+  );
+  // Nothing worth changing is a good answer, and the quiet one.
+  if (draft === null) return;
+
+  const written = await options.api.proposeChange(actor.value.id, {
+    because: draft.because,
+    changes: draft.changes,
+    evidence: draft.evidence,
+  });
+  if (written.ok) return;
+  if (written.kind === "transport") {
+    throw new Error(`could not tell the office what it proposes: ${written.message}`);
+  }
+  // Refused, which the office's own guardrail does: coming back would be
+  // refused identically every time.
+  options.onProblem?.(
+    `the office refused a proposal about ${actor.value.name}: ${describe(written)}`,
+  );
+}
+
 export function officeJobHandler(options: JobHandlerOptions): (job: Job) => Promise<void> {
   return async (job) => {
     if (job.kind === AGENT_JUDGE_JOB) {
       await judgeContest(options, job);
+      return;
+    }
+    if (job.kind === AGENT_RETROSPECTIVE_JOB) {
+      await lookBack(options, job);
       return;
     }
     if (!AGENT_JOBS.includes(job.kind)) {

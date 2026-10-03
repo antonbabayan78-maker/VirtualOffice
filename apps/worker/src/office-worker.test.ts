@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rehearsalProvider, type LlmProvider } from "@vo/llm";
+import { FakeLlmProvider, rehearsalProvider, toolCall, type LlmProvider } from "@vo/llm";
 import type { ApiClient } from "@vo/api-client";
 import type { DepartmentId, EmployeeId, OfficeId, TaskId } from "@vo/core";
 import { createOfficeWorker, meteredProvider } from "./office-worker.js";
@@ -621,5 +621,146 @@ describe("a worker calling one of its office's own services", () => {
     expect(event?.["provider"]).toBe("workshop");
     expect((event?.["cost"] as { totalUsd: number } | null)?.totalUsd).toBeCloseTo(1, 6);
     expect(event?.["pricingError"]).toBeUndefined();
+  });
+});
+
+describe("a worker that can look back over somebody", () => {
+  it("is built with one, so an office that switches somebody on is served", () => {
+    // The gap this would otherwise leave is the quiet kind: the scheduler
+    // queues the job, the handler has no retrospective, and every night it is
+    // reported and dropped.
+    const worker = createOfficeWorker({ config, provider: rehearsalProvider() });
+
+    expect(typeof worker.tick).toBe("function");
+  });
+
+  it("looks back on its own, and leaves a proposal at the office", async () => {
+    const posted: { url: string; body: Record<string, unknown> }[] = [];
+    const at = "2026-10-01T09:00:00.000Z";
+    const employee = {
+      id: "emp-sam",
+      officeId: "office-1",
+      departmentId: "dept-design",
+      name: "Sam",
+      role: "Clerk",
+      status: "active",
+      priority: "normal",
+      llm: { provider: "anthropic", model: "claude-sonnet-5", fallbacks: [] },
+      skillIds: [],
+      toolGrants: [],
+      schedule: null,
+      selfImprovement: true,
+      createdAt: at,
+      statusChangedAt: at,
+    };
+    const department = {
+      id: "dept-design",
+      officeId: "office-1",
+      name: "Design",
+      schedule: { kind: "always" },
+      runState: "running",
+      reviewPolicy: { kind: "direct" },
+      priority: "normal",
+      benches: [],
+      toolGrants: [],
+      definitionOfDone: [],
+      createdAt: at,
+    };
+    const task = {
+      id: "task-1",
+      officeId: "office-1",
+      departmentId: "dept-design",
+      assigneeId: "emp-sam",
+      title: "Tell the customer",
+      brief: "",
+      status: "done",
+      priority: "normal",
+      reviewerIds: [],
+      approvals: [],
+      benchId: null,
+      acceptanceCriteria: [],
+      route: [],
+      artifacts: [],
+      dependsOn: [],
+      gatedActions: [],
+      stage: null,
+      history: [
+        { at, from: null, to: "assigned", actorId: null, reason: null },
+        {
+          at,
+          from: "in_review",
+          to: "changes_requested",
+          actorId: null,
+          reason: "no order number",
+        },
+        {
+          at,
+          from: "in_review",
+          to: "changes_requested",
+          actorId: null,
+          reason: "no order number",
+        },
+        { at, from: "approved", to: "done", actorId: null, reason: null },
+      ],
+    };
+
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+
+    const fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? init.body : "{}";
+      if (method === "POST" && url.includes("/proposals")) {
+        posted.push({ url, body: JSON.parse(body) as Record<string, unknown> });
+        return json({ id: "prop-1" }, 201);
+      }
+      if (method === "POST" && url.includes("/usage")) return json({ id: "usage-1" }, 201);
+      if (url.endsWith("/employees/emp-sam")) return json(employee);
+      if (url.endsWith("/departments/dept-design")) return json(department);
+      if (url.endsWith("/tasks/task-1")) return json(task);
+      if (url.includes("/departments")) return json({ items: [department] });
+      if (url.includes("/employees")) return json({ items: [employee] });
+      if (url.includes("/tasks") && method === "GET") return json({ items: [task] });
+      if (url.endsWith("/offices/office-1")) {
+        return json({
+          id: "office-1",
+          name: "Acme",
+          schedule: { kind: "always" },
+          priority: "normal",
+          runState: "running",
+          configVersion: 1,
+          createdAt: at,
+        });
+      }
+      return json({ items: [] });
+    }) as unknown as typeof globalThis.fetch;
+
+    const worker = createOfficeWorker({
+      config,
+      // What the office is switched on to use; the turn below answers through it.
+      provider: new FakeLlmProvider({
+        id: "anthropic",
+        script: [
+          toolCall("propose_change", {
+            instructions: "Always check the order number before replying.",
+            because: "It went back twice for want of an order number.",
+            evidence: [{ taskId: "task-1", what: "went back twice" }],
+          }),
+        ],
+      }),
+      fetch,
+    });
+
+    await worker.tick();
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.url).toContain("/employees/emp-sam/proposals");
+    expect(posted[0]?.body).toMatchObject({
+      because: "It went back twice for want of an order number.",
+    });
   });
 });

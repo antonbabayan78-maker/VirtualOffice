@@ -22,7 +22,7 @@
  * that churns somebody's instructions forever, so a turn with no change, no
  * reason or no evidence proposes nothing at all.
  */
-import type { Employee, Task, UsageRecord, WorkExample } from "@vo/core";
+import type { Employee, EmployeeId, OfficeId, Task, UsageRecord, WorkExample } from "@vo/core";
 import { acceptanceCriteriaFor } from "@vo/core";
 import type { LlmProvider, ToolDefinition } from "@vo/llm";
 import { runAgent } from "./agent-run-loop.js";
@@ -43,7 +43,7 @@ export interface WorkRead {
 }
 
 export interface WorkLookedAt {
-  readonly officeId: string;
+  readonly officeId: OfficeId;
   readonly employee: Employee;
   /** How they work now, which is what a proposal would change. */
   readonly instructions: string | null;
@@ -153,12 +153,18 @@ export function lookBackOver(
   };
 }
 
+/** Whose record was read, and in whose office: what the call is charged to. */
+export interface RetrospectiveAttribution {
+  readonly officeId: OfficeId;
+  readonly employeeId: EmployeeId;
+}
+
 export interface RetrospectiveOptions {
   readonly provider: LlmProvider;
   readonly providerFor?: ProviderLookup;
   readonly wrapProvider?: (
     provider: LlmProvider,
-    attribution: { readonly officeId: string; readonly employeeId: string },
+    attribution: RetrospectiveAttribution,
   ) => LlmProvider;
   readonly maxSteps?: number;
 }
@@ -182,7 +188,10 @@ function fencedWork(work: WorkRead): string {
 
 export function llmRetrospectiveTurn(options: RetrospectiveOptions): RetrospectiveTurn {
   return async (looked) => {
-    const attribution = { officeId: looked.officeId, employeeId: looked.employee.id };
+    const attribution: RetrospectiveAttribution = {
+      officeId: looked.officeId,
+      employeeId: looked.employee.id,
+    };
     const named = (await options.providerFor?.(looked.employee.llm)) ?? options.provider;
     const provider = options.wrapProvider?.(named, attribution) ?? named;
 

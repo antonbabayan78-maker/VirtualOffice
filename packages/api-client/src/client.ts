@@ -22,6 +22,7 @@ import type {
   EmployeeStatus,
   LlmService,
   Office,
+  Proposal,
   RunState,
   Task,
   ToolGrant,
@@ -197,6 +198,38 @@ export interface ApiClient {
    * and all; the samples stay where they were put.
    */
   studyVoice(employeeId: string): Promise<ApiResult<Employee>>;
+  /** What the office has proposed about its own people, newest first. */
+  listProposals(officeId: string): Promise<ApiResult<readonly Proposal[]>>;
+  /**
+   * Asks the office to look back over one person's finished work.
+   *
+   * Null means it read the record and found nothing worth changing, which is a
+   * good answer rather than a failure.
+   */
+  lookBack(employeeId: string): Promise<ApiResult<Proposal | null>>;
+  /**
+   * Writes down a change this worker proposes about somebody.
+   *
+   * The office judges it exactly as it judges one it made itself: a worker is
+   * a model one step further away, not a more trusted one.
+   */
+  proposeChange(
+    employeeId: string,
+    draft: {
+      readonly because: string;
+      readonly changes: readonly {
+        readonly field: string;
+        readonly before: unknown;
+        readonly after: unknown;
+      }[];
+      readonly evidence: readonly { readonly taskId: string; readonly what: string }[];
+    },
+  ): Promise<ApiResult<Proposal>>;
+  /** A person's answer: accept it, decline it, or put an accepted one back. */
+  decideProposal(
+    proposalId: string,
+    decision: "accept" | "decline" | "revert",
+  ): Promise<ApiResult<Proposal>>;
   /** Keeps what the real person changed about a draft this employee wrote. */
   recordCorrection(
     employeeId: string,
@@ -350,6 +383,15 @@ function reviveService(raw: Record<string, unknown>): LlmService {
     enabled: raw["enabled"] !== false,
     createdAt: asDate(raw["createdAt"]),
   } as unknown as LlmService;
+}
+
+function reviveProposal(raw: Record<string, unknown>): Proposal {
+  return {
+    ...raw,
+    madeAt: asDate(raw["madeAt"]),
+    decidedAt:
+      raw["decidedAt"] === null || raw["decidedAt"] === undefined ? null : asDate(raw["decidedAt"]),
+  } as unknown as Proposal;
 }
 
 function reviveOffice(raw: Record<string, unknown>): Office {
@@ -782,6 +824,37 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       interpret(
         await call(`/employees/${employeeId}/study`, { method: "POST", body: "{}" }),
         reviveEmployee,
+      ),
+
+    listProposals: async (officeId) =>
+      interpret(await call(`/offices/${officeId}/proposals`), (raw) =>
+        ((raw["items"] ?? []) as Record<string, unknown>[]).map(reviveProposal),
+      ),
+
+    lookBack: async (employeeId) =>
+      interpret(
+        await call(`/employees/${employeeId}/retrospective`, { method: "POST", body: "{}" }),
+        // `{proposed: false}` is the office saying it read the record and found
+        // nothing: an answer, not an error.
+        (raw) => (raw["proposed"] === false ? null : reviveProposal(raw)),
+      ),
+
+    proposeChange: async (employeeId, draft) =>
+      interpret(
+        await call(`/employees/${employeeId}/proposals`, {
+          method: "POST",
+          body: JSON.stringify(draft),
+        }),
+        reviveProposal,
+      ),
+
+    decideProposal: async (proposalId, decision) =>
+      interpret(
+        await call(`/proposals/${proposalId}/decision`, {
+          method: "POST",
+          body: JSON.stringify({ decision }),
+        }),
+        reviveProposal,
       ),
 
     recordCorrection: async (employeeId, correction) =>

@@ -13,7 +13,13 @@
 import { createApiClient, type ApiClient } from "@vo/api-client";
 import { defaultModelRegistry, type LlmProvider, type ModelRegistry } from "@vo/llm";
 import { meterProvider, UsageRecorder, type UsageAttribution } from "@vo/telemetry";
-import { InProcessJobQueue, Worker, llmAgentTurn, llmJudgeTurn } from "@vo/orchestrator";
+import {
+  InProcessJobQueue,
+  Worker,
+  llmAgentTurn,
+  llmJudgeTurn,
+  llmRetrospectiveTurn,
+} from "@vo/orchestrator";
 import type { WorkerConfig } from "./config.js";
 import { officeProviders, type OfficeProviders } from "./office-providers.js";
 import { officeSource } from "./office-source.js";
@@ -106,6 +112,14 @@ export function createOfficeWorker(options: OfficeWorkerOptions): Worker {
       // The third kind of turn. Metered the same way, and with no document sink
       // or tools at all: a judge reads the answers and says which won.
       judge: llmJudgeTurn({
+        provider: options.provider,
+        providerFor: providers.lookup,
+        wrapProvider: meteredProvider(api, problem, providers.prices),
+      }),
+      // The fourth: looking back over one person's finished work, for whoever
+      // the office switched on. Metered like the rest, and on their own model,
+      // because it is their record being read and their bill it lands on.
+      retrospective: llmRetrospectiveTurn({
         provider: options.provider,
         providerFor: providers.lookup,
         wrapProvider: meteredProvider(api, problem, providers.prices),

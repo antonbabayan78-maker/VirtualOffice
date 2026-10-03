@@ -3,6 +3,7 @@ import type { ApiClient } from "@vo/api-client";
 import type { EmployeeId } from "@vo/core";
 import {
   AGENT_JUDGE_JOB,
+  AGENT_RETROSPECTIVE_JOB,
   AGENT_RUN_JOB,
   AGENT_REVIEW_JOB,
   type AgentTurn,
@@ -65,6 +66,10 @@ function api(overrides: Partial<ApiClient> = {}): ApiClient {
     discoverServiceModels: () => Promise.reject(new Error("not used here")),
     studyVoice: () => Promise.reject(new Error("not used here")),
     recordCorrection: () => Promise.reject(new Error("not used here")),
+    listProposals: () => Promise.reject(new Error("not used here")),
+    proposeChange: () => Promise.reject(new Error("not used here")),
+    lookBack: () => Promise.reject(new Error("not used here")),
+    decideProposal: () => Promise.reject(new Error("not used here")),
     // Every run asks what a person decided about the calls it was holding.
     loadRunState: () => Promise.resolve({ ok: true, value: { checkpoint: null, decisions: [] } }),
     listApprovals: () => Promise.reject(new Error("not used here")),
@@ -616,5 +621,138 @@ describe("a run that was waiting for a person", () => {
     await officeJobHandler({ api: api(), agent })(job());
 
     expect(agent).toHaveBeenCalledWith(expect.objectContaining({ approvals: [] }));
+  });
+});
+
+describe("looking back over somebody's work, overnight", () => {
+  const sam = { ...ada, id: "emp-sam", name: "Sam", selfImprovement: true };
+
+  const finished = (id: string, rounds: number) => ({
+    id,
+    officeId: "office-1",
+    departmentId: "dept-eng",
+    assigneeId: "emp-sam",
+    title: "Tell the customer",
+    status: "done",
+    priority: "normal",
+    contestId: null,
+    won: null,
+    reviewerIds: [],
+    acceptanceCriteria: [],
+    artifacts: [],
+    history: [
+      { at, from: null, to: "assigned", actorId: null, reason: null },
+      ...Array.from({ length: rounds }, () => ({
+        at,
+        from: "in_review",
+        to: "changes_requested",
+        actorId: null,
+        reason: "no order number",
+      })),
+      { at, from: "approved", to: "done", actorId: null, reason: null },
+    ],
+  });
+
+  const snapshot = {
+    office: { id: "office-1", name: "Acme" },
+    departments: [{ id: "dept-eng", definitionOfDone: [], toolGrants: [], benches: [] }],
+    employees: [sam],
+    tasks: [finished("task-1", 2)],
+    connections: [],
+    connectors: [],
+  };
+
+  const looking = (overrides: Partial<Job> = {}): Job =>
+    job({
+      kind: AGENT_RETROSPECTIVE_JOB,
+      employeeId: "emp-sam" as EmployeeId,
+      payload: { employeeId: "emp-sam", departmentId: "dept-eng" },
+      ...overrides,
+    });
+
+  const lookingApi = (overrides: Partial<ApiClient> = {}): ApiClient =>
+    api({
+      loadOffice: () => Promise.resolve({ ok: true, value: snapshot as never }),
+      getEmployee: () => Promise.resolve({ ok: true, value: sam as never }),
+      listUsage: () => Promise.resolve({ ok: true, value: [] }),
+      ...overrides,
+    });
+
+  it("reads the person's record and tells the office what it proposes", async () => {
+    const proposed: { employeeId: string; because?: string }[] = [];
+    const handle = officeJobHandler({
+      api: lookingApi({
+        proposeChange: (employeeId, draft) => {
+          proposed.push({ employeeId, ...draft });
+          return Promise.resolve({ ok: true, value: {} as never });
+        },
+      }),
+      agent: () => Promise.resolve([]),
+      retrospective: (looked) => {
+        expect(looked.work[0]).toMatchObject({ taskId: "task-1", wentBack: 2 });
+        return Promise.resolve({
+          employeeId: looked.employee.id,
+          changes: [{ field: "instructions" as const, before: null, after: "Check the number." }],
+          because: "It went back twice.",
+          evidence: [{ taskId: "task-1", what: "went back twice" }],
+        });
+      },
+    });
+
+    await handle(looking());
+
+    expect(proposed).toHaveLength(1);
+  });
+
+  it("tells the office nothing when there is nothing worth changing", async () => {
+    const proposed: unknown[] = [];
+    const handle = officeJobHandler({
+      api: lookingApi({
+        proposeChange: (() => {
+          proposed.push(true);
+          return Promise.resolve({ ok: true, value: {} as never });
+        }) as never,
+      }),
+      agent: () => Promise.resolve([]),
+      retrospective: () => Promise.resolve(null),
+    });
+
+    await handle(looking());
+
+    expect(proposed).toEqual([]);
+  });
+
+  it("leaves the job for a worker that can do it, rather than failing it", async () => {
+    const problems: string[] = [];
+    const handle = officeJobHandler({
+      api: lookingApi(),
+      agent: () => Promise.resolve([]),
+      onProblem: (message) => problems.push(message),
+    });
+
+    await handle(looking());
+
+    expect(problems.join(" ")).toMatch(/look back|retrospective/i);
+  });
+
+  it("does nothing for somebody whose switch was turned off meanwhile", async () => {
+    // The office is read at the moment of doing it, not when it was queued:
+    // somebody switched off between the two has changed their mind.
+    const problems: string[] = [];
+    const handle = officeJobHandler({
+      api: lookingApi({
+        getEmployee: () =>
+          Promise.resolve({ ok: true, value: { ...sam, selfImprovement: false } as never }),
+      }),
+      agent: () => Promise.resolve([]),
+      retrospective: () => {
+        throw new Error("should not have looked");
+      },
+      onProblem: (message) => problems.push(message),
+    });
+
+    await handle(looking());
+
+    expect(problems.join(" ")).toMatch(/switched off|not switched on/i);
   });
 });
