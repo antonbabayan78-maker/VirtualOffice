@@ -30,13 +30,16 @@ import { defaultModelRegistry, type LlmProvider, type ModelRegistry } from "@vo/
 import {
   AGENT_REVIEW_JOB,
   AGENT_RUN_JOB,
+  InMemoryRunCheckpointStore,
   InProcessJobQueue,
   Worker,
   defaultWorkflowEngine,
   catalogFor,
   llmAgentTurn,
+  type ApprovalDecision,
   type DocumentSink,
   type HandedOver,
+  type HeldCall,
   type Job,
   acceptanceCriteriaFor,
   officeSnapshot,
@@ -92,6 +95,11 @@ export interface GateRequest {
   readonly task: Task;
   /** The categories this task involves that the department gates. */
   readonly gates: readonly GatedAction[];
+  /**
+   * The one call being held, when this is a run stopped before a tool rather
+   * than finished work waiting for a sign-off. Absent for a review gate.
+   */
+  readonly call?: HeldCall;
 }
 
 export interface GateDecision {
@@ -127,6 +135,12 @@ export interface OfficeRunResult {
 }
 
 export const DEFAULT_MAX_TICKS = 50;
+
+/**
+ * The statuses a run in flight can be in: being done, or waiting for a person.
+ * Anything else means the attempt is over and its checkpoint is spent.
+ */
+const ATTEMPT_STATUSES: readonly string[] = ["in_progress", "blocked"];
 
 export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunResult> {
   const now = options.now ?? (() => new Date());
@@ -241,6 +255,15 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     effects.push(...outcome.value.effects);
     tasks.set(outcome.value.task.id, outcome.value.task);
 
+    // A checkpoint belongs to the attempt that is running. The moment the work
+    // moves on, what it wrote down is spent — and the next turn on this task
+    // reading it would find a finished run and hand back its answer instead of
+    // doing the work. The office applies the same rule on its own transitions.
+    if (!ATTEMPT_STATUSES.includes(outcome.value.task.status)) {
+      await checkpoints.delete(outcome.value.task.id);
+      decisions.delete(outcome.value.task.id);
+    }
+
     // Work crossing into another department is the one effect this run carries
     // out rather than merely recording: without it a finished task is the end
     // of the line, however the departments are wired.
@@ -323,11 +346,24 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   );
   const describedTools = await broker.describe();
 
+  /**
+   * Where a run that stopped for a person is kept.
+   *
+   * In memory, because a headless run is one process from start to finish: the
+   * office keeps these in blobs so another worker can take a run on, and here
+   * there is no other worker. It is still needed — resuming answers the held
+   * call out of the checkpoint rather than asking the model again.
+   */
+  const checkpoints = new InMemoryRunCheckpointStore();
+  /** What the owner decided, per task, for the turn that resumes. */
+  const decisions = new Map<string, ApprovalDecision[]>();
+
   const turn = llmAgentTurn({
     provider: options.provider,
     wrapProvider: (provider, attribution) => meterProvider(provider, { recorder, attribution }),
     documents: documentSink,
     tools: broker,
+    checkpoints,
   });
 
   /**
@@ -383,6 +419,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
       toolCatalog: reachable.catalog,
       connectors: config.connectors,
       toolGrants: reachable.grants,
+      approvals: decisions.get(current.id) ?? [],
     })) {
       // Each event is applied to where the last one left the task; a refused
       // one leaves it untouched and the next is judged against that.
@@ -413,11 +450,55 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     return policy.gatedActions.filter((gate) => task.gatedActions.includes(gate));
   };
 
+  /**
+   * The calls a parked run is holding, read from where it stopped.
+   *
+   * A blocked task is not enough to go on: the gate holds particular calls with
+   * particular arguments, and that is what a person is answering.
+   */
+  const heldBy = async (task: Task): Promise<readonly HeldCall[]> => {
+    if (task.status !== "blocked") return [];
+    const kept = await checkpoints.load(task.id);
+    return kept?.pendingApproval?.items ?? [];
+  };
+
   /** Puts every waiting task to the owner. True when any of them was answered. */
   const answerGates = async (): Promise<boolean> => {
     const decide = options.decide;
     if (decide === undefined) return false;
     let answered = false;
+
+    // Runs stopped before a call that acts. Asked one call at a time, because
+    // approving "this task may send email" in advance is not a gate.
+    for (const task of [...tasks.values()]) {
+      for (const call of await heldBy(task)) {
+        const decision = decide({ task, gates: call.gates, call });
+        if (decision === null) continue;
+        const made: ApprovalDecision = {
+          key: call.key,
+          decision: decision.decision === "approved" ? "approved" : "declined",
+          decidedBy: decision.decidedBy,
+          ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+        };
+        decisions.set(task.id, [
+          ...(decisions.get(task.id) ?? []).filter((one) => one.key !== made.key),
+          made,
+        ]);
+        await dispatch(
+          task,
+          {
+            type: "call_decided",
+            key: made.key,
+            decision: made.decision,
+            decidedBy: made.decidedBy,
+            ...(made.reason === undefined ? {} : { reason: made.reason }),
+          },
+          null,
+        );
+        answered = true;
+      }
+    }
+
     for (const task of [...tasks.values()]) {
       const gates = waitingOn(task);
       if (gates.length === 0) continue;

@@ -18,6 +18,7 @@ import {
   defaultWorkflowEngine,
   DIRECT_POLICY_HANDLER,
   WorkflowEngine,
+  type HeldCall,
   type WorkflowContext,
   type WorkflowEffect,
   type WorkflowEvent,
@@ -613,18 +614,21 @@ describe("a department with no review of its own, checked by one that has", () =
 });
 
 describe("work waiting for a person, which is not a review", () => {
+  // Typed through the engine's own export, because a worker holding one has to
+  // be able to name the shape it is sending over the wire.
+  const sending: readonly HeldCall[] = [
+    {
+      key: "call-1",
+      name: "acme__send_email",
+      gates: ["external_send"],
+      detail: 'tool "acme__send_email" (external_send)',
+    },
+  ];
   const held = {
     type: "await_decision" as const,
     actorId: ada,
     summary: 'tool "acme__send_email" (external_send)',
-    items: [
-      {
-        key: "call-1",
-        name: "acme__send_email",
-        gates: ["external_send"] as const,
-        detail: 'tool "acme__send_email" (external_send)',
-      },
-    ],
+    items: sending,
   };
 
   it("parks the work rather than reviewing it", () => {
