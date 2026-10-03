@@ -486,3 +486,156 @@ describe("an office that can study how somebody writes", () => {
     });
   });
 });
+
+describe("an office that looks back over its own people", () => {
+  const send = (url: string, method: string, body?: unknown) =>
+    fetch(url, {
+      method,
+      headers: { authorization: "Bearer sk-owner", "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+  it("reads the record on the office's own service and writes a proposal down", async () => {
+    // The wiring no unit test can prove: a real office, a real service row, a
+    // real record of work that went back, and a server answering the way every
+    // one of them does.
+    const asked: string[] = [];
+    /** The work the office will have recorded by the time it is asked. */
+    let theWork = "unknown";
+    const listener = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => (body += String(chunk)));
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        if ((request.url ?? "").endsWith("/models")) {
+          response.end(JSON.stringify({ data: [{ id: "qwen3-coder" }] }));
+          return;
+        }
+        asked.push(body);
+        // A model names the work it was shown; this one names the piece the
+        // office actually recorded, which is what makes its evidence real.
+        const named = theWork;
+        response.end(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            model: "qwen3-coder",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "propose_change",
+                        arguments: JSON.stringify({
+                          instructions: "Always check the order number before replying.",
+                          because: "It went back twice for want of an order number.",
+                          evidence: [{ taskId: named, what: "went back twice" }],
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 10 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (listener.address() as { port: number }).port;
+
+    try {
+      await running({}, async (started) => {
+        const office = await send(`${started.url}/offices`, "POST", { name: "Northwind" });
+        const officeId = ((await office.json()) as { id: string }).id;
+        // A room whose manager reviews, so work can actually be sent back —
+        // which is the record a retrospective reads.
+        const department = await send(`${started.url}/offices/${officeId}/departments`, "POST", {
+          name: "Support",
+          color: "#3366ff",
+          position: { x: 0, y: 0 },
+          reviewPolicy: { kind: "manager", maxIterations: 5 },
+        });
+        const departmentId = ((await department.json()) as { id: string }).id;
+        await send(`${started.url}/offices/${officeId}/services`, "POST", {
+          kind: "openai-compatible",
+          name: "workshop",
+          baseUrl: `http://127.0.0.1:${String(port)}/v1`,
+        });
+        const boss = await send(`${started.url}/offices/${officeId}/employees`, "POST", {
+          name: "Grace",
+          role: "Manager",
+          color: "#ff8800",
+          department: departmentId,
+          llm: { provider: "workshop", model: "qwen3-coder" },
+        });
+        const bossId = ((await boss.json()) as { id: string }).id;
+        const hired = await send(`${started.url}/offices/${officeId}/employees`, "POST", {
+          name: "Sam",
+          role: "Clerk",
+          color: "#00aa66",
+          department: departmentId,
+          llm: { provider: "workshop", model: "qwen3-coder" },
+          supervisorId: bossId,
+          selfImprovement: true,
+        });
+        const employeeId = ((await hired.json()) as { id: string }).id;
+
+        // A piece of work that went back, which is the record to read.
+        const made = await send(`${started.url}/offices/${officeId}/tasks`, "POST", {
+          departmentId,
+          title: "Tell the customer",
+          assigneeId: employeeId,
+        });
+        const taskId = ((await made.json()) as { id: string }).id;
+        theWork = taskId;
+        for (const event of [
+          { type: "start", actorId: employeeId },
+          { type: "submit", actorId: employeeId, artifacts: ["a reply"] },
+          { type: "request_changes", actorId: bossId, reason: "no order number" },
+          { type: "submit", actorId: employeeId, artifacts: ["a reply"] },
+          { type: "request_changes", actorId: bossId, reason: "no order number" },
+          { type: "submit", actorId: employeeId, artifacts: ["a reply"] },
+          { type: "approve", actorId: bossId },
+        ]) {
+          const moved = await send(`${started.url}/tasks/${taskId}/events`, "POST", event);
+          expect(moved.status, `${event.type}: ${await moved.clone().text()}`).toBe(200);
+        }
+
+        const looked = await send(
+          `${started.url}/employees/${employeeId}/retrospective`,
+          "POST",
+          {},
+        );
+
+        expect(looked.status).toBe(200);
+        const body: unknown = await looked.json();
+        expect(body).not.toMatchObject({ proposed: false });
+        const proposal = body as {
+          because: string;
+          changes: { after: string }[];
+          evidence: { taskId: string }[];
+        };
+        expect(proposal.changes[0]?.after).toBe("Always check the order number before replying.");
+        expect(proposal.because).toContain("order number");
+        // It was given the record, and its evidence points at real work.
+        expect(asked[0]).toContain("no order number");
+        expect(proposal.evidence[0]?.taskId).toBe(taskId);
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+});
