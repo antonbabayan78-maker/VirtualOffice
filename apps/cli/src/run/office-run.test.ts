@@ -366,3 +366,141 @@ describe("which tray a headless run files into", () => {
     expect(result.documents[0]?.document.ownerKind).toBe("task");
   });
 });
+
+describe("a headless run on one of the office's own services", () => {
+  /** The same office, with a model on this machine and Ada working on it. */
+  const WITH_A_SERVICE = `
+version: 1
+office:
+  id: office-acme
+  name: Acme
+departments:
+  - id: dept-eng
+    name: Engineering
+    color: "#3366ff"
+    position: { x: 0, y: 0 }
+    reviewPolicy: { kind: direct }
+employees:
+  - id: emp-ada
+    department: dept-eng
+    name: Ada
+    role: Engineer
+    color: "#00aa66"
+    llm: { provider: workshop, model: qwen3-coder }
+services:
+  - id: svc-workshop
+    kind: openai-compatible
+    name: workshop
+    baseUrl: http://localhost:11434/v1
+    models:
+      - id: qwen3-coder
+        pricing: { inputPerMTok: 1, outputPerMTok: 2 }
+`;
+
+  /** A local server, answering the way every one of them does. */
+  function aLocalServer() {
+    const called: string[] = [];
+    const fetch = ((url: string) => {
+      called.push(url);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: "chatcmpl-1",
+            model: "qwen3-coder",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "submit_work",
+                        arguments: JSON.stringify({ summary: "parser written" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            usage: { prompt_tokens: 1_000_000, completion_tokens: 0 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch, called };
+  }
+
+  const config = () => unwrap(importOfficeYaml(WITH_A_SERVICE, deps));
+
+  const work = (): Task =>
+    unwrap(
+      createTask(
+        {
+          officeId: "office-acme" as never,
+          departmentId: "dept-eng" as never,
+          title: "Write the parser",
+          assigneeId: "emp-ada" as never,
+        },
+        { id: () => "task-1" as TaskId, now: () => new Date("2026-09-28T09:00:00.000Z") },
+      ),
+    );
+
+  it("calls the service the office file names, with no key anywhere", async () => {
+    const local = aLocalServer();
+    const never = new FakeLlmProvider({ id: "anthropic", script: [reply("never called")] });
+
+    const result = await runOffice({
+      config: config(),
+      tasks: [work()],
+      provider: never,
+      fetch: local.fetch,
+      maxTicks: 6,
+    });
+
+    expect(local.called).toEqual(["http://localhost:11434/v1/chat/completions"]);
+    expect(never.calls).toHaveLength(0);
+    expect(result.tasks[0]?.status).toBe("done");
+  });
+
+  it("says which services it could not build, rather than quietly using another model", async () => {
+    // A `vo run` has no office to ask for a kept key — the vault lives where
+    // the office's blobs are — so a service that refers to one is left out and
+    // the run says so, instead of silently falling back to Anthropic.
+    const withAKeptKey = `${WITH_A_SERVICE}    secretRef: vault://abc\n`;
+
+    const result = await runOffice({
+      config: unwrap(importOfficeYaml(withAKeptKey, deps)),
+      tasks: [work()],
+      provider: new FakeLlmProvider({
+        id: "anthropic",
+        script: [toolCall("submit_work", { summary: "done on the fallback" })],
+      }),
+      maxTicks: 6,
+    });
+
+    expect(result.serviceProblems.join(" ")).toContain("vault://abc");
+  });
+
+  it("prices the day with what the office file says that service costs", async () => {
+    const local = aLocalServer();
+
+    const result = await runOffice({
+      config: config(),
+      tasks: [work()],
+      provider: new FakeLlmProvider({ id: "anthropic", script: [reply("never called")] }),
+      fetch: local.fetch,
+      maxTicks: 6,
+    });
+
+    const calls = result.usage.filter((event) => event.kind === "llm_call");
+    expect(calls).toHaveLength(1);
+    const call = calls[0] as { provider: string; cost: { totalUsd: number } | null } | undefined;
+    expect(call?.provider).toBe("workshop");
+    expect(call?.cost?.totalUsd).toBeCloseTo(1, 6);
+  });
+});

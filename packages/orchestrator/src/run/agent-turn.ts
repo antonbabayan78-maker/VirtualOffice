@@ -281,7 +281,7 @@ export function llmAgentTurn(options: AgentTurnOptions): AgentTurn {
     };
     // The service the employee was given, where the office has one; metering
     // wraps whichever was chosen, so a call is priced as what actually made it.
-    const chosen = options.providerFor?.(actor.llm) ?? options.provider;
+    const chosen = (await options.providerFor?.(actor.llm)) ?? options.provider;
     const provider = options.wrapProvider?.(chosen, attribution) ?? chosen;
 
     const instruction = reviewing

@@ -122,7 +122,7 @@ export function llmJudgeTurn(options: JudgeTurnOptions): JudgeTurn {
       employeeId: request.judge.id,
       contestId: request.contestId,
     };
-    const named = options.providerFor?.(request.judge.llm) ?? options.provider;
+    const named = (await options.providerFor?.(request.judge.llm)) ?? options.provider;
     const provider = options.wrapProvider?.(named, attribution) ?? named;
 
     const labelled = request.entries.map((entry, index) => ({ label: labelOf(index), entry }));

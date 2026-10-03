@@ -175,6 +175,10 @@ export async function runCommand(argv: readonly string[], deps: RunCommandDeps):
     ...(args.maxTicks === undefined ? {} : { maxTicks: args.maxTicks }),
   });
 
+  // Before the report, because it changes how the report should be read: a
+  // service that could not be built means somebody's work ran on another model.
+  for (const problem of result.serviceProblems) deps.write(`! ${problem}`);
+
   report(config, result, (line) => {
     deps.write(line);
   });

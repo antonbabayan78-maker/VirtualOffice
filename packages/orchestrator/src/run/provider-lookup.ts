@@ -26,4 +26,13 @@ export interface ProviderRef {
   readonly model: string;
 }
 
-export type ProviderLookup = (ref: ProviderRef) => LlmProvider | null;
+/**
+ * Answered at once, or after a request.
+ *
+ * Resolving a name means reading the office's services and fetching a key,
+ * which a worker does over the API. A lookup that had to answer immediately
+ * would have to hold both in memory for the life of the process and would never
+ * notice either changing — a service switched off on the canvas has to take
+ * effect on the next turn, not on the next restart.
+ */
+export type ProviderLookup = (ref: ProviderRef) => LlmProvider | null | Promise<LlmProvider | null>;

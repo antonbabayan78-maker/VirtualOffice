@@ -993,6 +993,20 @@ describe("whose model the turn actually calls", () => {
     expect(built.calls).toHaveLength(1);
   });
 
+  it("waits for an answer that has to be fetched, since a key is not to hand", async () => {
+    // Resolving a name means reading the office's services and fetching a key,
+    // which is a request. A lookup that could only answer at once would have
+    // to hold both in memory and never notice either changing.
+    const named = script("workshop");
+
+    await llmAgentTurn({
+      provider: script(),
+      providerFor: () => Promise.resolve(named),
+    })({ task: assigned, actor: sam, kind: AGENT_RUN_JOB });
+
+    expect(named.calls).toHaveLength(1);
+  });
+
   it("meters the service it chose, not the one it was built with", async () => {
     // Otherwise a call on a service would be priced as a call on another, and
     // the bench record would quietly show the wrong figure.

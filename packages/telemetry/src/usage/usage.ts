@@ -99,7 +99,13 @@ const NO_USAGE: Usage = {
 
 export interface UsageRecorderOptions {
   readonly sink: UsageSink;
-  readonly registry: ModelRegistry;
+  /**
+   * What each model costs. A function where the list changes while the process
+   * runs: an office's own services are added, repriced and switched off on the
+   * canvas, and a recorder built once with the prices as they were would report
+   * every call on a new service as unpriced for the life of the process.
+   */
+  readonly registry: ModelRegistry | (() => ModelRegistry);
   readonly now?: () => number;
   readonly id?: () => string;
   /** Told when a sink fails, since the failure must not reach the caller. */
@@ -167,11 +173,12 @@ export class UsageRecorder {
     try {
       // Prices are keyed by provider and model together, so the ref is built
       // from both rather than from the bare model name a request carries.
+      const prices =
+        typeof this.options.registry === "function"
+          ? this.options.registry()
+          : this.options.registry;
       return {
-        cost: this.options.registry.costOf(
-          { provider: record.provider, model: record.model },
-          usage,
-        ),
+        cost: prices.costOf({ provider: record.provider, model: record.model }, usage),
       };
     } catch (error) {
       return { cost: null, error: error instanceof Error ? error.message : String(error) };

@@ -26,7 +26,7 @@ import {
   type Task,
   type TaskId,
 } from "@vo/core";
-import { defaultModelRegistry, type LlmProvider, type ModelRegistry } from "@vo/llm";
+import { providersFor, registryFor, type LlmProvider, type ModelRegistry } from "@vo/llm";
 import {
   AGENT_REVIEW_JOB,
   AGENT_RUN_JOB,
@@ -132,6 +132,12 @@ export interface OfficeRunResult {
   readonly effects: readonly WorkflowEffect[];
   /** Handoffs the office could not place, said out loud rather than dropped. */
   readonly handoffProblems: readonly string[];
+  /**
+   * Services this run could not build, and why. Said out loud because the turn
+   * quietly falls back to the provider it was built with — which is right, and
+   * exactly the kind of thing nobody notices until the bill.
+   */
+  readonly serviceProblems: readonly string[];
   readonly done: number;
 }
 
@@ -152,10 +158,29 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
   const employees = new Map(config.employees.map((e) => [e.id as string, e]));
   const departments = new Map(config.departments.map((d) => [d.id as string, d]));
 
+  /**
+   * The office's own services, built once: a headless run reads one file and
+   * the file cannot change under it. A service that refers to a kept key is
+   * left out and said out loud — the vault lives where the office's blobs are,
+   * and `vo run` has no office to ask.
+   *
+   * The registry is the office file's prices on top of the built-in tables, so
+   * a model nobody has heard of is priced by what the owner wrote down and an
+   * unpriced one is still honestly reported as unpriced.
+   */
+  const serviceProblems: string[] = [];
+  const providers = await providersFor(config.services, {
+    env: process.env,
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch as unknown as typeof fetch }),
+    onProblem: (message) => serviceProblems.push(message),
+  });
+
   const sink = options.sink ?? new InMemoryUsageSink();
   const recorder = new UsageRecorder({
     sink,
-    registry: options.registry ?? defaultModelRegistry(),
+    registry:
+      options.registry ??
+      registryFor(config.services, { onProblem: (message) => serviceProblems.push(message) }),
     now: () => now().getTime(),
   });
 
@@ -361,6 +386,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
 
   const turn = llmAgentTurn({
     provider: options.provider,
+    providerFor: (ref) => providers.get(ref.provider) ?? null,
     wrapProvider: (provider, attribution) => meterProvider(provider, { recorder, attribution }),
     documents: documentSink,
     tools: broker,
@@ -556,6 +582,7 @@ export async function runOffice(options: OfficeRunOptions): Promise<OfficeRunRes
     usage: sink instanceof InMemoryUsageSink ? sink.events : [],
     effects,
     handoffProblems,
+    serviceProblems,
     done: finished.filter((task) => task.status === "done").length,
   };
 }
